@@ -1,153 +1,126 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.download;
 
-import android.Manifest.permission;
+import androidx.annotation.VisibleForTesting;
 
-import org.chromium.base.ContextUtils;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.NativeMethods;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.components.download.DownloadCollectionBridge;
-import org.chromium.content_public.browser.BrowserStartupController;
-import org.chromium.ui.base.AndroidPermissionDelegate;
-import org.chromium.ui.base.WindowAndroid;
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JniType;
+import org.jni_zero.NativeMethods;
 
-/**
- * Java counterpart of android DownloadController. Owned by native.
- */
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.pdf.PdfPage;
+import org.chromium.chrome.browser.pdf.PdfUtils;
+import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabObserver;
+import org.chromium.chrome.browser.ui.native_page.NativePage;
+import org.chromium.content_public.browser.LoadUrlParams;
+import org.chromium.content_public.browser.WebContents;
+import org.chromium.content_public.browser.navigation_controller.LoadURLType;
+import org.chromium.ui.base.MimeTypeUtils;
+import org.chromium.url.GURL;
+import org.chromium.url.Origin;
+
+/** Java counterpart of android DownloadController. Owned by native. */
+@NullMarked
 public class DownloadController {
     /**
-     * Class for notifying download events to other classes.
+     * Called to download the given URL triggered from a tab.
+     *
+     * @param url Url to download.
+     * @param tab Tab triggering the download.
      */
-    public interface Observer {
-        /**
-         * Notify the host application that a download is finished.
-         * @param downloadInfo Information about the completed download.
-         */
-        void onDownloadCompleted(final DownloadInfo downloadInfo);
-
-        /**
-         * Notify the host application that a download is in progress.
-         * @param downloadInfo Information about the in-progress download.
-         */
-        void onDownloadUpdated(final DownloadInfo downloadInfo);
-
-        /**
-         * Notify the host application that a download is cancelled.
-         * @param downloadInfo Information about the cancelled download.
-         */
-        void onDownloadCancelled(final DownloadInfo downloadInfo);
-
-        /**
-         * Notify the host application that a download is interrupted.
-         * @param downloadInfo Information about the completed download.
-         * @param isAutoResumable Download can be auto resumed when network becomes available.
-         */
-        void onDownloadInterrupted(final DownloadInfo downloadInfo, boolean isAutoResumable);
+    public static void downloadUrl(String url, Tab tab) {
+        DownloadControllerJni.get().downloadUrl(url, tab.getWebContents());
     }
 
-    private static Observer sObserver;
-
-    public static void setDownloadNotificationService(Observer observer) {
-        if (ChromeFeatureList.isEnabled(ChromeFeatureList.DOWNLOAD_OFFLINE_CONTENT_PROVIDER)) {
+    /**
+     * Notifies the download delegate that a download completed and passes along info about the
+     * download. This can be either a POST download or a GET download with authentication.
+     */
+    @CalledByNative
+    private static void onDownloadCompleted(
+            @Nullable Tab tab, DownloadInfo downloadInfo, boolean isDownloadSafe) {
+        String fileName = downloadInfo.getFileName();
+        String filePath = downloadInfo.getFilePath();
+        String mimeType = downloadInfo.getMimeType();
+        assert fileName != null && filePath != null && mimeType != null;
+        MediaStoreHelper.addImageToGalleryOnSDCard(filePath, mimeType);
+        if (tab == null
+                || !PdfUtils.shouldOpenPdfInline(tab.isIncognito())
+                || !mimeType.equals(MimeTypeUtils.PDF_MIME_TYPE)
+                || !downloadInfo.getIsTransient()) {
             return;
         }
-
-        sObserver = observer;
+        NativePage nativePage = tab.getNativePage();
+        if (nativePage == null || !nativePage.isPdf()) {
+            return;
+        }
+        // The PdfPage may become a FrozenNativePage while downloading.
+        // Need to check before cast to PdfPage.
+        if (nativePage instanceof PdfPage pdfPage) {
+            pdfPage.onDownloadComplete(fileName, filePath, isDownloadSafe);
+            tab.updateTitle();
+        }
     }
 
     /**
-     * Notifies the download delegate that a download completed and passes along info about the
-     * download. This can be either a POST download or a GET download with authentication.
+     * Notifies the pdf native page that its inline pdf download failed, so the user can be
+     * informed.
      */
     @CalledByNative
-    private static void onDownloadCompleted(DownloadInfo downloadInfo) {
-        DownloadMetrics.recordDownloadDirectoryType(downloadInfo.getFilePath());
-        MediaStoreHelper.addImageToGalleryOnSDCard(
-                downloadInfo.getFilePath(), downloadInfo.getMimeType());
-
-        if (sObserver == null) return;
-        sObserver.onDownloadCompleted(downloadInfo);
-    }
-
-    /**
-     * Notifies the download delegate that a download completed and passes along info about the
-     * download. This can be either a POST download or a GET download with authentication.
-     */
-    @CalledByNative
-    private static void onDownloadInterrupted(DownloadInfo downloadInfo, boolean isAutoResumable) {
-        if (sObserver == null) return;
-        sObserver.onDownloadInterrupted(downloadInfo, isAutoResumable);
-    }
-
-    /**
-     * Called when a download was cancelled.
-     */
-    @CalledByNative
-    private static void onDownloadCancelled(DownloadInfo downloadInfo) {
-        if (sObserver == null) return;
-        sObserver.onDownloadCancelled(downloadInfo);
-    }
-
-    /**
-     * Notifies the download delegate about progress of a download. Downloads that use Chrome
-     * network stack use custom notification to display the progress of downloads.
-     */
-    @CalledByNative
-    private static void onDownloadUpdated(DownloadInfo downloadInfo) {
-        if (sObserver == null) return;
-        sObserver.onDownloadUpdated(downloadInfo);
-    }
-
-    /**
-     * Returns whether file access is allowed.
-     *
-     * @return true if allowed, or false otherwise.
-     */
-    @CalledByNative
-    private static boolean hasFileAccess(WindowAndroid windowAndroid) {
-        if (DownloadCollectionBridge.supportsDownloadCollection()) return true;
-        AndroidPermissionDelegate delegate = windowAndroid;
-        return delegate == null ? false : delegate.hasPermission(permission.WRITE_EXTERNAL_STORAGE);
-    }
-
-    /**
-     * Requests the storage permission. This should be called from the native code.
-     * @param callbackId ID of native callback to notify the result.
-     * @param windowAndroid The {@link WindowAndroid} associated with the tab.
-     */
-    @CalledByNative
-    private static void requestFileAccess(final long callbackId, WindowAndroid windowAndroid) {
-        FileAccessPermissionHelper.requestFileAccessPermissionHelper(windowAndroid, result -> {
-            DownloadControllerJni.get().onAcquirePermissionResult(
-                    callbackId, result.first, result.second);
-        });
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    static void onDownloadFailed(@Nullable Tab tab, DownloadInfo downloadInfo) {
+        String mimeType = downloadInfo.getMimeType();
+        if (tab == null
+                || mimeType == null
+                || !PdfUtils.shouldOpenPdfInline(tab.isIncognito())
+                || !mimeType.equals(MimeTypeUtils.PDF_MIME_TYPE)
+                || !downloadInfo.getIsTransient()) {
+            return;
+        }
+        NativePage nativePage = tab.getNativePage();
+        if (nativePage == null || !nativePage.isPdf()) {
+            return;
+        }
+        // The PdfPage may become a FrozenNativePage while downloading.
+        // Need to check before cast to PdfPage.
+        if (nativePage instanceof PdfPage pdfPage) {
+            pdfPage.onDownloadFailed();
+        }
     }
 
     /**
      * Enqueue a request to download a file using Android DownloadManager.
+     *
      * @param url Url to download.
      * @param userAgent User agent to use.
-     * @param contentDisposition Content disposition of the request.
      * @param mimeType MIME type.
      * @param cookie Cookie to use.
      * @param referrer Referrer to use.
      */
     @CalledByNative
-    private static void enqueueAndroidDownloadManagerRequest(String url, String userAgent,
-            String fileName, String mimeType, String cookie, String referrer) {
-        DownloadInfo downloadInfo = new DownloadInfo.Builder()
-                .setUrl(url)
-                .setUserAgent(userAgent)
-                .setFileName(fileName)
-                .setMimeType(mimeType)
-                .setCookie(cookie)
-                .setReferrer(referrer)
-                .setIsGETRequest(true)
-                .build();
+    private static void enqueueAndroidDownloadManagerRequest(
+            @JniType("GURL") GURL url,
+            @JniType("std::string") String userAgent,
+            @JniType("std::u16string") String fileName,
+            @JniType("std::string") String mimeType,
+            @JniType("std::string") String cookie,
+            @JniType("GURL") GURL referrer) {
+        DownloadInfo downloadInfo =
+                new DownloadInfo.Builder()
+                        .setUrl(url)
+                        .setUserAgent(userAgent)
+                        .setFileName(fileName)
+                        .setMimeType(mimeType)
+                        .setCookie(cookie)
+                        .setReferrer(referrer)
+                        .setIsGETRequest(true)
+                        .build();
         enqueueDownloadManagerRequest(downloadInfo);
     }
 
@@ -157,22 +130,61 @@ public class DownloadController {
      * @param info Download information about the download.
      */
     static void enqueueDownloadManagerRequest(final DownloadInfo info) {
-        DownloadManagerService.getDownloadManagerService().enqueueNewDownload(
-                new DownloadItem(true, info), true);
+        DownloadManagerService.getDownloadManagerService()
+                .enqueueNewDownload(new DownloadItem(true, info), true);
     }
 
     /**
-     * Called when a download is started.
+     * Called when an inline PDF download starts, to show the pdf native page for it.
+     *
+     * @param tab Tab the download was triggered from.
+     * @param downloadInfo Information about the download.
+     * @param initiatorOrigin Origin that initiated the download, or null if the download was
+     *     browser-initiated (e.g. from the omnibox, a bookmark or an external intent).
      */
     @CalledByNative
-    private static void onDownloadStarted() {
-        if (!BrowserStartupController.getInstance().isFullBrowserStarted()) return;
-        if (ChromeFeatureList.isEnabled(ChromeFeatureList.DOWNLOAD_PROGRESS_INFOBAR)) return;
-        DownloadUtils.showDownloadStartToast(ContextUtils.getApplicationContext());
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    static void onPdfDownloadStarted(
+            Tab tab,
+            DownloadInfo downloadInfo,
+            @JniType("std::optional<url::Origin>") @Nullable Origin initiatorOrigin) {
+        if (!PdfUtils.shouldOpenPdfInline(tab.isIncognito())) {
+            return;
+        }
+        String downloadUrl = downloadInfo.getUrl().getSpec();
+        String pdfPageUrl = PdfUtils.encodePdfPageUrl(downloadUrl);
+        assert pdfPageUrl != null;
+        LoadUrlParams param = new LoadUrlParams(pdfPageUrl);
+        // Set isPdf param so that other parts of the code can load the pdf native page instead of
+        // starting a download.
+        param.setIsPdf(true);
+        param.setLoadType(LoadURLType.PDF_ANDROID);
+        param.setVirtualUrlForSpecialCases(downloadUrl);
+        // Record the initiator so that the re-download triggered by a later history traversal or
+        // tab restore keeps the SameSite context of the navigation that caused this download.
+        param.setInitiatorOrigin(initiatorOrigin);
+        // If the download url matches the tab’s url, avoid duplicate navigation entries by
+        // replacing the current entry.
+        param.setShouldReplaceCurrentEntry(downloadUrl.equals(tab.getUrl().getSpec()));
+        tab.loadUrl(param);
+        tab.addObserver(
+                new TabObserver() {
+                    @Override
+                    public void onDestroyed(Tab tab) {
+                        DownloadControllerJni.get()
+                                .cancelDownload(tab.getProfile(), downloadInfo.getDownloadGuid());
+                    }
+                });
     }
 
     @NativeMethods
     interface Natives {
-        void onAcquirePermissionResult(long callbackId, boolean granted, String permissionToUpdate);
+        void downloadUrl(
+                @JniType("std::string") String url,
+                @JniType("content::WebContents*") @Nullable WebContents webContents);
+
+        void cancelDownload(
+                @JniType("Profile*") Profile profile,
+                @JniType("std::string") @Nullable String downloadGuid);
     }
 }

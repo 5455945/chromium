@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,9 +12,15 @@
 #include "base/compiler_specific.h"
 #include "base/component_export.h"
 #include "base/files/file.h"
-#include "base/memory/weak_ptr.h"
+#include "base/functional/callback_forward.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/types/expected.h"
+#include "components/file_access/scoped_file_access.h"
+#include "components/file_access/scoped_file_access_delegate.h"
 #include "components/services/storage/public/cpp/filesystem/filesystem_proxy.h"
 #include "net/base/completion_once_callback.h"
+#include "net/base/net_errors.h"
 
 namespace base {
 class FilePath;
@@ -31,6 +37,10 @@ namespace storage {
 // A generic interface for reading a file-like object.
 class FileStreamReader {
  public:
+  // Callback type for GetLength().
+  using GetLengthCallback =
+      base::OnceCallback<void(base::expected<int64_t, net::Error>)>;
+
   // Creates a new FileReader for a local file |file_path|.
   // |initial_offset| specifies the offset in the file where the first read
   // should start.  If the given offset is out of the file range any
@@ -45,28 +55,9 @@ class FileStreamReader {
       scoped_refptr<base::TaskRunner> task_runner,
       const base::FilePath& file_path,
       int64_t initial_offset,
-      const base::Time& expected_modification_time);
-
-  // Creates a new FileReader for a local file |file_path|, which is a
-  // relative path into |filesystem_proxy|.  This function's behavior
-  // is otherwise identical to CreateForLocalFile other than all file operations
-  // going through |filesystem_proxy|.
-  COMPONENT_EXPORT(STORAGE_BROWSER)
-  static std::unique_ptr<FileStreamReader> CreateForFilesystemProxy(
-      scoped_refptr<base::TaskRunner> task_runner,
-      const base::FilePath& file_path,
-      std::unique_ptr<storage::FilesystemProxy> filesystem_proxy,
-      int64_t initial_offset,
-      const base::Time& expected_modification_time);
-
-  // The same as CreateForFilesystemProxy, but will emit diagnostic metrics.
-  COMPONENT_EXPORT(STORAGE_BROWSER)
-  static std::unique_ptr<FileStreamReader> CreateForIndexedDBDataItemReader(
-      scoped_refptr<base::TaskRunner> task_runner,
-      const base::FilePath& file_path,
-      std::unique_ptr<storage::FilesystemProxy> filesystem_proxy,
-      int64_t initial_offset,
-      const base::Time& expected_modification_time);
+      const base::Time& expected_modification_time,
+      file_access::ScopedFileAccessDelegate::RequestFilesAccessIOCallback
+          file_access = base::NullCallback());
 
   // Verify if the underlying file has not been modified.
   COMPONENT_EXPORT(STORAGE_BROWSER)
@@ -90,20 +81,18 @@ class FileStreamReader {
   //
   // If the stream is deleted while it has an in-flight Read operation
   // |callback| will not be called.
-  virtual int Read(net::IOBuffer* buf,
+  virtual int Read(scoped_refptr<net::IOBuffer> buf,
                    int buf_len,
                    net::CompletionOnceCallback callback) = 0;
 
   // Returns the length of the file if it could successfully retrieve the
   // file info *and* its last modification time equals to
-  // expected modification time (rv >= 0 cases).
-  // Otherwise, a negative error code is returned (rv < 0 cases).
+  // expected modification time.
+  // On success, the callback receives the file size (>= 0).
+  // On failure, the callback receives an error code.
   // If the stream is deleted while it has an in-flight GetLength operation
   // |callback| will not be called.
-  // Note that the return type is int64_t to return a larger file's size (a file
-  // larger than 2G) but an error code should fit in the int range (may be
-  // smaller than int64_t range).
-  virtual int64_t GetLength(net::Int64CompletionOnceCallback callback) = 0;
+  virtual int64_t GetLength(GetLengthCallback callback) = 0;
 };
 
 }  // namespace storage

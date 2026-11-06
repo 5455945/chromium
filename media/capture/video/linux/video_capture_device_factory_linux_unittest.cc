@@ -1,128 +1,203 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/capture/video/linux/video_capture_device_factory_linux.h"
 
-#include "base/run_loop.h"
-#include "base/test/bind.h"
-#include "base/test/task_environment.h"
-#include "media/capture/video/linux/fake_device_provider.h"
-#include "media/capture/video/linux/fake_v4l2_impl.h"
-#include "media/capture/video/mock_video_capture_device_client.h"
-#include "testing/gmock/include/gmock/gmock.h"
-#include "testing/gtest/include/gtest/gtest.h"
+#include <unistd.h>
 
-using ::testing::_;
-using ::testing::InvokeWithoutArgs;
+#include <memory>
+#include <optional>
+#include <utility>
+#include <vector>
+
+#include "base/files/file_util.h"
+#include "base/files/scoped_file.h"
+#include "base/functional/bind.h"
+#include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/test/task_environment.h"
+#include "build/config/linux/dbus/buildflags.h"
+#include "media/capture/capture_switches.h"
+#include "media/capture/video/linux/video_capture_device_factory_webrtc.h"
+#include "testing/gtest/include/gtest/gtest.h"
 
 namespace media {
 
-class VideoCaptureDeviceFactoryLinuxTest
-    : public ::testing::TestWithParam<VideoCaptureDeviceDescriptor> {
- public:
-  VideoCaptureDeviceFactoryLinuxTest() {}
-  ~VideoCaptureDeviceFactoryLinuxTest() override = default;
+namespace {
 
-  void SetUp() override {
-    factory_ = std::make_unique<VideoCaptureDeviceFactoryLinux>(
-        base::ThreadTaskRunnerHandle::Get());
-    scoped_refptr<FakeV4L2Impl> fake_v4l2(new FakeV4L2Impl());
-    fake_v4l2_ = fake_v4l2.get();
-    auto fake_device_provider = std::make_unique<FakeDeviceProvider>();
-    fake_device_provider_ = fake_device_provider.get();
-    factory_->SetV4L2EnvironmentForTesting(std::move(fake_v4l2),
-                                           std::move(fake_device_provider));
+constexpr char kV4L2DeviceId[] = "/dev/video0";
+
+// Lists one V4L2 camera.
+class FakeV4L2Factory : public VideoCaptureDeviceFactory {
+ public:
+  FakeV4L2Factory() = default;
+  ~FakeV4L2Factory() override = default;
+
+  VideoCaptureErrorOrDevice CreateDevice(
+      const VideoCaptureDeviceDescriptor& device_descriptor) override {
+    return VideoCaptureErrorOrDevice(
+        VideoCaptureError::kVideoCaptureSystemDeviceIdNotFound);
   }
 
-  base::test::TaskEnvironment task_environment_;
-  FakeV4L2Impl* fake_v4l2_;
-  FakeDeviceProvider* fake_device_provider_;
-  std::unique_ptr<VideoCaptureDeviceFactoryLinux> factory_;
+  void GetDevicesInfo(GetDevicesInfoCallback callback) override {
+    std::vector<VideoCaptureDeviceInfo> devices_info;
+    devices_info.emplace_back(
+        VideoCaptureDeviceDescriptor("V4L2 camera", kV4L2DeviceId, "",
+                                     VideoCaptureApi::LINUX_V4L2_SINGLE_PLANE,
+                                     VideoCaptureControlSupport()));
+    std::move(callback).Run(std::move(devices_info));
+  }
 };
 
-TEST_P(VideoCaptureDeviceFactoryLinuxTest, EnumerateSingleFakeV4L2DeviceUsing) {
-  // Setup
-  const VideoCaptureDeviceDescriptor& descriptor = GetParam();
-  fake_device_provider_->AddDevice(descriptor);
-  fake_v4l2_->AddDevice(descriptor.device_id, FakeV4L2DeviceConfig(descriptor));
+// Finishes PipeWire and Camera portal initialization with a fixed status and
+// without any PipeWire cameras.
+class FakeWebRtcFactory : public VideoCaptureDeviceFactoryWebRtc {
+ public:
+  explicit FakeWebRtcFactory(webrtc::VideoCaptureOptions::Status status)
+      : status_(status) {}
+  ~FakeWebRtcFactory() override = default;
 
-  // Exercise
-  std::vector<media::VideoCaptureDeviceInfo> devices_info;
-  base::RunLoop run_loop;
-  factory_->GetDevicesInfo(base::BindLambdaForTesting(
-      [&devices_info,
-       &run_loop](std::vector<media::VideoCaptureDeviceInfo> result) {
-        devices_info = std::move(result);
-        run_loop.Quit();
-      }));
-  run_loop.Run();
+ protected:
+  void InitializeOptions() override {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&FakeWebRtcFactory::OnInitialized,
+                                  weak_ptr_factory_.GetWeakPtr(), status_));
+  }
 
-  // Verification
-  ASSERT_EQ(1u, devices_info.size());
-  EXPECT_EQ(descriptor.device_id, devices_info[0].descriptor.device_id);
-  EXPECT_EQ(descriptor.display_name(),
-            devices_info[0].descriptor.display_name());
-  EXPECT_EQ(descriptor.control_support().pan,
-            devices_info[0].descriptor.control_support().pan);
-  EXPECT_EQ(descriptor.control_support().tilt,
-            devices_info[0].descriptor.control_support().tilt);
-  EXPECT_EQ(descriptor.control_support().zoom,
-            devices_info[0].descriptor.control_support().zoom);
+ private:
+  const webrtc::VideoCaptureOptions::Status status_;
+  base::WeakPtrFactory<FakeWebRtcFactory> weak_ptr_factory_{this};
+};
+
+class VideoCaptureDeviceFactoryLinuxTest
+    : public ::testing::TestWithParam<webrtc::VideoCaptureOptions::Status> {
+ protected:
+  std::vector<VideoCaptureDeviceInfo> GetDevicesInfo(
+      webrtc::VideoCaptureOptions::Status status) {
+    VideoCaptureDeviceFactoryLinux factory(
+        std::make_unique<FakeV4L2Factory>(),
+        std::make_unique<FakeWebRtcFactory>(status));
+    std::vector<VideoCaptureDeviceInfo> devices_info;
+    base::RunLoop run_loop;
+    factory.GetDevicesInfo(base::BindLambdaForTesting(
+        [&](std::vector<VideoCaptureDeviceInfo> result) {
+          devices_info = std::move(result);
+          run_loop.Quit();
+        }));
+    run_loop.Run();
+    return devices_info;
+  }
+
+  base::test::SingleThreadTaskEnvironment task_environment_;
+};
+
+// V4L2 cameras are listed when PipeWire can't be used (UNAVAILABLE), when the
+// Camera portal denies access (DENIED) or is missing or fails (ERROR), and when
+// PipeWire lists no cameras (SUCCESS here).
+TEST_P(VideoCaptureDeviceFactoryLinuxTest, FallsBackToV4L2) {
+  std::vector<VideoCaptureDeviceInfo> devices_info = GetDevicesInfo(GetParam());
+  ASSERT_EQ(devices_info.size(), 1u);
+  EXPECT_EQ(devices_info[0].descriptor.device_id, kV4L2DeviceId);
+  EXPECT_EQ(devices_info[0].descriptor.capture_api,
+            VideoCaptureApi::LINUX_V4L2_SINGLE_PLANE);
 }
 
 INSTANTIATE_TEST_SUITE_P(
     All,
     VideoCaptureDeviceFactoryLinuxTest,
-    ::testing::Values(
-        VideoCaptureDeviceDescriptor("Fake Device 0",
-                                     "/dev/video0",
-                                     VideoCaptureApi::UNKNOWN,
-                                     /*control_support=*/{false, false, false}),
-        VideoCaptureDeviceDescriptor("Fake Device 0",
-                                     "/dev/video0",
-                                     VideoCaptureApi::UNKNOWN,
-                                     /*control_support=*/{false, false, true}),
-        VideoCaptureDeviceDescriptor("Fake Device 0",
-                                     "/dev/video0",
-                                     VideoCaptureApi::UNKNOWN,
-                                     /*control_support=*/{true, true, true})));
+    ::testing::Values(webrtc::VideoCaptureOptions::Status::UNAVAILABLE,
+                      webrtc::VideoCaptureOptions::Status::DENIED,
+                      webrtc::VideoCaptureOptions::Status::ERROR,
+                      webrtc::VideoCaptureOptions::Status::SUCCESS));
 
-TEST_F(VideoCaptureDeviceFactoryLinuxTest,
-       ReceiveFramesFromSinglePlaneFakeDevice) {
-  // Setup
-  const std::string stub_display_name = "Fake Device 0";
-  const std::string stub_device_id = "/dev/video0";
-  VideoCaptureDeviceDescriptor descriptor(
-      stub_display_name, stub_device_id,
-      VideoCaptureApi::LINUX_V4L2_SINGLE_PLANE);
-  fake_device_provider_->AddDevice(descriptor);
-  fake_v4l2_->AddDevice(stub_device_id, FakeV4L2DeviceConfig(descriptor));
+#if BUILDFLAG(USE_DBUS)
+// Replaces the Camera portal with a fixed result and records the PipeWire fd
+// that WebRTC gets.
+class FakeCameraPortalFactory : public VideoCaptureDeviceFactoryWebRtc {
+ public:
+  explicit FakeCameraPortalFactory(
+      std::optional<dbus_xdg::CameraPortalError> error)
+      : error_(error) {}
+  ~FakeCameraPortalFactory() override = default;
 
-  // Exercise
-  auto device = factory_->CreateDevice(descriptor);
-  VideoCaptureParams arbitrary_params;
-  arbitrary_params.requested_format.frame_size = gfx::Size(1280, 720);
-  arbitrary_params.requested_format.frame_rate = 30.0f;
-  arbitrary_params.requested_format.pixel_format = PIXEL_FORMAT_I420;
-  auto client = std::make_unique<NiceMockVideoCaptureDeviceClient>();
-  MockVideoCaptureDeviceClient* client_ptr = client.get();
+  // The fd passed to WebRTC, or nullopt if WebRTC wasn't initialized.
+  const std::optional<int>& pipewire_fd() const { return pipewire_fd_; }
+  // The fd that the fake portal returned.
+  int portal_fd() const { return portal_fd_; }
 
-  base::RunLoop wait_loop;
-  static const int kFrameToReceive = 3;
-  EXPECT_CALL(*client_ptr, OnIncomingCapturedData(_, _, _, _, _, _, _, _, _))
-      .WillRepeatedly(InvokeWithoutArgs([&wait_loop]() {
-        static int received_frame_count = 0;
-        received_frame_count++;
-        if (received_frame_count == kFrameToReceive) {
-          wait_loop.Quit();
-        }
-      }));
+ protected:
+  void OpenCameraPortal(dbus_xdg::CameraPortalCallback callback) override {
+    dbus_xdg::CameraPortalResult result =
+        base::unexpected(dbus_xdg::CameraPortalError::kFailed);
+    if (error_) {
+      result = base::unexpected(*error_);
+    } else {
+      base::ScopedFD read_end;
+      base::ScopedFD write_end;
+      CHECK(base::CreatePipe(&read_end, &write_end));
+      portal_fd_ = read_end.get();
+      result = std::move(read_end);
+    }
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), std::move(result)));
+  }
 
-  device->AllocateAndStart(arbitrary_params, std::move(client));
-  wait_loop.Run();
+  void InitOptions(int pipewire_fd) override {
+    pipewire_fd_ = pipewire_fd;
+    // Take ownership like WebRTC does.
+    base::ScopedFD fd(pipewire_fd);
+    OnInitialized(webrtc::VideoCaptureOptions::Status::ERROR);
+  }
 
-  device->StopAndDeAllocate();
+ private:
+  const std::optional<dbus_xdg::CameraPortalError> error_;
+  std::optional<int> pipewire_fd_;
+  int portal_fd_ = -1;
+};
+
+class VideoCaptureDeviceFactoryWebRtcCameraPortalTest : public testing::Test {
+ protected:
+  void GetDevicesInfo(VideoCaptureDeviceFactoryWebRtc& factory) {
+    base::RunLoop run_loop;
+    factory.GetDevicesInfo(base::BindLambdaForTesting(
+        [&](std::vector<VideoCaptureDeviceInfo> result) { run_loop.Quit(); }));
+    run_loop.Run();
+  }
+
+  base::test::ScopedFeatureList feature_list_{features::kWebRtcPipeWireCamera};
+  base::test::SingleThreadTaskEnvironment task_environment_;
+};
+
+// The PipeWire fd from the Camera portal connection is passed to WebRTC.
+TEST_F(VideoCaptureDeviceFactoryWebRtcCameraPortalTest, PassesFdToWebRtc) {
+  FakeCameraPortalFactory factory(std::nullopt);
+  GetDevicesInfo(factory);
+  ASSERT_TRUE(factory.pipewire_fd());
+  EXPECT_NE(*factory.pipewire_fd(), -1);
+  EXPECT_EQ(*factory.pipewire_fd(), factory.portal_fd());
 }
+
+// When the user denies access, WebRTC doesn't open the portal again.
+TEST_F(VideoCaptureDeviceFactoryWebRtcCameraPortalTest, DeniedSkipsWebRtc) {
+  FakeCameraPortalFactory factory(dbus_xdg::CameraPortalError::kDenied);
+  GetDevicesInfo(factory);
+  EXPECT_FALSE(factory.pipewire_fd());
+  EXPECT_FALSE(factory.IsAvailable());
+}
+
+// When the dedicated connection fails, WebRTC opens the portal itself.
+TEST_F(VideoCaptureDeviceFactoryWebRtcCameraPortalTest,
+       FailureFallsBackToWebRtcPortal) {
+  FakeCameraPortalFactory factory(dbus_xdg::CameraPortalError::kFailed);
+  GetDevicesInfo(factory);
+  ASSERT_TRUE(factory.pipewire_fd());
+  EXPECT_EQ(*factory.pipewire_fd(), -1);
+}
+#endif  // BUILDFLAG(USE_DBUS)
+
+}  // namespace
 
 }  // namespace media

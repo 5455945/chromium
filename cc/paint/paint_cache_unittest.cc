@@ -1,9 +1,12 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "cc/paint/paint_cache.h"
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/hash/hash.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace cc {
@@ -11,22 +14,16 @@ namespace {
 
 constexpr size_t kDefaultBudget = 1024u;
 
-sk_sp<SkTextBlob> CreateBlob() {
-  SkFont font;
-  font.setTypeface(SkTypeface::MakeDefault());
-
-  SkTextBlobBuilder builder;
-  int glyph_count = 5;
-  const auto& run = builder.allocRun(font, glyph_count, 1.2f, 2.3f);
-  // allocRun() allocates only the glyph buffer.
-  std::fill(run.glyphs, run.glyphs + glyph_count, 0);
-  return builder.make();
+SkPath CreatePath() {
+  return SkPath::Circle(2, 2, 5);
 }
 
-SkPath CreatePath() {
-  SkPath path;
-  path.addCircle(2, 2, 5);
-  return path;
+sk_sp<SkRuntimeEffect> GetEffect() {
+  constexpr static char kShaderString[] =
+      "vec4 main(vec2 uv) {return vec4(0.);}";
+  auto result = SkRuntimeEffect::MakeForShader(SkString(kShaderString));
+  CHECK(result.effect);
+  return result.effect;
 }
 
 class PaintCacheTest : public ::testing::TestWithParam<uint32_t> {
@@ -54,7 +51,8 @@ TEST_P(PaintCacheTest, ClientPurgeForBudgeting) {
   ClientPaintCache::PurgedData purged_data;
   client_cache.Purge(&purged_data);
   EXPECT_EQ(client_cache.bytes_used(), kDefaultBudget);
-  const auto& ids = purged_data[static_cast<uint32_t>(GetType())];
+  auto purged_span = base::span(purged_data);
+  const auto& ids = purged_span[static_cast<uint32_t>(GetType())];
   ASSERT_EQ(ids.size(), 2u);
   EXPECT_EQ(ids[0], 1u);
   EXPECT_EQ(ids[1], 2u);
@@ -91,20 +89,9 @@ TEST_P(PaintCacheTest, CommitPendingEntries) {
 TEST_P(PaintCacheTest, ServiceBasic) {
   ServicePaintCache service_cache;
   switch (GetType()) {
-    case PaintCacheDataType::kTextBlob: {
-      auto blob = CreateBlob();
-      auto id = blob->uniqueID();
-      EXPECT_EQ(nullptr, service_cache.GetTextBlob(id));
-      service_cache.PutTextBlob(id, blob);
-      EXPECT_EQ(blob, service_cache.GetTextBlob(id));
-      service_cache.Purge(GetType(), 1, &id);
-      EXPECT_EQ(nullptr, service_cache.GetTextBlob(id));
-
-      service_cache.PutTextBlob(id, blob);
-    } break;
     case PaintCacheDataType::kPath: {
       auto path = CreatePath();
-      auto id = path.getGenerationID();
+      PaintCacheId id = path.getGenerationID();
       SkPath cached_path;
       EXPECT_EQ(false, service_cache.GetPath(id, &cached_path));
       service_cache.PutPath(id, path);
@@ -115,18 +102,33 @@ TEST_P(PaintCacheTest, ServiceBasic) {
 
       service_cache.PutPath(id, path);
     } break;
+    case PaintCacheDataType::kSkRuntimeEffect: {
+      auto effect = GetEffect();
+      PaintCacheId id = base::PersistentHash(effect->source());
+      sk_sp<SkRuntimeEffect> cached_effect = nullptr;
+      EXPECT_FALSE(service_cache.GetEffect(id, &cached_effect));
+      service_cache.PutEffect(id, effect);
+      EXPECT_TRUE(service_cache.GetEffect(id, &cached_effect));
+      EXPECT_EQ(effect, cached_effect);
+      service_cache.Purge(GetType(), 1u, &id);
+      EXPECT_FALSE(service_cache.GetEffect(id, &cached_effect));
+
+      service_cache.PutEffect(id, effect);
+      break;
+    }
   }
 
-  EXPECT_FALSE(service_cache.empty());
+  EXPECT_FALSE(service_cache.IsEmpty());
   service_cache.PurgeAll();
-  EXPECT_TRUE(service_cache.empty());
+  EXPECT_TRUE(service_cache.IsEmpty());
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    P,
+    /*no prefix*/,
     PaintCacheTest,
-    ::testing::Range(static_cast<uint32_t>(0),
-                     static_cast<uint32_t>(PaintCacheDataType::kLast)));
+    ::testing::Values(
+        static_cast<uint32_t>(PaintCacheDataType::kPath),
+        static_cast<uint32_t>(PaintCacheDataType::kSkRuntimeEffect)));
 
 }  // namespace
 }  // namespace cc

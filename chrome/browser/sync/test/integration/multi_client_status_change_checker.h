@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,11 @@
 
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_multi_source_observation.h"
 #include "chrome/browser/sync/test/integration/status_change_checker.h"
-#include "components/sync/driver/sync_service_impl.h"
-#include "components/sync/driver/sync_service_observer.h"
+#include "components/sync/service/sync_service_impl.h"
+#include "components/sync/service/sync_service_observer.h"
 
 // This class provides some common functionality for StatusChangeCheckers that
 // observe many SyncServiceImpls.  This class is abstract.  Its descendants
@@ -20,7 +20,14 @@ class MultiClientStatusChangeChecker : public StatusChangeChecker,
                                        public syncer::SyncServiceObserver {
  public:
   explicit MultiClientStatusChangeChecker(
-      std::vector<syncer::SyncServiceImpl*> services);
+      std::vector<raw_ptr<syncer::SyncServiceImpl, VectorExperimental>>
+          services);
+
+  MultiClientStatusChangeChecker(const MultiClientStatusChangeChecker&) =
+      delete;
+  MultiClientStatusChangeChecker& operator=(
+      const MultiClientStatusChangeChecker&) = delete;
+
   ~MultiClientStatusChangeChecker() override;
 
  protected:
@@ -31,15 +38,16 @@ class MultiClientStatusChangeChecker : public StatusChangeChecker,
   // StatusChangeChecker implementations and stubs.
   bool IsExitConditionSatisfied(std::ostream* os) override = 0;
 
-  const std::vector<syncer::SyncServiceImpl*>& services() { return services_; }
+  const std::vector<raw_ptr<syncer::SyncServiceImpl, VectorExperimental>>&
+  services() {
+    return services_;
+  }
 
  private:
-  std::vector<syncer::SyncServiceImpl*> services_;
+  std::vector<raw_ptr<syncer::SyncServiceImpl, VectorExperimental>> services_;
   base::ScopedMultiSourceObservation<syncer::SyncService,
                                      syncer::SyncServiceObserver>
       scoped_observations_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(MultiClientStatusChangeChecker);
 };
 
 #endif  // CHROME_BROWSER_SYNC_TEST_INTEGRATION_MULTI_CLIENT_STATUS_CHANGE_CHECKER_H_

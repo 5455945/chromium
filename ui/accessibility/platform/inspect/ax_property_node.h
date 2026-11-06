@@ -1,15 +1,17 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_ACCESSIBILITY_PLATFORM_INSPECT_AX_PROPERTY_NODE_H_
 #define UI_ACCESSIBILITY_PLATFORM_INSPECT_AX_PROPERTY_NODE_H_
 
+#include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "ui/accessibility/ax_export.h"
+#include "base/component_export.h"
 
 namespace ui {
 
@@ -22,9 +24,11 @@ struct AXPropertyFilter;
 // property are given in parentheses like a conventional function call, for
 // example, AXCellForColumnAndRow([0, 0]) will call AXCellForColumnAndRow
 // parameterized property for column/row 0 indexes.
-class AX_EXPORT AXPropertyNode final {
+class COMPONENT_EXPORT(AX_PLATFORM) AXPropertyNode final {
  public:
-  // Parses a property node from a property filter.
+  // Parses a property node from a string or a property filter.
+  static AXPropertyNode From(const std::string& property,
+                             const std::vector<std::string>& line_indexes = {});
   static AXPropertyNode From(const AXPropertyFilter& filter);
 
   AXPropertyNode();
@@ -46,6 +50,9 @@ class AX_EXPORT AXPropertyNode final {
 
   // Next property node in a chain if any.
   std::unique_ptr<AXPropertyNode> next;
+
+  // Rvalue if any.
+  std::unique_ptr<AXPropertyNode> rvalue;
 
   // Used to store the original unparsed property including invocation
   // arguments if any.
@@ -83,11 +90,11 @@ class AX_EXPORT AXPropertyNode final {
   bool IsTarget() const { return !!next; }
   bool IsArray() const;
   bool IsDict() const;
-  absl::optional<int> AsInt() const;
+  std::optional<int> AsInt() const;
   std::string AsString() const;
   const AXPropertyNode* FindKey(const char* refkey) const;
-  absl::optional<std::string> FindStringKey(const char* refkey) const;
-  absl::optional<int> FindIntKey(const char* key) const;
+  std::optional<std::string> FindStringKey(const char* refkey) const;
+  std::optional<int> FindIntKey(const char* key) const;
 
   // Returns a string representation of the node.
   std::string ToString() const;

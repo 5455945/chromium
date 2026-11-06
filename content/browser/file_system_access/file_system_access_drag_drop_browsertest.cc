@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/test/scoped_feature_list.h"
 #include "content/browser/file_system_access/file_system_access_manager_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/common/content_switches.h"
@@ -16,6 +17,7 @@
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/shell/browser/shell.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "third_party/blink/public/common/features_generated.h"
 #include "ui/base/clipboard/file_info.h"
 #include "ui/gfx/geometry/point_f.h"
 
@@ -26,6 +28,11 @@ namespace content {
 
 class FileSystemAccessDragDropBrowserTest : public ContentBrowserTest {
  public:
+  FileSystemAccessDragDropBrowserTest() {
+    scoped_features_.InitAndEnableFeature(
+        blink::features::kFileSystemAccessLocal);
+  }
+
   void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     ASSERT_TRUE(embedded_test_server()->Start());
@@ -63,11 +70,14 @@ class FileSystemAccessDragDropBrowserTest : public ContentBrowserTest {
   RenderWidgetHostImpl* GetRenderWidgetHostImplForMainFrame() {
     WebContentsImpl* web_contents_impl =
         static_cast<WebContentsImpl*>(shell()->web_contents());
-    return web_contents_impl->GetMainFrame()->GetRenderWidgetHost();
+    return web_contents_impl->GetPrimaryMainFrame()->GetRenderWidgetHost();
   }
 
  protected:
   base::ScopedTempDir temp_dir_;
+
+ private:
+  base::test::ScopedFeatureList scoped_features_;
 };
 
 IN_PROC_BROWSER_TEST_F(FileSystemAccessDragDropBrowserTest, DropFile) {
@@ -121,7 +131,7 @@ IN_PROC_BROWSER_TEST_F(FileSystemAccessDragDropBrowserTest, DropFile) {
   // Get the points corresponding to the center of the browser window in both
   // screen coordinates and window coordinates.
   const gfx::Rect window_in_screen_coords =
-      render_widget_host_impl->GetView()->GetBoundsInRootWindow();
+      render_widget_host_impl->GetView()->GetBoundsInScreen();
   const gfx::PointF screen_point =
       gfx::PointF(window_in_screen_coords.CenterPoint());
   const gfx::PointF client_point =
@@ -130,6 +140,8 @@ IN_PROC_BROWSER_TEST_F(FileSystemAccessDragDropBrowserTest, DropFile) {
 
   // Drop the test file.
   DropData drop_data;
+  drop_data.operation = ui::mojom::DragOperation::kCopy;
+  drop_data.document_is_handling_drag = true;
   drop_data.filenames.emplace_back(
       ui::FileInfo(test_file_path, test_file_path.BaseName()));
   render_widget_host_impl->FilterDropData(&drop_data);
@@ -207,7 +219,7 @@ IN_PROC_BROWSER_TEST_F(FileSystemAccessDragDropBrowserTest, DropDirectory) {
   // Get the points corresponding to the center of the browser window in both
   // screen coordinates and window coordinates.
   const gfx::Rect window_in_screen_coords =
-      render_widget_host_impl->GetView()->GetBoundsInRootWindow();
+      render_widget_host_impl->GetView()->GetBoundsInScreen();
   const gfx::PointF screen_point =
       gfx::PointF(window_in_screen_coords.CenterPoint());
   const gfx::PointF client_point =
@@ -216,6 +228,8 @@ IN_PROC_BROWSER_TEST_F(FileSystemAccessDragDropBrowserTest, DropDirectory) {
 
   // Drop the test file.
   DropData drop_data;
+  drop_data.operation = ui::mojom::DragOperation::kCopy;
+  drop_data.document_is_handling_drag = true;
   drop_data.filenames.emplace_back(
       ui::FileInfo(test_dir_path, test_dir_path.BaseName()));
   render_widget_host_impl->FilterDropData(&drop_data);

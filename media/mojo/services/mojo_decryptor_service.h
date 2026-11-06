@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "base/callback.h"
+#include <memory>
+
 #include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "media/base/cdm_context.h"
 #include "media/base/decryptor.h"
@@ -20,7 +22,6 @@
 
 namespace media {
 
-class DecoderBuffer;
 class MojoDecoderBufferReader;
 class MojoDecoderBufferWriter;
 
@@ -36,6 +37,9 @@ class MEDIA_MOJO_EXPORT MojoDecryptorService final : public mojom::Decryptor {
   // |cdm_context_ref| is held.
   MojoDecryptorService(media::Decryptor* decryptor,
                        std::unique_ptr<CdmContextRef> cdm_context_ref);
+
+  MojoDecryptorService(const MojoDecryptorService&) = delete;
+  MojoDecryptorService& operator=(const MojoDecryptorService&) = delete;
 
   ~MojoDecryptorService() final;
 
@@ -60,58 +64,38 @@ class MEDIA_MOJO_EXPORT MojoDecryptorService final : public mojom::Decryptor {
   void DeinitializeDecoder(StreamType stream_type) final;
 
  private:
-  void OnReadDone(StreamType stream_type,
-                  DecryptCallback callback,
-                  scoped_refptr<DecoderBuffer> buffer);
-
-  // Callback executed once Decrypt() is done.
-  void OnDecryptDone(DecryptCallback callback,
-                     Status status,
-                     scoped_refptr<DecoderBuffer> buffer);
-
-  // Callbacks executed once decoder initialized.
-  void OnAudioDecoderInitialized(InitializeAudioDecoderCallback callback,
-                                 bool success);
-  void OnVideoDecoderInitialized(InitializeVideoDecoderCallback callback,
-                                 bool success);
-
-  void OnAudioRead(DecryptAndDecodeAudioCallback callback,
-                   scoped_refptr<DecoderBuffer> buffer);
-  void OnVideoRead(DecryptAndDecodeVideoCallback callback,
-                   scoped_refptr<DecoderBuffer> buffer);
-  void OnReaderFlushDone(StreamType stream_type);
-
-  // Callbacks executed when DecryptAndDecode are done.
-  void OnAudioDecoded(DecryptAndDecodeAudioCallback callback,
-                      Status status,
-                      const media::Decryptor::AudioFrames& frames);
-  void OnVideoDecoded(DecryptAndDecodeVideoCallback callback,
-                      Status status,
-                      scoped_refptr<VideoFrame> frame);
-
-  // Returns audio/video buffer reader according to the |stream_type|.
-  MojoDecoderBufferReader* GetBufferReader(StreamType stream_type) const;
+  // Encapsulates all state, data pipes, and lifecycle management for a
+  // specific media stream (Audio or Video).
+  //
+  // Note on hardware recovery: A well-behaved client never resets or
+  // deinitializes a decoder while a read is still pending. However, on ChromeOS
+  // (which is currently the only platform supporting the L1 + CDM hardware
+  // path), hardware decoder recovery paths can legitimately trigger a
+  // `DeinitializeDecoder` or `InitializeVideoDecoder` while `DecryptAndDecode`
+  // requests are stuck in flight (e.g., if the hardware decoder is hung). These
+  // stream classes ensure we can safely cancel pending reads for a specific
+  // stream during recovery without dropping callbacks for other active streams.
+  template <StreamType StreamTypeParam>
+  class Stream;
 
   bool has_initialize_been_called_ = false;
 
-  // Helper classes to receive encrypted DecoderBuffer from the client.
-  std::unique_ptr<MojoDecoderBufferReader> audio_buffer_reader_;
-  std::unique_ptr<MojoDecoderBufferReader> video_buffer_reader_;
+  // Shared DataPipes for pure Decrypt() calls. Owned here and passed as
+  // raw_ptrs to the stream objects to handle multiplexing. Must be declared
+  // before the streams so they outlive the streams and prevent dangling
+  // pointers during teardown.
   std::unique_ptr<MojoDecoderBufferReader> decrypt_buffer_reader_;
-
-  // Helper class to send decrypted DecoderBuffer to the client.
   std::unique_ptr<MojoDecoderBufferWriter> decrypted_buffer_writer_;
 
-  media::Decryptor* decryptor_;
+  // Stream-specific encapsulations.
+  std::unique_ptr<Stream<StreamType::kAudio>> audio_stream_;
+  std::unique_ptr<Stream<StreamType::kVideo>> video_stream_;
+
+  raw_ptr<media::Decryptor> decryptor_;
 
   // Holds the CdmContextRef to keep the CdmContext alive for the lifetime of
   // the |decryptor_|.
   std::unique_ptr<CdmContextRef> cdm_context_ref_;
-
-  base::WeakPtr<MojoDecryptorService> weak_this_;
-  base::WeakPtrFactory<MojoDecryptorService> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(MojoDecryptorService);
 };
 
 }  // namespace media

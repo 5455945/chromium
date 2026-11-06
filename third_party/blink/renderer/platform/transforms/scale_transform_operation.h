@@ -33,36 +33,26 @@ namespace blink {
 class PLATFORM_EXPORT ScaleTransformOperation final
     : public TransformOperation {
  public:
-  static scoped_refptr<ScaleTransformOperation> Create(double sx,
-                                                       double sy,
-                                                       OperationType type) {
-    return base::AdoptRef(new ScaleTransformOperation(sx, sy, 1, type));
+  ScaleTransformOperation(double sx, double sy, double sz, OperationType type)
+      : x_(sx), y_(sy), z_(sz), type_(type) {
+    DCHECK(IsMatchingOperationType(type));
   }
-
-  static scoped_refptr<ScaleTransformOperation> Create(double sx,
-                                                       double sy,
-                                                       double sz,
-                                                       OperationType type) {
-    return base::AdoptRef(new ScaleTransformOperation(sx, sy, sz, type));
-  }
-
-  bool operator==(const ScaleTransformOperation& other) const {
-    return *this == static_cast<const TransformOperation&>(other);
-  }
+  ScaleTransformOperation(double sx, double sy, OperationType type)
+      : ScaleTransformOperation(sx, sy, 1, type) {}
 
   double X() const { return x_; }
   double Y() const { return y_; }
   double Z() const { return z_; }
 
-  void Apply(TransformationMatrix& transform, const FloatSize&) const override {
+  void Apply(gfx::Transform& transform, const gfx::SizeF&) const override {
     transform.Scale3d(x_, y_, z_);
   }
-  scoped_refptr<TransformOperation> Accumulate(
-      const TransformOperation& other) override;
-  scoped_refptr<TransformOperation> Blend(
-      const TransformOperation* from,
-      double progress,
-      bool blend_to_identity = false) override;
+  TransformOperation* Accumulate(const TransformOperation& other) override;
+  TransformOperation* AccumulateN(const TransformOperation& other,
+                                  int n) override;
+  TransformOperation* Blend(const TransformOperation* from,
+                            double progress,
+                            bool blend_to_identity = false) override;
 
   static bool IsMatchingOperationType(OperationType type) {
     return type == kScale || type == kScaleX || type == kScaleY ||
@@ -72,27 +62,25 @@ class PLATFORM_EXPORT ScaleTransformOperation final
   OperationType GetType() const override { return type_; }
   OperationType PrimitiveType() const final { return kScale3D; }
 
- private:
-  bool operator==(const TransformOperation& o) const override {
-    if (!IsSameType(o))
-      return false;
+ protected:
+  bool IsEqualAssumingSameType(const TransformOperation& o) const override {
     const ScaleTransformOperation* s =
         static_cast<const ScaleTransformOperation*>(&o);
     return x_ == s->x_ && y_ == s->y_ && z_ == s->z_;
   }
 
+ private:
   bool HasNonTrivial3DComponent() const override { return z_ != 1.0; }
 
-  scoped_refptr<TransformOperation> Zoom(double factor) final { return this; }
+  void CommonPrimitiveForInterpolation(
+      const TransformOperation* from,
+      TransformOperation::OperationType& common_type) const;
+
+  TransformOperation* Zoom(double factor) final { return this; }
 
   bool PreservesAxisAlignment() const final { return true; }
   bool IsIdentityOrTranslation() const final {
     return x_ == 1.0 && y_ == 1.0 && z_ == 1.0;
-  }
-
-  ScaleTransformOperation(double sx, double sy, double sz, OperationType type)
-      : x_(sx), y_(sy), z_(sz), type_(type) {
-    DCHECK(IsMatchingOperationType(type));
   }
 
   double x_;

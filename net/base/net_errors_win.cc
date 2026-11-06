@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -54,6 +54,8 @@ Error MapSystemError(logging::SystemErrorCode os_error) {
       return ERR_INVALID_ARGUMENT;
     case WSAEADDRINUSE:
       return ERR_ADDRESS_IN_USE;
+    case WSAENOBUFS:
+      return ERR_NO_BUFFER_SPACE;
 
     // System errors.
     case ERROR_FILE_NOT_FOUND:  // The system cannot find the file specified.

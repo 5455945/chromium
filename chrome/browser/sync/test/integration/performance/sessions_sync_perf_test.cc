@@ -1,25 +1,27 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/macros.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/sync/test/integration/performance/sync_timing_helper.h"
 #include "chrome/browser/sync/test/integration/sessions_helper.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/common/webui_url_constants.h"
 #include "content/public/test/browser_test.h"
 #include "testing/perf/perf_result_reporter.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
+#include "ui/base/page_transition_types.h"
+#include "url/gurl.h"
 
 using content::OpenURLParams;
 using sessions_helper::GetLocalSession;
 using sessions_helper::GetSessionData;
 using sessions_helper::OpenMultipleTabs;
 using sessions_helper::SyncedSessionVector;
-using sessions_helper::SessionWindowMap;
 using sessions_helper::WaitForTabsToLoad;
 using sync_timing_helper::TimeMutualSyncCycle;
 
@@ -42,18 +44,30 @@ perf_test::PerfResultReporter SetUpReporter(const std::string& story) {
 
 }  // namespace
 
-class SessionsSyncPerfTest: public SyncTest {
+class SessionsSyncPerfTest : public SyncTest {
  public:
-  SessionsSyncPerfTest() : SyncTest(TWO_CLIENT), url_number_(0) {}
+  SessionsSyncPerfTest() : SyncTest(TWO_CLIENT) {}
+
+  SessionsSyncPerfTest(const SessionsSyncPerfTest&) = delete;
+  SessionsSyncPerfTest& operator=(const SessionsSyncPerfTest&) = delete;
+
+  SyncTest::SetupSyncMode GetSetupSyncMode() const override {
+    return SetupSyncMode::kSyncTransportOnly;
+  }
+
+  GURL GetInitialURL() const override {
+    // Return a lightweight unsynced WebUI URL so the initial tab is not synced
+    // (unlike the default about:blank). Avoid chrome://newtab/ because loading
+    // the full New Tab Page WebUI and its subframes significantly slows down
+    // test setup and teardown.
+    return GURL(chrome::kChromeUIVersionURL);
+  }
 
   // Opens |num_tabs| new tabs on |profile|.
   void AddTabs(int profile, int num_tabs);
 
   // Update all tabs in |profile| by visiting a new URL.
   void UpdateTabs(int profile);
-
-  // Close all tabs in |profile|.
-  void RemoveTabs(int profile);
 
   // Returns the number of open tabs in all sessions (local + foreign) for
   // |profile|.  Returns -1 on failure.
@@ -66,8 +80,7 @@ class SessionsSyncPerfTest: public SyncTest {
   // Returns a unique URL according to the integer |n|.
   GURL IntToURL(int n);
 
-  int url_number_;
-  DISALLOW_COPY_AND_ASSIGN(SessionsSyncPerfTest);
+  int url_number_ = 0;
 };
 
 void SessionsSyncPerfTest::AddTabs(int profile, int num_tabs) {
@@ -79,24 +92,22 @@ void SessionsSyncPerfTest::AddTabs(int profile, int num_tabs) {
 }
 
 void SessionsSyncPerfTest::UpdateTabs(int profile) {
-  Browser* browser = GetBrowser(profile);
+  BrowserWindowInterface* browser = GetBrowser(profile);
   GURL url;
   std::vector<GURL> urls;
-  for (int i = 0; i < browser->tab_strip_model()->count(); ++i) {
+  for (int i = 0; i < browser->GetTabStripModel()->count(); ++i) {
     chrome::SelectNumberedTab(browser, i);
     url = NextURL();
-    browser->OpenURL(OpenURLParams(
-        url,
-        content::Referrer(GURL("http://localhost"),
-                          network::mojom::ReferrerPolicy::kDefault),
-        WindowOpenDisposition::CURRENT_TAB, ui::PAGE_TRANSITION_LINK, false));
+    browser->OpenURL(
+        OpenURLParams::CreateBrowserInitiated(
+            url, ui::mojom::WindowOpenDisposition::kCurrentTab,
+            ui::PAGE_TRANSITION_LINK,
+            content::Referrer(GURL("http://localhost"),
+                              network::mojom::ReferrerPolicy::kDefault)),
+        /*navigation_handle_callback=*/{});
     urls.push_back(url);
   }
   WaitForTabsToLoad(profile, urls);
-}
-
-void SessionsSyncPerfTest::RemoveTabs(int profile) {
-  GetBrowser(profile)->tab_strip_model()->CloseAllTabs();
 }
 
 int SessionsSyncPerfTest::GetTabCount(int profile) {
@@ -115,9 +126,11 @@ int SessionsSyncPerfTest::GetTabCount(int profile) {
 
   int tab_count = 0;
   sessions.push_back(local_session);
-  for (auto* session : sessions)
-    for (const auto& win_pair : session->windows)
-      tab_count += win_pair.second->wrapped_window.tabs.size();
+  for (const sync_sessions::SyncedSession* session : sessions) {
+    for (const auto& [window_id, window] : session->windows) {
+      tab_count += window->wrapped_window.tabs.size();
+    }
+  }
 
   return tab_count;
 }
@@ -130,11 +143,11 @@ GURL SessionsSyncPerfTest::IntToURL(int n) {
   return GURL(base::StringPrintf("http://localhost/%d", n));
 }
 
-// TODO(lipalani): Re-enable after crbug.com/96921 is fixed.
-IN_PROC_BROWSER_TEST_F(SessionsSyncPerfTest, DISABLED_P0) {
-  ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
+IN_PROC_BROWSER_TEST_F(SessionsSyncPerfTest, P0) {
+  ASSERT_TRUE(SetupSync());
 
-  auto reporter = SetUpReporter(base::NumberToString(kNumTabs) + "_tabs");
+  perf_test::PerfResultReporter reporter =
+      SetUpReporter(base::NumberToString(kNumTabs) + "_tabs");
   AddTabs(0, kNumTabs);
   base::TimeDelta dt = TimeMutualSyncCycle(GetClient(0), GetClient(1));
   ASSERT_EQ(kNumTabs, GetTabCount(0));
@@ -146,11 +159,4 @@ IN_PROC_BROWSER_TEST_F(SessionsSyncPerfTest, DISABLED_P0) {
   ASSERT_EQ(kNumTabs, GetTabCount(0));
   ASSERT_EQ(kNumTabs, GetTabCount(1));
   reporter.AddResult(kMetricUpdateTabSyncTime, dt);
-
-  RemoveTabs(0);
-  dt = TimeMutualSyncCycle(GetClient(0), GetClient(1));
-  // New tab page remains open on profile 0 after closing all tabs.
-  ASSERT_EQ(1, GetTabCount(0));
-  ASSERT_EQ(0, GetTabCount(1));
-  reporter.AddResult(kMetricDeleteTabSyncTime, dt);
 }

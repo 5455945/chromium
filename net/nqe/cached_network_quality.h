@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,7 @@
 #include "net/nqe/effective_connection_type.h"
 #include "net/nqe/network_quality.h"
 
-namespace net {
-
-namespace nqe {
-
-namespace internal {
+namespace net::nqe::internal {
 
 // CachedNetworkQuality stores the quality of a previously seen network.
 class NET_EXPORT_PRIVATE CachedNetworkQuality {
@@ -23,7 +19,7 @@ class NET_EXPORT_PRIVATE CachedNetworkQuality {
   explicit CachedNetworkQuality(
       EffectiveConnectionType effective_connection_type);
 
-  // |last_update_time| is the time when the |network_quality| was computed.
+  // `last_update_time` is the time when the `network_quality` was computed.
   CachedNetworkQuality(base::TimeTicks last_update_time,
                        const NetworkQuality& network_quality,
                        EffectiveConnectionType effective_connection_type);
@@ -36,7 +32,7 @@ class NET_EXPORT_PRIVATE CachedNetworkQuality {
   CachedNetworkQuality& operator=(const CachedNetworkQuality& other);
 
   // Returns true if this cache entry was updated before
-  // |cached_network_quality|.
+  // `cached_network_quality`.
   bool OlderThan(const CachedNetworkQuality& cached_network_quality) const;
 
   base::TimeTicks last_update_time() { return last_update_time_; }
@@ -56,10 +52,6 @@ class NET_EXPORT_PRIVATE CachedNetworkQuality {
   EffectiveConnectionType effective_connection_type_;
 };
 
-}  // namespace internal
-
-}  // namespace nqe
-
-}  // namespace net
+}  // namespace net::nqe::internal
 
 #endif  // NET_NQE_CACHED_NETWORK_QUALITY_H_

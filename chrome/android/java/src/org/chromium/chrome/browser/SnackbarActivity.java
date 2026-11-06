@@ -1,14 +1,22 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser;
 
-import android.os.Build;
 import android.os.Bundle;
-import android.view.WindowManager;
+import android.view.View;
+import android.view.ViewGroup;
 
+import androidx.annotation.CallSuper;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.glic.GlicHelper;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager.ParentOverrideSlot;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager.SnackbarManageable;
 
 /**
@@ -18,24 +26,73 @@ import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager.Snackbar
  * For heavier Activities that show web content, use ChromeActivity instead to get asynchronous
  * loading of the native libraries.
  */
+@NullMarked
 public abstract class SnackbarActivity extends SynchronousInitializationActivity
         implements SnackbarManageable {
 
     private SnackbarManager mSnackbarManager;
 
+    @CallSuper
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
+    protected void onCreateInternal(@Nullable Bundle savedInstanceState) {
+        super.onCreateInternal(savedInstanceState);
+        // TODO(crbug.com/399495650): Add render tests for snackbar padding in edge-to-edge mode.
+        mSnackbarManager =
+                new SnackbarManager(this, getContentView(), null, null, getModalDialogManager());
+    }
 
-        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.O) {
-            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (ChromeFeatureList.sGlicShowTaskInProgressSnackbar.getValue()) {
+            getProfileSupplier()
+                    .runSyncOrOnAvailable(
+                            (Profile profile) ->
+                                    GlicHelper.maybeShowGlicTaskInProgressSnackbar(
+                                            this,
+                                            profile,
+                                            this,
+                                            GlicHelper.Caller.SNACKBAR_ACTIVITY));
         }
-        mSnackbarManager = new SnackbarManager(this, findViewById(android.R.id.content), null);
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (mSnackbarManager != null) {
+            mSnackbarManager.destroy();
+        }
+    }
+
+    @Override
+    public void setContentView(int layoutResId) {
+        super.setContentView(layoutResId);
+        mSnackbarManager.pushParentViewOverride(
+                ParentOverrideSlot.ONE_OFF,
+                getContentView(),
+                /* additionalBottomMarginPxSupplier= */ null);
+    }
+
+    @Override
+    public void setContentView(View view) {
+        super.setContentView(view);
+        mSnackbarManager.pushParentViewOverride(
+                ParentOverrideSlot.ONE_OFF,
+                getContentView(),
+                /* additionalBottomMarginPxSupplier= */ null);
+    }
+
+    @Override
+    public void setContentView(View view, ViewGroup.LayoutParams params) {
+        super.setContentView(view, params);
+        mSnackbarManager.pushParentViewOverride(
+                ParentOverrideSlot.ONE_OFF,
+                getContentView(),
+                /* additionalBottomMarginPxSupplier= */ null);
     }
 
     @Override
     public SnackbarManager getSnackbarManager() {
         return mSnackbarManager;
     }
-
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,11 @@
 #define ASH_DRAG_DROP_DRAG_IMAGE_VIEW_H_
 
 #include "ash/ash_export.h"
-#include "base/macros.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-forward.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/controls/image_view.h"
-#include "ui/views/widget/unique_widget_ptr.h"
 
 namespace aura {
 class Window;
@@ -30,14 +28,18 @@ namespace ash {
 // desktop in screen coordinates.
 class ASH_EXPORT DragImageView : public views::ImageView {
  public:
+  DragImageView(const DragImageView&) = delete;
+  DragImageView& operator=(const DragImageView&) = delete;
+
   ~DragImageView() override;
 
   // |root_window| is the root window on which to create the drag image widget.
   // |source| is the event source that started this drag drop operation (touch
   // or mouse). It is used to determine attributes of the drag image such as
   // whether to show drag operation hint on top of the image.
-  static views::UniqueWidgetPtr Create(aura::Window* root_window,
-                                       ui::mojom::DragEventSource source);
+  static std::unique_ptr<views::Widget> Create(
+      aura::Window* root_window,
+      ui::mojom::DragEventSource source);
 
   // Sets the bounds of the native widget in screen
   // coordinates.
@@ -70,7 +72,7 @@ class ASH_EXPORT DragImageView : public views::ImageView {
   gfx::Size GetMinimumSize() const override;
 
  private:
-  DragImageView(ui::mojom::DragEventSource source);
+  explicit DragImageView(ui::mojom::DragEventSource source);
 
   gfx::Image* DragHint() const;
   // Drag hint images are only drawn when the input source is touch.
@@ -80,7 +82,7 @@ class ASH_EXPORT DragImageView : public views::ImageView {
   void OnPaint(gfx::Canvas* canvas) override;
 
   // Overridden from views::view
-  void Layout() override;
+  void Layout(PassKey) override;
 
   // Save the requested drag image size. We may need to display a drag hint
   // image, which potentially expands |widget_|'s size. That drag hint image
@@ -93,8 +95,6 @@ class ASH_EXPORT DragImageView : public views::ImageView {
   // Bitmask of ui::DragDropTypes::DragOperation values.
   int touch_drag_operation_ = ui::DragDropTypes::DRAG_NONE;
   gfx::Point touch_drag_operation_indicator_position_;
-
-  DISALLOW_COPY_AND_ASSIGN(DragImageView);
 };
 
 }  // namespace ash

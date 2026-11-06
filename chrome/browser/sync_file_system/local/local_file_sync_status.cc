@@ -1,11 +1,11 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/sync_file_system/local/local_file_sync_status.h"
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
+#include "base/observer_list.h"
 #include "content/public/browser/browser_thread.h"
 #include "storage/common/file_system/file_system_util.h"
 
@@ -60,8 +60,9 @@ bool ContainsChildOrParent(const Container& paths,
 
   // Check if any ancestor of |normalized_path| is in |writing_|.
   while (true) {
-    if (base::Contains(paths, normalized_path))
+    if (paths.contains(normalized_path)) {
       return true;
+    }
 
     if (storage::VirtualPath::IsRootPath(normalized_path))
       return false;
@@ -73,18 +74,18 @@ bool ContainsChildOrParent(const Container& paths,
 
 }  // namespace
 
-LocalFileSyncStatus::LocalFileSyncStatus() {}
+LocalFileSyncStatus::LocalFileSyncStatus() = default;
 
-LocalFileSyncStatus::~LocalFileSyncStatus() {}
+LocalFileSyncStatus::~LocalFileSyncStatus() = default;
 
 void LocalFileSyncStatus::StartWriting(const FileSystemURL& url) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
-  DCHECK(!IsChildOrParentSyncing(url));
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M162);
+  CHECK(!IsChildOrParentSyncing(url), base::NotFatalUntil::M162);
   writing_[GetOriginAndType(url)][NormalizePath(url.path())]++;
 }
 
 void LocalFileSyncStatus::EndWriting(const FileSystemURL& url) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M162);
   base::FilePath normalized_path = NormalizePath(url.path());
   OriginAndType origin_and_type = GetOriginAndType(url);
 
@@ -99,14 +100,14 @@ void LocalFileSyncStatus::EndWriting(const FileSystemURL& url) {
 }
 
 void LocalFileSyncStatus::StartSyncing(const FileSystemURL& url) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
-  DCHECK(!IsChildOrParentWriting(url));
-  DCHECK(!IsChildOrParentSyncing(url));
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M162);
+  CHECK(!IsChildOrParentWriting(url), base::NotFatalUntil::M162);
+  CHECK(!IsChildOrParentSyncing(url), base::NotFatalUntil::M162);
   syncing_[GetOriginAndType(url)].insert(NormalizePath(url.path()));
 }
 
 void LocalFileSyncStatus::EndSyncing(const FileSystemURL& url) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M162);
   base::FilePath normalized_path = NormalizePath(url.path());
   OriginAndType origin_and_type = GetOriginAndType(url);
 
@@ -120,33 +121,33 @@ void LocalFileSyncStatus::EndSyncing(const FileSystemURL& url) {
 }
 
 bool LocalFileSyncStatus::IsWriting(const FileSystemURL& url) const {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M162);
   return IsChildOrParentWriting(url);
 }
 
 bool LocalFileSyncStatus::IsWritable(const FileSystemURL& url) const {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M162);
   return !IsChildOrParentSyncing(url);
 }
 
 bool LocalFileSyncStatus::IsSyncable(const FileSystemURL& url) const {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M162);
   return !IsChildOrParentSyncing(url) && !IsChildOrParentWriting(url);
 }
 
 void LocalFileSyncStatus::AddObserver(Observer* observer) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M162);
   observer_list_.AddObserver(observer);
 }
 
 void LocalFileSyncStatus::RemoveObserver(Observer* observer) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M162);
   observer_list_.RemoveObserver(observer);
 }
 
 bool LocalFileSyncStatus::IsChildOrParentWriting(
     const FileSystemURL& url) const {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M162);
 
   auto found = writing_.find(GetOriginAndType(url));
   if (found == writing_.end())
@@ -157,7 +158,7 @@ bool LocalFileSyncStatus::IsChildOrParentWriting(
 
 bool LocalFileSyncStatus::IsChildOrParentSyncing(
     const FileSystemURL& url) const {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M162);
   auto found = syncing_.find(GetOriginAndType(url));
   if (found == syncing_.end())
     return false;

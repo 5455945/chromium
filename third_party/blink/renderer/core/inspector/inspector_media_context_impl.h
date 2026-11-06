@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,17 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_INSPECTOR_INSPECTOR_MEDIA_CONTEXT_IMPL_H_
 
 #include "build/build_config.h"
+#include "third_party/blink/public/common/dom/dom_node_id.h"
 #include "third_party/blink/public/web/web_media_inspector.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
 
 namespace blink {
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 // Players are cached per tab.
 constexpr int kMaxCachedPlayerEvents = 128;
 #else
@@ -27,6 +29,7 @@ struct MediaPlayer final : public GarbageCollected<MediaPlayer> {
   void Trace(Visitor*) const {}
 
   WebString player_id;
+  DOMNodeIdType dom_node_id;
   Vector<InspectorPlayerError> errors;
   Vector<InspectorPlayerEvent> events;
   Vector<InspectorPlayerMessage> messages;
@@ -46,15 +49,17 @@ class CORE_EXPORT MediaInspectorContextImpl final
 
   // MediaInspectorContext methods.
   WebString CreatePlayer() override;
-  void DestroyPlayer(const WebString& playerId) override;
+  void DestroyPlayer(const WebString& player_id) override;
+  void SetDomNodeIdForPlayer(const WebString& player_id,
+                             int dom_node_id) override;
 
-  void NotifyPlayerErrors(WebString playerId,
+  void NotifyPlayerErrors(WebString player_id,
                           const InspectorPlayerErrors&) override;
-  void NotifyPlayerEvents(WebString playerId,
+  void NotifyPlayerEvents(WebString player_id,
                           const InspectorPlayerEvents&) override;
-  void NotifyPlayerMessages(WebString playerId,
+  void NotifyPlayerMessages(WebString player_id,
                             const InspectorPlayerMessages&) override;
-  void SetPlayerProperties(WebString playerId,
+  void SetPlayerProperties(WebString player_id,
                            const InspectorPlayerProperties&) override;
 
   // GarbageCollected methods.

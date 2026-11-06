@@ -1,34 +1,53 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_SYNC_BROWSER_SYNCED_WINDOW_DELEGATE_H_
 #define CHROME_BROWSER_UI_SYNC_BROWSER_SYNCED_WINDOW_DELEGATE_H_
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ref.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "components/sessions/core/session_id.h"
 #include "components/sync_sessions/synced_window_delegate.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
-class Browser;
-
-namespace browser_sync {
+namespace sync_sessions {
 class SyncedTabDelegate;
-}
+}  // namespace sync_sessions
 
 // A BrowserSyncedWindowDelegate is the desktop implementation for
 // SyncedWindowDelegate, representing the window corresponding to |browser|,
 // and listing all its tabs.
-class BrowserSyncedWindowDelegate : public sync_sessions::SyncedWindowDelegate {
+class BrowserSyncedWindowDelegate : public TabStripModelObserver,
+                                    public sync_sessions::SyncedWindowDelegate {
  public:
-  explicit BrowserSyncedWindowDelegate(Browser* browser);
+  DECLARE_USER_DATA(BrowserSyncedWindowDelegate);
+
+  BrowserSyncedWindowDelegate(BrowserWindowInterface* browser,
+                              TabStripModel* tab_strip_model,
+                              SessionID session_id,
+                              BrowserWindowInterface::Type type);
+
+  // Returns the delegate for `browser`, or null if it does not have one.
+  static BrowserSyncedWindowDelegate* From(BrowserWindowInterface* browser);
+
+  BrowserSyncedWindowDelegate(const BrowserSyncedWindowDelegate&) = delete;
+  BrowserSyncedWindowDelegate& operator=(const BrowserSyncedWindowDelegate&) =
+      delete;
+
   ~BrowserSyncedWindowDelegate() override;
+
+  // TabStripModelObserver:
+  void OnTabStripModelChanged(
+      TabStripModel* tab_strip_model,
+      const TabStripModelChange& change,
+      const TabStripSelectionChange& selection) override;
 
   // SyncedWindowDelegate:
   bool HasWindow() const override;
   SessionID GetSessionId() const override;
   int GetTabCount() const override;
-  int GetActiveIndex() const override;
   bool IsTypeNormal() const override;
   bool IsTypePopup() const override;
   bool IsTabPinned(const sync_sessions::SyncedTabDelegate* tab) const override;
@@ -38,9 +57,13 @@ class BrowserSyncedWindowDelegate : public sync_sessions::SyncedWindowDelegate {
   bool ShouldSync() const override;
 
  private:
-  Browser* const browser_;
+  ui::ScopedUnownedUserData<BrowserSyncedWindowDelegate>
+      scoped_unowned_user_data_;
 
-  DISALLOW_COPY_AND_ASSIGN(BrowserSyncedWindowDelegate);
+  const raw_ref<BrowserWindowInterface> browser_;
+  const raw_ref<TabStripModel> tab_strip_model_;
+  const SessionID session_id_;
+  const BrowserWindowInterface::Type type_;
 };
 
 #endif  // CHROME_BROWSER_UI_SYNC_BROWSER_SYNCED_WINDOW_DELEGATE_H_

@@ -1,15 +1,12 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/android/java_handler_thread.h"
 
-#include <jni.h>
-
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "base/base_jni_headers/JavaHandlerThread_jni.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/message_loop/message_pump.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
@@ -19,6 +16,9 @@
 #include "base/threading/thread_id_name_manager.h"
 #include "base/threading/thread_restrictions.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "base/base_jni/JavaHandlerThread_jni.h"
+
 using base::android::AttachCurrentThread;
 
 namespace base {
@@ -26,13 +26,13 @@ namespace base {
 namespace android {
 
 JavaHandlerThread::JavaHandlerThread(const char* name,
-                                     base::ThreadPriority priority)
+                                     base::ThreadType thread_type)
     : JavaHandlerThread(
           name,
           Java_JavaHandlerThread_create(
               AttachCurrentThread(),
-              ConvertUTF8ToJavaString(AttachCurrentThread(), name),
-              base::internal::ThreadPriorityToNiceValue(priority))) {}
+              name,
+              base::internal::ThreadTypeToNiceValue(thread_type))) {}
 
 JavaHandlerThread::JavaHandlerThread(
     const char* name,
@@ -81,14 +81,14 @@ void JavaHandlerThread::Stop() {
   Java_JavaHandlerThread_joinThread(env, java_thread_);
 }
 
-void JavaHandlerThread::InitializeThread(JNIEnv* env,
-                                         jlong event) {
+void JavaHandlerThread::InitializeThread(JNIEnv* env, int64_t event) {
   base::ThreadIdNameManager::GetInstance()->RegisterThread(
       base::PlatformThread::CurrentHandle().platform_handle(),
       base::PlatformThread::CurrentId());
 
-  if (name_)
+  if (name_) {
     PlatformThread::SetName(name_);
+  }
 
   thread_id_ = base::PlatformThread::CurrentId();
   state_ = std::make_unique<State>();
@@ -160,22 +160,23 @@ JavaHandlerThread::State::State()
           sequence_manager::SequenceManager::Settings::Builder()
               .SetMessagePumpType(base::MessagePumpType::JAVA)
               .Build())),
-      default_task_queue(sequence_manager->CreateTaskQueue(
-          sequence_manager::TaskQueue::Spec("default_tq"))) {
+      default_task_queue(
+          sequence_manager->CreateTaskQueue(sequence_manager::TaskQueue::Spec(
+              sequence_manager::QueueName::DEFAULT_TQ))) {
   // TYPE_JAVA to get the Android java style message loop.
   std::unique_ptr<MessagePump> message_pump =
       MessagePump::Create(base::MessagePumpType::JAVA);
   pump = static_cast<MessagePumpForUI*>(message_pump.get());
 
-  // We must set SetTaskRunner before binding because the Android UI pump
-  // creates a RunLoop which samples ThreadTaskRunnerHandle::Get.
-  static_cast<sequence_manager::internal::SequenceManagerImpl*>(
-      sequence_manager.get())
-      ->SetTaskRunner(default_task_queue->task_runner());
+  // We must set SetDefaultTaskQueue before binding because the Android UI pump
+  // creates a RunLoop which samples SingleThreadTaskRunner::GetCurrentDefault.
+  sequence_manager->SetDefaultTaskQueue(default_task_queue.get());
   sequence_manager->BindToMessagePump(std::move(message_pump));
 }
 
 JavaHandlerThread::State::~State() = default;
 
-} // namespace android
-} // namespace base
+}  // namespace android
+}  // namespace base
+
+DEFINE_JNI(JavaHandlerThread)

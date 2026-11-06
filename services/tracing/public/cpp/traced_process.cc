@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,10 @@
 
 #include <utility>
 
+#include "build/blink_buildflags.h"
 #include "build/build_config.h"
 
-#if !defined(OS_NACL) && !defined(OS_IOS)
+#if BUILDFLAG(USE_BLINK)
 #include "services/tracing/public/cpp/traced_process_impl.h"
 #endif
 
@@ -16,7 +17,7 @@ namespace tracing {
 
 // static
 void TracedProcess::ResetTracedProcessReceiver() {
-#if !defined(OS_NACL) && !defined(OS_IOS)
+#if BUILDFLAG(USE_BLINK)
   tracing::TracedProcessImpl::GetInstance()->ResetTracedProcessReceiver();
 #endif
 }
@@ -24,7 +25,7 @@ void TracedProcess::ResetTracedProcessReceiver() {
 // static
 void TracedProcess::OnTracedProcessRequest(
     mojo::PendingReceiver<mojom::TracedProcess> receiver) {
-#if !defined(OS_NACL) && !defined(OS_IOS)
+#if BUILDFLAG(USE_BLINK)
   tracing::TracedProcessImpl::GetInstance()->OnTracedProcessRequest(
       std::move(receiver));
 #endif
@@ -33,8 +34,7 @@ void TracedProcess::OnTracedProcessRequest(
 // static
 void TracedProcess::EnableSystemTracingService(
     mojo::PendingRemote<mojom::SystemTracingService> remote) {
-#if defined(OS_POSIX) && !defined(OS_ANDROID) && !defined(OS_NACL) && \
-    !defined(OS_IOS)
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID) && BUILDFLAG(USE_BLINK)
   tracing::TracedProcessImpl::GetInstance()->EnableSystemTracingService(
       std::move(remote));
 #endif

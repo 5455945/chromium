@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,19 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_BLUETOOTH_BLUETOOTH_SERVICE_DATA_MAP_H_
 
 #include "third_party/blink/renderer/bindings/core/v8/maplike.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_sync_iterator_bluetooth_service_data_map.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_data_view.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
-class BluetoothServiceDataMap final
-    : public ScriptWrappable,
-      public Maplike<String, Member<DOMDataView>> {
+class BluetoothServiceDataMap final : public ScriptWrappable,
+                                      public Maplike<BluetoothServiceDataMap> {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  using MapType = HashMap<String, WTF::Vector<uint8_t>>;
+  using MapType = HashMap<String, Vector<uint8_t>>;
 
   explicit BluetoothServiceDataMap(const MapType&);
 
@@ -30,13 +30,11 @@ class BluetoothServiceDataMap final
   uint32_t size() const { return parameter_map_.size(); }
 
  private:
-  PairIterable<String, Member<DOMDataView>>::IterationSource* StartIteration(
-      ScriptState*,
-      ExceptionState&) override;
+  PairSyncIterable<BluetoothServiceDataMap>::IterationSource*
+  CreateIterationSource(ScriptState*) override;
   bool GetMapEntry(ScriptState*,
                    const String& key,
-                   Member<DOMDataView>&,
-                   ExceptionState&) override;
+                   NotShared<DOMDataView>& value) override;
 
   const MapType parameter_map_;
 };

@@ -4,24 +4,23 @@ CASE 1, original layer tree with overlap1 and overlap2:
 {
   "layers": [
     {
-      "name": "Scrolling Contents Layer",
+      "name": "Scrolling background of LayoutView #document",
       "bounds": [800, 600],
       "contentsOpaque": true,
       "backgroundColor": "#FFFFFF"
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='composited'",
+      "name": "LayoutBlockFlow (positioned) DIV class='composited'",
       "bounds": [400, 400],
       "contentsOpaque": true,
       "backgroundColor": "#808080",
       "transform": 1
     },
     {
-      "name": "Squashing Layer (first squashed layer: LayoutNGBlockFlow (positioned) DIV id='A' class='overlap1')",
-      "position": [80, 80],
+      "name": "LayoutBlockFlow (positioned) DIV id='A' class='overlap1'",
+      "position": [140, 140],
       "bounds": [120, 120],
-      "backgroundColor": "#00FF00",
-      "transform": 1
+      "backgroundColor": "#00FF00"
     }
   ],
   "transforms": [
@@ -41,27 +40,26 @@ CASE 2, overlap3 gets added:
 {
   "layers": [
     {
-      "name": "Scrolling Contents Layer",
+      "name": "Scrolling background of LayoutView #document",
       "bounds": [800, 600],
       "contentsOpaque": true,
       "backgroundColor": "#FFFFFF"
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='composited'",
+      "name": "LayoutBlockFlow (positioned) DIV class='composited'",
       "bounds": [400, 400],
       "contentsOpaque": true,
       "backgroundColor": "#808080",
       "transform": 1
     },
     {
-      "name": "Squashing Layer (first squashed layer: LayoutNGBlockFlow (positioned) DIV id='A' class='overlap1')",
-      "position": [80, 80],
+      "name": "LayoutBlockFlow (positioned) DIV id='A' class='overlap1'",
+      "position": [140, 140],
       "bounds": [140, 140],
       "backgroundColor": "#FF00FF",
       "invalidations": [
         [40, 40, 100, 100]
-      ],
-      "transform": 1
+      ]
     }
   ],
   "transforms": [
@@ -81,27 +79,26 @@ CASE 3, overlap2 gets removed. Since this does not resize the layer, there shoul
 {
   "layers": [
     {
-      "name": "Scrolling Contents Layer",
+      "name": "Scrolling background of LayoutView #document",
       "bounds": [800, 600],
       "contentsOpaque": true,
       "backgroundColor": "#FFFFFF"
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='composited'",
+      "name": "LayoutBlockFlow (positioned) DIV class='composited'",
       "bounds": [400, 400],
       "contentsOpaque": true,
       "backgroundColor": "#808080",
       "transform": 1
     },
     {
-      "name": "Squashing Layer (first squashed layer: LayoutNGBlockFlow (positioned) DIV id='A' class='overlap1')",
-      "position": [80, 80],
+      "name": "LayoutBlockFlow (positioned) DIV id='A' class='overlap1'",
+      "position": [140, 140],
       "bounds": [140, 140],
       "backgroundColor": "#FF00FF",
       "invalidations": [
-        [20, 20, 100, 100]
-      ],
-      "transform": 1
+        [20, 20, 120, 120]
+      ]
     }
   ],
   "transforms": [
@@ -121,27 +118,24 @@ CASE 4, overlap1 gets removed:
 {
   "layers": [
     {
-      "name": "Scrolling Contents Layer",
+      "name": "Scrolling background of LayoutView #document",
       "bounds": [800, 600],
       "contentsOpaque": true,
       "backgroundColor": "#FFFFFF"
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='composited'",
+      "name": "LayoutBlockFlow (positioned) DIV class='composited'",
       "bounds": [400, 400],
       "contentsOpaque": true,
       "backgroundColor": "#808080",
       "transform": 1
     },
     {
-      "name": "Squashing Layer (first squashed layer: LayoutNGBlockFlow (positioned) DIV id='C' class='overlap3')",
-      "position": [120, 120],
+      "name": "LayoutBlockFlow (positioned) DIV id='C' class='overlap3'",
+      "position": [180, 180],
       "bounds": [100, 100],
-      "backgroundColor": "#FF00FF",
-      "invalidations": [
-        [0, 0, 100, 100]
-      ],
-      "transform": 1
+      "contentsOpaque": true,
+      "backgroundColor": "#FF00FF"
     }
   ],
   "transforms": [
@@ -161,28 +155,26 @@ CASE 5, overlap2 gets added back:
 {
   "layers": [
     {
-      "name": "Scrolling Contents Layer",
+      "name": "Scrolling background of LayoutView #document",
       "bounds": [800, 600],
       "contentsOpaque": true,
       "backgroundColor": "#FFFFFF"
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='composited'",
+      "name": "LayoutBlockFlow (positioned) DIV class='composited'",
       "bounds": [400, 400],
       "contentsOpaque": true,
       "backgroundColor": "#808080",
       "transform": 1
     },
     {
-      "name": "Squashing Layer (first squashed layer: LayoutNGBlockFlow (positioned) DIV id='B' class='overlap2')",
-      "position": [100, 100],
+      "name": "LayoutBlockFlow (positioned) DIV id='B' class='overlap2'",
+      "position": [160, 160],
       "bounds": [120, 120],
       "backgroundColor": "#FF00FF",
       "invalidations": [
-        [20, 20, 100, 100],
-        [0, 0, 100, 100]
-      ],
-      "transform": 1
+        [0, 0, 120, 120]
+      ]
     }
   ],
   "transforms": [
@@ -202,28 +194,26 @@ CASE 6, overlap1 gets added back, and overlap3 gets removed:
 {
   "layers": [
     {
-      "name": "Scrolling Contents Layer",
+      "name": "Scrolling background of LayoutView #document",
       "bounds": [800, 600],
       "contentsOpaque": true,
       "backgroundColor": "#FFFFFF"
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='composited'",
+      "name": "LayoutBlockFlow (positioned) DIV class='composited'",
       "bounds": [400, 400],
       "contentsOpaque": true,
       "backgroundColor": "#808080",
       "transform": 1
     },
     {
-      "name": "Squashing Layer (first squashed layer: LayoutNGBlockFlow (positioned) DIV id='A' class='overlap1')",
-      "position": [80, 80],
+      "name": "LayoutBlockFlow (positioned) DIV id='A' class='overlap1'",
+      "position": [140, 140],
       "bounds": [120, 120],
       "backgroundColor": "#00FF00",
       "invalidations": [
-        [20, 20, 100, 100],
-        [0, 0, 100, 100]
-      ],
-      "transform": 1
+        [0, 0, 120, 120]
+      ]
     }
   ],
   "transforms": [

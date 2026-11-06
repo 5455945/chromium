@@ -1,22 +1,23 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/debug/stack_trace.h"
+
 #include <vector>
 
-#include "base/debug/stack_trace.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/strings/stringprintf.h"
 #include "base/timer/lap_timer.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/perf/perf_result_reporter.h"
 
-namespace base {
-namespace debug {
+namespace base::debug {
 
 // Change kTimeLimit to something higher if you need more time to capture a
 // trace.
-constexpr base::TimeDelta kTimeLimit = base::TimeDelta::FromSeconds(3);
+constexpr base::TimeDelta kTimeLimit = base::Seconds(3);
 constexpr int kWarmupRuns = 100;
 constexpr int kTimeCheckInterval = 1000;
 constexpr char kMetricStackTraceDuration[] = ".duration_per_run";
@@ -32,19 +33,19 @@ perf_test::PerfResultReporter SetUpReporter(const std::string& story_name) {
 
 class StackTracer {
  public:
-  StackTracer(size_t trace_count) : trace_count(trace_count) {}
+  explicit StackTracer(size_t trace_count) : trace_count_(trace_count) {}
   void Trace() {
-    size_t tmp;
-    base::debug::StackTrace st(trace_count);
-    const void* addresses = st.Addresses(&tmp);
+    StackTrace st(trace_count_);
+    span<const void* const> addresses = st.addresses();
     // make sure a valid array of stack frames is returned
-    EXPECT_NE(addresses, nullptr);
+    ASSERT_FALSE(addresses.empty());
+    EXPECT_NE(nullptr, addresses[0]);
     // make sure the test generates the intended count of stack frames
-    EXPECT_EQ(trace_count, tmp);
+    EXPECT_EQ(trace_count_, addresses.size());
   }
 
  private:
-  const size_t trace_count;
+  const size_t trace_count_;
 };
 
 void MultiObjTest(size_t trace_count) {
@@ -66,8 +67,9 @@ void MultiObjTest(size_t trace_count) {
   timer.Start();
   do {
     (*it)->Trace();
-    if (++it == tracers.end())
+    if (++it == tracers.end()) {
       it = tracers.begin();
+    }
     timer.NextLap();
   } while (!timer.HasTimeLimitExpired());
   reporter.AddResult(kMetricStackTraceDuration, timer.TimePerLap());
@@ -85,5 +87,4 @@ TEST_P(StackTracePerfTest, MultiObj) {
   MultiObjTest(parm);
 }
 
-}  // namespace debug
-}  // namespace base
+}  // namespace base::debug

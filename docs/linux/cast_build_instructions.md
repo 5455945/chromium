@@ -13,7 +13,7 @@ Are you a Google employee? See
 
 ## System requirements
 
-*   A 64-bit Intel machine with at least 8GB of RAM. More than 16GB is highly
+*   An x86-64 machine with at least 8GB of RAM. More than 16GB is highly
     recommended.
 *   At least 100GB of free disk space.
 *   You must have Git and Python installed already.
@@ -57,6 +57,19 @@ $ fetch --nohooks chromium
 If you don't want the full repo history, you can save a lot of time by
 adding the `--no-history` flag to `fetch`.
 
+You can make this much faster by passing `--git-cache` to `fetch`, which
+seeds the checkout from a shared, prebuilt snapshot instead of cloning from
+scratch (and, unlike `--no-history`, keeps the full history):
+
+```shell
+$ fetch --git-cache chromium
+```
+
+The cache directory is chosen automatically (override with `$GIT_CACHE_PATH`).
+It mirrors every repo it fetches (~30 GB for Chromium) and is shared by all
+checkouts on the machine: working trees reference it instead of copying the
+objects, so the per-checkout `.git` stays small.
+
 Expect the command to take 30 minutes on even a fast connection, and many
 hours on slower ones.
 
@@ -99,12 +112,12 @@ development and testing purposes.
 ## Setting up the build
 
 Chromium uses [Ninja](https://ninja-build.org) as its main build tool along with
-a tool called [GN](https://gn.googlesource.com/gn/+/master/docs/quick_start.md)
+a tool called [GN](https://gn.googlesource.com/gn/+/main/docs/quick_start.md)
 to generate `.ninja` files. You can create any number of *build directories*
 with different configurations. To create a build directory, run:
 
 ```shell
-$ gn gen out/Default --args='is_chromecast=true'
+$ gn gen out/Default --args='enable_cast_receiver=true is_castos=true'
 ```
 
 * You only have to run this once for each new build directory, Ninja will
@@ -116,7 +129,7 @@ $ gn gen out/Default --args='is_chromecast=true'
   The default will be a debug component build matching the current host
   operating system and CPU.
 * For more info on GN, run `gn help` on the command line or read the
-  [quick start guide](https://gn.googlesource.com/gn/+/master/docs/quick_start.md).
+  [quick start guide](https://gn.googlesource.com/gn/+/main/docs/quick_start.md).
 
 ### <a name="faster-builds"></a>Faster builds
 
@@ -153,7 +166,7 @@ $ gclient sync
 
 The first command updates the primary Chromium source repository and rebases
 any of your local branches on top of tip-of-tree (aka the Git branch
-`origin/master`). If you don't want to use this script, you can also just use
+`origin/main`). If you don't want to use this script, you can also just use
 `git pull` or other common Git commands to update the repo.
 
 The second command syncs dependencies to the appropriate versions and re-runs

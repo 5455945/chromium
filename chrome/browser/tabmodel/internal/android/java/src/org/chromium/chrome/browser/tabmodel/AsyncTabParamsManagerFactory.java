@@ -1,16 +1,15 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.tabmodel;
 
-/**
- * Factory for creating {@link AsyncTabParamsManager}.
- */
+import org.chromium.build.annotations.NullMarked;
+
+/** Factory for creating {@link AsyncTabParamsManager}. */
+@NullMarked
 public class AsyncTabParamsManagerFactory {
-    /**
-     * @return New instance of {@link AsyncTabParamsManagerImpl}.
-     */
+    /** Returns a new instance of {@link AsyncTabParamsManagerImpl}. */
     public static AsyncTabParamsManager createAsyncTabParamsManager() {
         return new AsyncTabParamsManagerImpl();
     }

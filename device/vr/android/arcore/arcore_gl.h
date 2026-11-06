@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,20 +11,21 @@
 #include <vector>
 
 #include "base/containers/queue.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
+#include "base/types/expected.h"
 #include "device/vr/android/arcore/ar_compositor_frame_sink.h"
 #include "device/vr/public/cpp/xr_frame_sink_client.h"
 #include "device/vr/public/mojom/isolated_xr_service.mojom.h"
 #include "device/vr/public/mojom/vr_service.mojom.h"
+#include "device/vr/public/mojom/xr_session.mojom.h"
 #include "device/vr/util/fps_meter.h"
 #include "device/vr/util/sliding_average.h"
 #include "gpu/ipc/common/surface_handle.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
-#include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -47,20 +48,20 @@ class WindowAndroid;
 namespace device {
 
 class ArCore;
-class ArCoreSessionUtils;
+class XrJavaCoordinator;
 class ArCoreFactory;
 class ArImageTransport;
 class WebXrPresentationState;
 
 struct ArCoreGlCreateSessionResult {
   mojo::PendingRemote<mojom::XRFrameDataProvider> frame_data_provider;
-  mojom::VRDisplayInfoPtr display_info;
+  mojom::XRViewPtr view;
   mojo::PendingRemote<mojom::XRSessionController> session_controller;
   mojom::XRPresentationConnectionPtr presentation_connection;
 
   ArCoreGlCreateSessionResult(
       mojo::PendingRemote<mojom::XRFrameDataProvider> frame_data_provider,
-      mojom::VRDisplayInfoPtr display_info,
+      mojom::XRViewPtr view,
       mojo::PendingRemote<mojom::XRSessionController> session_controller,
       mojom::XRPresentationConnectionPtr presentation_connection);
   ArCoreGlCreateSessionResult(ArCoreGlCreateSessionResult&& other);
@@ -72,19 +73,26 @@ using ArCoreGlCreateSessionCallback =
 
 struct ArCoreGlInitializeResult {
   std::unordered_set<device::mojom::XRSessionFeature> enabled_features;
-  absl::optional<device::mojom::XRDepthConfig> depth_configuration;
+  std::optional<device::mojom::XRDepthConfig> depth_configuration;
   viz::FrameSinkId frame_sink_id;
 
   ArCoreGlInitializeResult(
       std::unordered_set<device::mojom::XRSessionFeature> enabled_features,
-      absl::optional<device::mojom::XRDepthConfig> depth_configuration,
+      std::optional<device::mojom::XRDepthConfig> depth_configuration,
       viz::FrameSinkId frame_sink_id);
   ArCoreGlInitializeResult(ArCoreGlInitializeResult&& other);
   ~ArCoreGlInitializeResult();
 };
 
+enum class ArCoreGlInitializeError {
+  kFailure,
+  kRetryableFailure,
+};
+
+using ArCoreGlInitializeStatus =
+    base::expected<ArCoreGlInitializeResult, ArCoreGlInitializeError>;
 using ArCoreGlInitializeCallback =
-    base::OnceCallback<void(absl::optional<ArCoreGlInitializeResult>)>;
+    base::OnceCallback<void(ArCoreGlInitializeStatus)>;
 
 // All of this class's methods must be called on the same valid GL thread with
 // the exception of GetGlThreadTaskRunner() and GetWeakPtr().
@@ -94,10 +102,16 @@ class ArCoreGl : public mojom::XRFrameDataProvider,
                  public mojom::XRSessionController {
  public:
   explicit ArCoreGl(std::unique_ptr<ArImageTransport> ar_image_transport);
+
+  ArCoreGl(const ArCoreGl&) = delete;
+  ArCoreGl& operator=(const ArCoreGl&) = delete;
+
   ~ArCoreGl() override;
 
   void Initialize(
-      ArCoreSessionUtils* session_utils,
+      const scoped_refptr<base::SingleThreadTaskRunner>&
+          main_thread_task_runner,
+      XrJavaCoordinator* session_utils,
       ArCoreFactory* arcore_factory,
       XrFrameSinkClient* xr_frame_sink_client,
       gfx::AcceleratedWidget drawing_widget,
@@ -113,8 +127,7 @@ class ArCoreGl : public mojom::XRFrameDataProvider,
       device::mojom::XRDepthOptionsPtr depth_options,
       ArCoreGlInitializeCallback callback);
 
-  void CreateSession(mojom::VRDisplayInfoPtr display_info,
-                     ArCoreGlCreateSessionCallback create_callback,
+  void CreateSession(ArCoreGlCreateSessionCallback create_callback,
                      base::OnceClosure shutdown_callback);
 
   const scoped_refptr<base::SingleThreadTaskRunner>& GetGlThreadTaskRunner() {
@@ -133,21 +146,18 @@ class ArCoreGl : public mojom::XRFrameDataProvider,
   void GetEnvironmentIntegrationProvider(
       mojo::PendingAssociatedReceiver<mojom::XREnvironmentIntegrationProvider>
           environment_provider) override;
-  void SetInputSourceButtonListener(
-      mojo::PendingAssociatedRemote<device::mojom::XRInputSourceButtonListener>)
-      override;
 
   // XRPresentationProvider
-  void SubmitFrameMissing(int16_t frame_index, const gpu::SyncToken&) override;
-  void SubmitFrame(int16_t frame_index,
-                   const gpu::MailboxHolder& mailbox,
-                   base::TimeDelta time_waited) override;
-  void SubmitFrameWithTextureHandle(
+  void SubmitFrameMissing(
       int16_t frame_index,
-      mojo::PlatformHandle texture_handle) override;
-  void SubmitFrameDrawnIntoTexture(int16_t frame_index,
-                                   const gpu::SyncToken&,
-                                   base::TimeDelta time_waited) override;
+      gpu::SharedImageExportResult camera_export_multi_result) override;
+  void SubmitFrame(int16_t frame_index,
+                   base::TimeDelta time_waited) override;
+  void SubmitFrameDrawnIntoTexture(
+      int16_t frame_index,
+      std::vector<device::mojom::XRLayerUpdatePtr> layer_updates,
+      gpu::SharedImageExportResult camera_export_multi_result,
+      base::TimeDelta time_waited) override;
   void UpdateLayerBounds(int16_t frame_index,
                          const gfx::RectF& left_bounds,
                          const gfx::RectF& right_bounds,
@@ -167,25 +177,20 @@ class ArCoreGl : public mojom::XRFrameDataProvider,
       mojom::XREnvironmentIntegrationProvider::
           SubscribeToHitTestForTransientInputCallback callback) override;
 
-  void UnsubscribeFromHitTest(uint64_t subscription_id) override;
+  void UnsubscribeFromHitTest(
+      const HitTestSubscriptionId& subscription_id) override;
 
   void CreateAnchor(
       mojom::XRNativeOriginInformationPtr native_origin_information,
       const device::Pose& native_origin_from_anchor,
+      const std::optional<PlaneId>& plane_id,
       CreateAnchorCallback callback) override;
-  void CreatePlaneAnchor(
-      mojom::XRNativeOriginInformationPtr native_origin_information,
-      const device::Pose& native_origin_from_anchor,
-      uint64_t plane_id,
-      CreatePlaneAnchorCallback callback) override;
 
-  void DetachAnchor(uint64_t anchor_id) override;
+  void DetachAnchor(const AnchorId& anchor_id) override;
 
   // mojom::XRSessionController
   void SetFrameDataRestricted(bool restricted) override;
 
-  void ProcessFrameFromMailbox(int16_t frame_index,
-                               const gpu::MailboxHolder& mailbox);
   void ProcessFrameDrawnIntoTexture(int16_t frame_index,
                                     const gpu::SyncToken& sync_token);
   // Notifies that the screen was touched at |touch_point| using a pointer.
@@ -209,12 +214,14 @@ class ArCoreGl : public mojom::XRFrameDataProvider,
                     mojom::XRFrameDataPtr frame_data,
                     mojom::XRFrameDataProvider::GetFrameDataCallback callback);
 
-  bool InitializeGl(gfx::AcceleratedWidget drawing_widget);
-  void InitializeArCompositor(gpu::SurfaceHandle surface_handle,
+  bool InitializeGl();
+  void InitializeArCompositor(const scoped_refptr<base::SingleThreadTaskRunner>&
+                                  main_thread_task_runner,
+                              gpu::SurfaceHandle surface_handle,
                               ui::WindowAndroid* root_window,
                               XrFrameSinkClient* xr_frame_sink_client,
                               device::DomOverlaySetup dom_setup);
-  void OnArImageTransportReady();
+  void OnArImageTransportReady(bool success);
   void OnArCompositorInitialized(bool initialized);
   void OnInitialized();
   bool IsOnGlThread() const;
@@ -239,8 +246,9 @@ class ArCoreGl : public mojom::XRFrameDataProvider,
   void DidNotProduceVizFrame(int16_t frame_index);
   void OnBeginFrame(const viz::BeginFrameArgs& args,
                     const viz::FrameTimingDetailsMap&);
-  void OnReclaimedGpuFenceAvailable(WebXrFrame* frame,
-                                    std::unique_ptr<gfx::GpuFence> gpu_fence);
+  void OnReclaimedGpuFenceAvailable(
+      WebXrFrame* frame,
+      std::vector<std::unique_ptr<gfx::GpuFence>> gpu_fences);
   void ClearRenderingFrame(WebXrFrame* frame);
   void RecalculateUvsAndProjection();
 
@@ -248,7 +256,7 @@ class ArCoreGl : public mojom::XRFrameDataProvider,
   // the session and only send out necessary data related to reference spaces to
   // blink. Valid after the call to |Initialize()| method.
   std::unordered_set<device::mojom::XRSessionFeature> enabled_features_;
-  absl::optional<device::mojom::XRDepthConfig> depth_configuration_;
+  std::optional<device::mojom::XRDepthConfig> depth_configuration_;
 
   base::OnceClosure session_shutdown_callback_;
 
@@ -268,7 +276,6 @@ class ArCoreGl : public mojom::XRFrameDataProvider,
   // Where possible, we should use the ArCompositor to integrate with viz,
   // rather than our own custom compositing logic.
   std::unique_ptr<ArCompositorFrameSink> ar_compositor_;
-  const bool use_ar_compositor_;
 
   // This class uses the same overall presentation state logic
   // as GvrGraphicsDelegate, with some difference due to drawing
@@ -308,6 +315,9 @@ class ArCoreGl : public mojom::XRFrameDataProvider,
   // The camera image size is used for the camera image buffer. It has the
   // same aspect ratio as the screen size, but may have a different resolution.
   gfx::Size camera_image_size_ = gfx::Size(0, 0);
+
+  // The single view that ArCore supports.
+  mojom::XRView view_;
 
   display::Display::Rotation display_rotation_ = display::Display::ROTATE_0;
 
@@ -367,17 +377,8 @@ class ArCoreGl : public mojom::XRFrameDataProvider,
   // See https://crbug.com/1065572.
   base::OnceClosure pending_getframedata_;
 
-  mojom::VRDisplayInfoPtr display_info_;
-  bool display_info_changed_ = false;
-
-  mojom::VRStageParametersPtr stage_parameters_;
-  uint32_t stage_parameters_id_;
-
-  // Currently estimated floor height.
-  absl::optional<float> floor_height_estimate_;
-
   // Touch-related data.
-  // Android will report touch events via MotionEvent - see ArImmersiveOverlay
+  // Android will report touch events via MotionEvent - see XrImmersiveOverlay
   // for details.
   struct ScreenTouchEvent {
     gfx::PointF screen_last_touch;
@@ -416,7 +417,6 @@ class ArCoreGl : public mojom::XRFrameDataProvider,
 
   // Must be last.
   base::WeakPtrFactory<ArCoreGl> weak_ptr_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(ArCoreGl);
 };
 
 }  // namespace device

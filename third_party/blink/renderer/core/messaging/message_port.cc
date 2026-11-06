@@ -27,36 +27,93 @@
 #include "third_party/blink/renderer/core/messaging/message_port.h"
 
 #include <memory>
+#include <optional>
 
+#include "base/feature_list.h"
+#include "base/trace_event/trace_event.h"
 #include "mojo/public/cpp/base/big_buffer_mojom_traits.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/blob/blob.mojom-blink.h"
+#include "third_party/blink/public/mojom/messaging/transferable_message.mojom-blink.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/post_message_helper.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_post_message_options.h"
+#include "third_party/blink/renderer/core/event_target_names.h"
 #include "third_party/blink/renderer/core/events/message_event.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/user_activation.h"
-#include "third_party/blink/renderer/core/inspector/thread_debugger.h"
 #include "third_party/blink/renderer/core/messaging/blink_transferable_message_mojom_traits.h"
+#include "third_party/blink/renderer/core/scheduler/task_attribution_util.h"
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
 #include "third_party/blink/renderer/core/workers/worker_or_worklet_global_scope.h"
 #include "third_party/blink/renderer/core/workers/worker_thread.h"
+#include "third_party/blink/renderer/core/workers/worklet_global_scope.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/bindings/thread_debugger.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/scheduler/public/task_attribution_tracker.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
-MessagePort::MessagePort(ExecutionContext& execution_context)
-    : ExecutionContextLifecycleObserver(&execution_context),
-      task_runner_(execution_context.GetTaskRunner(TaskType::kPostedMessage)) {}
+namespace {
 
-MessagePort::~MessagePort() {
+const SecurityOrigin* GetMessagePortOriginForOriginCheck(
+    ExecutionContext* context,
+    const SerializedScriptValue& message) {
+  if (context->IsAudioWorkletGlobalScope() &&
+      message.GetOriginCheckRequirement() ==
+          SerializedScriptValue::OriginCheckRequirement::
+              kAllowRelatedAudioWorklet) {
+    // The WebAssembly serialization algorithm restricts modules to an agent
+    // cluster; it does not impose a same-origin restriction. HTML places a
+    // worklet in its creator's agent cluster even though the worklet has a
+    // unique opaque origin. Use the creator's origin for Chromium's additional
+    // origin check so that it does not reject an otherwise valid transfer. The
+    // agent-cluster check in CreateMessageEvent() remains enforced, and using
+    // the creator origin still rejects messages across document origins. See:
+    // https://html.spec.whatwg.org/multipage/webappapis.html#obtain-a-worklet-agent
+    // https://html.spec.whatwg.org/multipage/worklets.html#set-up-a-worklet-environment-settings-object
+    // https://webassembly.github.io/spec/web-api/#serialization
+    // File System Access handles, in contrast, require a strict same-origin
+    // check:
+    // https://fs.spec.whatwg.org/#filesystemhandle
+    auto* worklet_global_scope = To<WorkletGlobalScope>(context);
+    if (const SecurityOrigin* document_origin =
+            worklet_global_scope->DocumentSecurityOrigin()) {
+      return document_origin;
+    }
+  }
+  return context->GetSecurityOrigin();
+}
+
+}  // namespace
+
+MessagePort::MessagePort(ExecutionContext& execution_context)
+    : ActiveScriptWrappable<MessagePort>({}),
+      ExecutionContextLifecycleObserver(execution_context.IsContextDestroyed()
+                                            ? nullptr
+                                            : &execution_context),
+      // Ports in a destroyed context start out in a closed state.
+      closed_(execution_context.IsContextDestroyed()),
+      accept_message_task_runner_(
+          base::FeatureList::IsEnabled(features::kBFCacheWithSharedWorker)
+              ? execution_context.GetTaskRunner(
+                    TaskType::kBackForwardCachePostedMessage)
+              : execution_context.GetTaskRunner(TaskType::kPostedMessage)),
+      dispatch_event_task_runner_(
+          execution_context.GetTaskRunner(TaskType::kPostedMessage)),
+      post_message_task_container_(
+          MakeGarbageCollected<PostMessageTaskContainer>()) {}
+
+void MessagePort::Dispose() {
   DCHECK(!started_ || !IsEntangled());
   if (!IsNeutered()) {
     // Disentangle before teardown. The MessagePortDescriptor will blow up if it
@@ -67,11 +124,11 @@ MessagePort::~MessagePort() {
 
 void MessagePort::postMessage(ScriptState* script_state,
                               const ScriptValue& message,
-                              HeapVector<ScriptValue>& transfer,
+                              HeapVector<ScriptObject> transfer,
                               ExceptionState& exception_state) {
   PostMessageOptions* options = PostMessageOptions::Create();
-  if (!transfer.IsEmpty())
-    options->setTransfer(transfer);
+  if (!transfer.empty())
+    options->setTransfer(std::move(transfer));
   postMessage(script_state, message, options, exception_state);
 }
 
@@ -98,7 +155,7 @@ void MessagePort::postMessage(ScriptState* script_state,
     if (transferables.message_ports[i] == this) {
       exception_state.ThrowDOMException(
           DOMExceptionCode::kDataCloneError,
-          "Port at index " + String::Number(i) + " contains the source port.");
+          Format("Port at index {} contains the source port.", i));
       return;
     }
   }
@@ -110,17 +167,32 @@ void MessagePort::postMessage(ScriptState* script_state,
   msg.user_activation = PostMessageHelper::CreateUserActivationSnapshot(
       GetExecutionContext(), options);
 
-  msg.sender_origin =
-      GetExecutionContext()->GetSecurityOrigin()->IsolatedCopy();
+  const SecurityOrigin* sender_origin =
+      GetMessagePortOriginForOriginCheck(GetExecutionContext(), *msg.message);
+  msg.sender_origin = sender_origin->IsolatedCopy();
 
   ThreadDebugger* debugger = ThreadDebugger::From(script_state->GetIsolate());
   if (debugger)
     msg.sender_stack_trace_id = debugger->StoreCurrentStackTrace("postMessage");
 
-  if (msg.message->IsLockedToAgentCluster()) {
-    msg.locked_agent_cluster_id = GetExecutionContext()->GetAgentClusterID();
-  } else {
-    msg.locked_agent_cluster_id = absl::nullopt;
+  msg.sender_agent_cluster_id = GetExecutionContext()->GetAgentClusterID();
+  msg.locked_to_sender_agent_cluster = msg.message->IsLockedToAgentCluster();
+  msg.task_state_id = std::nullopt;
+
+  // Only pass the task state if the port is still entangled to its initially
+  // entangled port. This is meant to enable propagating task state for
+  // MessageChannels that are used as a (same-frame) scheduling mechanism, which
+  // is common in web frameworks.
+  if (initially_entangled_port_) {
+    if (scheduler::TaskAttributionInfo* task_state =
+            CaptureCurrentTaskState(ExecutionContext::From(script_state))) {
+      // Since `initially_entangled_port_` is not nullptr, neither should be
+      // `post_message_task_container_`.
+      CHECK(post_message_task_container_);
+      post_message_task_container_->AddPostMessageTask(task_state);
+      msg.task_state_id =
+          std::optional<scheduler::TaskAttributionId>(task_state->Id());
+    }
   }
 
   mojo::Message mojo_message =
@@ -130,9 +202,16 @@ void MessagePort::postMessage(ScriptState* script_state,
 
 MessagePortChannel MessagePort::Disentangle() {
   DCHECK(!IsNeutered());
-  port_.GiveDisentangledHandle(connector_->PassMessagePipe());
+  port_descriptor_.GiveDisentangledHandle(connector_->PassMessagePipe());
+  weak_cell_factory_for_dispatch_.Invalidate();
   connector_ = nullptr;
-  return MessagePortChannel(std::move(port_));
+  // Using a variable here places the WeakMember pointer on the stack, ensuring
+  // it doesn't get GCed while it's being used.
+  if (auto* entangled_port = initially_entangled_port_.Get()) {
+    entangled_port->OnEntangledPortDisconnected();
+  }
+  OnEntangledPortDisconnected();
+  return MessagePortChannel(std::move(port_descriptor_));
 }
 
 void MessagePort::start() {
@@ -145,7 +224,7 @@ void MessagePort::start() {
     return;
 
   started_ = true;
-  connector_->StartReceiving(task_runner_);
+  connector_->StartReceiving(accept_message_task_runner_);
 }
 
 void MessagePort::close() {
@@ -156,26 +235,51 @@ void MessagePort::close() {
   if (!IsNeutered()) {
     Disentangle().ReleaseHandle();
     MessagePortDescriptorPair pipe;
-    Entangle(pipe.TakePort0());
+    Entangle(pipe.TakePort0(), nullptr);
   }
   closed_ = true;
 }
 
-void MessagePort::Entangle(MessagePortDescriptor port) {
-  DCHECK(port.IsValid());
+void MessagePort::OnConnectionError() {
+  close();
+  // When the entangled port is disconnected, this error handler is executed,
+  // so in this error handler, we dispatch the close event if close event is
+  // enabled.
+  if (RuntimeEnabledFeatures::MessagePortCloseEventEnabled()) {
+    DispatchEvent(*Event::Create(event_type_names::kClose));
+  }
+}
+
+void MessagePort::Entangle(MessagePortDescriptor port_descriptor,
+                           MessagePort* port) {
+  DCHECK(port_descriptor.IsValid());
   DCHECK(!connector_);
 
-  port_ = std::move(port);
+  // If the context was already destroyed, there is no reason to actually
+  // entangle the port and create a Connector. No messages will ever be able to
+  // be sent or received anyway, as StartReceiving will never be called.
+  if (!GetExecutionContext())
+    return;
+
+  port_descriptor_ = std::move(port_descriptor);
+  initially_entangled_port_ = port;
   connector_ = std::make_unique<mojo::Connector>(
-      port_.TakeHandleToEntangle(GetExecutionContext()),
+      port_descriptor_.TakeHandleToEntangle(GetExecutionContext()),
       mojo::Connector::SINGLE_THREADED_SEND);
+  // The raw `this` is safe despite `this` being a garbage collected object
+  // because we make sure that:
+  // 1. This object will not be garbage collected while it is connected and
+  //    the execution context is not destroyed, and
+  // 2. when the execution context is destroyed, the connector_ is reset.
   connector_->set_incoming_receiver(this);
   connector_->set_connection_error_handler(
-      WTF::Bind(&MessagePort::close, WrapWeakPersistent(this)));
+      BindOnce(&MessagePort::OnConnectionError, WrapWeakPersistent(this)));
 }
 
 void MessagePort::Entangle(MessagePortChannel channel) {
-  Entangle(channel.ReleaseHandle());
+  // We're not passing a MessagePort* for TaskAttribution purposes here, as this
+  // method is only used for plugin support.
+  Entangle(channel.ReleaseHandle(), nullptr);
 }
 
 const AtomicString& MessagePort::InterfaceName() const {
@@ -188,6 +292,10 @@ bool MessagePort::HasPendingActivity() const {
   // We'll also stipulate that the queue needs to be open (if the app drops its
   // reference to the port before start()-ing it, then it's not really entangled
   // as it's unreachable).
+  // Between close() and dispatching a close event, IsEntangled() starts
+  // returning false, but it is not garbage collected because a function on the
+  // MessagePort is running, and the MessagePort is retained on the stack at
+  // that time.
   return started_ && IsEntangled();
 }
 
@@ -215,7 +323,7 @@ Vector<MessagePortChannel> MessagePort::DisentanglePorts(
         type = "a duplicate";
       exception_state.ThrowDOMException(
           DOMExceptionCode::kDataCloneError,
-          "Port at index " + String::Number(i) + " is " + type + ".");
+          Format("Port at index {} is {}.", i, type));
       return Vector<MessagePortChannel>();
     }
     if (port->closed_)
@@ -235,20 +343,14 @@ Vector<MessagePortChannel> MessagePort::DisentanglePorts(
   return channels;
 }
 
-MessagePortArray* MessagePort::EntanglePorts(
+GCedMessagePortArray* MessagePort::EntanglePorts(
     ExecutionContext& context,
     Vector<MessagePortChannel> channels) {
-  return EntanglePorts(context,
-                       WebVector<MessagePortChannel>(std::move(channels)));
-}
-
-MessagePortArray* MessagePort::EntanglePorts(
-    ExecutionContext& context,
-    WebVector<MessagePortChannel> channels) {
   // https://html.spec.whatwg.org/C/#message-ports
   // |ports| should be an empty array, not null even when there is no ports.
-  wtf_size_t count = SafeCast<wtf_size_t>(channels.size());
-  MessagePortArray* port_array = MakeGarbageCollected<MessagePortArray>(count);
+  wtf_size_t count = channels.size();
+  GCedMessagePortArray* port_array =
+      MakeGarbageCollected<GCedMessagePortArray>(count);
   for (wtf_size_t i = 0; i < count; ++i) {
     auto* port = MakeGarbageCollected<MessagePort>(context);
     port->Entangle(std::move(channels[i]));
@@ -263,7 +365,10 @@ MessagePortArray* MessagePort::EntanglePorts(
 
 void MessagePort::Trace(Visitor* visitor) const {
   ExecutionContextLifecycleObserver::Trace(visitor);
-  EventTargetWithInlineData::Trace(visitor);
+  EventTarget::Trace(visitor);
+  visitor->Trace(initially_entangled_port_);
+  visitor->Trace(post_message_task_container_);
+  visitor->Trace(weak_cell_factory_for_dispatch_);
 }
 
 bool MessagePort::Accept(mojo::Message* mojo_message) {
@@ -275,23 +380,75 @@ bool MessagePort::Accept(mojo::Message* mojo_message) {
     return false;
   }
 
+  ExecutionContext* context = GetExecutionContext();
+  if (base::FeatureList::IsEnabled(features::kBFCacheWithSharedWorker) &&
+      context->is_in_back_forward_cache()) {
+    if (IsSharedWorkerPort()) {
+      // Evict the page on a message to the default SharedWorker port. This
+      // handles both incoming messages and those queued right before caching.
+      // See crbug.com/426454597 for the task-ordering investigation.
+      auto* dom_window = DomWindow();
+      CHECK(dom_window);
+      dom_window->GetFrame()->EvictFromBackForwardCache(
+          mojom::blink::RendererEvictionReason::kSharedWorkerMessage,
+          /*source_location=*/nullptr);
+      // If the page is in back/forward cache, it should be evicted. So no need
+      // to dispatch the message.
+      return true;
+    }
+    // Re-post task as kPostedMessage.
+    // TODO(crbug.com/426454597): Investigate task-ordering impact of re-queuing
+    // BFCache tasks.
+    dispatch_event_task_runner_->PostTask(
+        FROM_HERE,
+        BindOnce(&MessagePort::DispatchMessageEvent,
+                 WrapPersistent(weak_cell_factory_for_dispatch_.GetWeakCell()),
+                 std::move(message)));
+  } else {
+    MessagePort::DispatchMessageEvent(std::move(message));
+  }
+  return true;
+}
+
+void MessagePort::DispatchMessageEvent(BlinkTransferableMessage message) {
+  ExecutionContext* context = GetExecutionContext();
   // WorkerGlobalScope::close() in Worker onmessage handler should prevent
   // the next message from dispatching.
-  if (auto* scope = DynamicTo<WorkerGlobalScope>(GetExecutionContext())) {
+  if (auto* scope = DynamicTo<WorkerGlobalScope>(context)) {
     if (scope->IsClosing())
-      return true;
+      return;
   }
 
   Event* evt = CreateMessageEvent(message);
+  std::optional<scheduler::TaskAttributionTracker::TaskScope>
+      task_attribution_scope;
+  // Using a variable here places the WeakMember pointer on the stack, ensuring
+  // it doesn't get GCed while it's being used.
+  auto* entangled_port = initially_entangled_port_.Get();
+  if (entangled_port && message.sender_origin &&
+      message.sender_origin->IsSameOriginWith(context->GetSecurityOrigin()) &&
+      context->IsSameAgentCluster(message.sender_agent_cluster_id) &&
+      context->IsWindow()) {
+    if (auto* tracker =
+            scheduler::TaskAttributionTracker::From(context->GetIsolate())) {
+      // Since `initially_entangled_port_` is not nullptr, neither should be
+      // its `post_message_task_container_`.
+      CHECK(entangled_port->post_message_task_container_);
+      scheduler::TaskAttributionInfo* task_state =
+          entangled_port->post_message_task_container_
+              ->GetAndDecrementPostMessageTask(message.task_state_id);
+      task_attribution_scope = tracker->SetCurrentTaskStateIfTopLevel(
+          task_state, TaskScopeType::kPostMessage);
+    }
+  }
 
-  v8::Isolate* isolate = GetExecutionContext()->GetIsolate();
+  v8::Isolate* isolate = context->GetIsolate();
   ThreadDebugger* debugger = ThreadDebugger::From(isolate);
   if (debugger)
     debugger->ExternalAsyncTaskStarted(message.sender_stack_trace_id);
   DispatchEvent(*evt);
   if (debugger)
     debugger->ExternalAsyncTaskFinished(message.sender_stack_trace_id);
-  return true;
 }
 
 Event* MessagePort::CreateMessageEvent(BlinkTransferableMessage& message) {
@@ -299,15 +456,17 @@ Event* MessagePort::CreateMessageEvent(BlinkTransferableMessage& message) {
   // Dispatch a messageerror event when the target is a remote origin that is
   // not allowed to access the message's data.
   if (message.message->IsOriginCheckRequired()) {
-    const SecurityOrigin* target_origin = context->GetSecurityOrigin();
+    const SecurityOrigin* target_origin =
+        GetMessagePortOriginForOriginCheck(context, *message.message);
     if (!message.sender_origin ||
         !message.sender_origin->IsSameOriginWith(target_origin)) {
       return MessageEvent::CreateError();
     }
   }
 
-  if (message.locked_agent_cluster_id) {
-    if (!context->IsSameAgentCluster(*message.locked_agent_cluster_id)) {
+  if (message.locked_to_sender_agent_cluster) {
+    DCHECK(message.sender_agent_cluster_id);
+    if (!context->IsSameAgentCluster(message.sender_agent_cluster_id)) {
       UseCounter::Count(
           context,
           WebFeature::kMessageEventSharedArrayBufferDifferentAgentCluster);
@@ -324,7 +483,10 @@ Event* MessagePort::CreateMessageEvent(BlinkTransferableMessage& message) {
     }
   }
 
-  MessagePortArray* ports = MessagePort::EntanglePorts(
+  if (!message.message->CanDeserializeIn(context))
+    return MessageEvent::CreateError();
+
+  GCedMessagePortArray* ports = MessagePort::EntanglePorts(
       *GetExecutionContext(), std::move(message.ports));
   UserActivation* user_activation = nullptr;
   if (message.user_activation) {
@@ -332,8 +494,44 @@ Event* MessagePort::CreateMessageEvent(BlinkTransferableMessage& message) {
         message.user_activation->has_been_active,
         message.user_activation->was_active);
   }
+
   return MessageEvent::Create(ports, std::move(message.message),
                               user_activation);
+}
+
+void MessagePort::OnEntangledPortDisconnected() {
+  initially_entangled_port_ = nullptr;
+  post_message_task_container_ = nullptr;
+}
+
+// PostMessageTaskContainer's implementation
+//////////////////////////////////////
+void MessagePort::PostMessageTaskContainer::AddPostMessageTask(
+    scheduler::TaskAttributionInfo* task) {
+  CHECK(task);
+  auto it = post_message_tasks_.find(task->Id().value());
+  if (it == post_message_tasks_.end()) {
+    post_message_tasks_.insert(task->Id().value(),
+                               MakeGarbageCollected<PostMessageTask>(task));
+  } else {
+    it->value->IncrementCounter();
+  }
+}
+
+scheduler::TaskAttributionInfo*
+MessagePort::PostMessageTaskContainer::GetAndDecrementPostMessageTask(
+    std::optional<scheduler::TaskAttributionId> id) {
+  if (!id) {
+    return nullptr;
+  }
+  auto it = post_message_tasks_.find(id.value().value());
+  CHECK(it != post_message_tasks_.end());
+  CHECK(it->value);
+  scheduler::TaskAttributionInfo* task = it->value->GetTask();
+  if (!it->value->DecrementAndReturnCounter()) {
+    post_message_tasks_.erase(it);
+  }
+  return task;
 }
 
 }  // namespace blink

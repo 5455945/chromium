@@ -1,28 +1,37 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_SYNCHRONIZATION_LOCK_IMPL_H_
 #define BASE_SYNCHRONIZATION_LOCK_IMPL_H_
 
+#include <cstdint>
+#include <utility>
+
 #include "base/base_export.h"
-#include "base/check_op.h"
-#include "base/macros.h"
+#include "base/check.h"
+#include "base/compiler_specific.h"
+#include "base/dcheck_is_on.h"
+#include "base/memory/raw_ptr_exclusion.h"
+#include "base/memory/stack_allocated.h"
+#include "base/synchronization/lock_metrics_recorder_tags.h"
+#include "base/synchronization/lock_subtle.h"
+#include "base/synchronization/synchronization_buildflags.h"
 #include "base/thread_annotations.h"
 #include "build/build_config.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "base/win/windows_types.h"
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
 #include <errno.h>
 #include <pthread.h>
 #include <string.h>
-#include <ostream>
 #endif
 
 namespace base {
 class Lock;
 class ConditionVariable;
+class LockMetricTag;
 
 namespace win {
 namespace internal {
@@ -36,14 +45,25 @@ namespace internal {
 // This class implements the underlying platform-specific spin-lock mechanism
 // used for the Lock class. Do not use, use Lock instead.
 class BASE_EXPORT LockImpl {
+ public:
+  LockImpl(const LockImpl&) = delete;
+  LockImpl& operator=(const LockImpl&) = delete;
+
+#if BUILDFLAG(IS_POSIX)
+  // Sets the maximum number of yields before blocking in the kernel.
+  static void SetTrySpinCount(int64_t spin_count);
+  static int64_t GetTrySpinCountForTesting();
+#endif
+
+ private:
   friend class base::Lock;
   friend class base::ConditionVariable;
   friend class base::win::internal::AutoNativeLock;
   friend class base::win::internal::ScopedHandleVerifier;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   using NativeHandle = CHROME_SRWLOCK;
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
   using NativeHandle = pthread_mutex_t;
 #endif
 
@@ -54,8 +74,11 @@ class BASE_EXPORT LockImpl {
   // held by something else, immediately return false.
   inline bool Try();
 
-  // Take the lock, blocking until it is available if necessary.
+  // Default lock acquisition with `BaseLock` tag.
   inline void Lock();
+
+  // Takes `LockMetricTagList` for recording lock acquisition times.
+  inline void Lock(const LockMetricTagList& tags);
 
   // Release the lock.  This must only be called by the lock's holder: after
   // a successful call to Try, or a call to Lock.
@@ -66,35 +89,39 @@ class BASE_EXPORT LockImpl {
   // unnecessary.
   NativeHandle* native_handle() { return &native_handle_; }
 
-#if defined(OS_POSIX) || defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
   // Whether this lock will attempt to use priority inheritance.
   static bool PriorityInheritanceAvailable();
 #endif
 
-  void LockInternalWithTracking();
-  NativeHandle native_handle_;
+#if BUILDFLAG(IS_POSIX)
+  // Repeatedly attempts to acquire the lock, yielding the processor between
+  // attempts. Returns true if the lock was acquired, false if the maximum
+  // number of yields was reached.
+  bool TrySpin();
+#endif
 
-  DISALLOW_COPY_AND_ASSIGN(LockImpl);
+  // Must only be called after an initial `Try()` has failed under contention.
+  void LockInternal(const LockMetricTagList& tags);
+  NativeHandle native_handle_;
 };
 
-void LockImpl::Lock() {
-  // The ScopedLockAcquireActivity in LockInternalWithTracking() (not inlined
-  // here because of circular includes) is relatively expensive and so its
-  // actions can become significant due to the very large number of locks that
-  // tend to be used throughout the build. It is also not needed unless the lock
-  // is contended.
-  //
-  // To avoid this cost in the vast majority of the calls, simply "try" the lock
-  // first and only do the (tracked) blocking call if that fails. |Try()| is
+// Takes `LockMetricTagList` for recording lock acquisition times.
+inline void LockImpl::Lock(const LockMetricTagList& tags) {
+  // Try the lock first to acquire it cheaply if it's not contended. Try() is
   // cheap on platforms with futex-type locks, as it doesn't call into the
-  // kernel.
-  if (LIKELY(Try()))
+  // kernel. Not marked `[[likely]]`, as:
+  // 1. We don't know how much contention the lock would experience
+  // 2. This may lead to weird-looking code layout when inlined into a caller
+  // with `[[(un)likely]]` attributes.
+  if (Try()) {
     return;
+  }
 
-  LockInternalWithTracking();
+  LockInternal(tags);
 }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 bool LockImpl::Try() {
   return !!::TryAcquireSRWLockExclusive(
       reinterpret_cast<PSRWLOCK>(&native_handle_));
@@ -104,29 +131,55 @@ void LockImpl::Unlock() {
   ::ReleaseSRWLockExclusive(reinterpret_cast<PSRWLOCK>(&native_handle_));
 }
 
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+
+#if DCHECK_IS_ON()
+BASE_EXPORT void LogTryLockFailure(int rv);
+BASE_EXPORT void LogUnlockFailure(int rv);
+
+ALWAYS_INLINE void dcheck_trylock_result(int rv) {
+  if (rv != 0 && rv != EBUSY) [[unlikely]] {
+    LogTryLockFailure(rv);
+  }
+}
+
+ALWAYS_INLINE void dcheck_unlock_result(int rv) {
+  if (rv != 0) [[unlikely]] {
+    LogUnlockFailure(rv);
+  }
+}
+#endif
 
 bool LockImpl::Try() {
   int rv = pthread_mutex_trylock(&native_handle_);
-  DCHECK(rv == 0 || rv == EBUSY) << ". " << strerror(rv);
+#if DCHECK_IS_ON()
+  dcheck_trylock_result(rv);
+#endif
   return rv == 0;
 }
 
 void LockImpl::Unlock() {
-  int rv = pthread_mutex_unlock(&native_handle_);
-  DCHECK_EQ(rv, 0) << ". " << strerror(rv);
+  [[maybe_unused]] int rv = pthread_mutex_unlock(&native_handle_);
+#if DCHECK_IS_ON()
+  dcheck_unlock_result(rv);
+#endif
 }
 #endif
 
 // This is an implementation used for AutoLock templated on the lock type.
 template <class LockType>
-class SCOPED_LOCKABLE BasicAutoLock {
+class [[nodiscard]] SCOPED_LOCKABLE BasicAutoLock {
+  STACK_ALLOCATED();
+
  public:
   struct AlreadyAcquired {};
 
-  explicit BasicAutoLock(LockType& lock) EXCLUSIVE_LOCK_FUNCTION(lock)
+  explicit BasicAutoLock(
+      LockType& lock,
+      subtle::LockTracking tracking = subtle::LockTracking::kDisabled)
+      EXCLUSIVE_LOCK_FUNCTION(lock)
       : lock_(lock) {
-    lock_.Acquire();
+    lock_.Acquire(tracking);
   }
 
   BasicAutoLock(LockType& lock, const AlreadyAcquired&)
@@ -135,6 +188,9 @@ class SCOPED_LOCKABLE BasicAutoLock {
     lock_.AssertAcquired();
   }
 
+  BasicAutoLock(const BasicAutoLock&) = delete;
+  BasicAutoLock& operator=(const BasicAutoLock&) = delete;
+
   ~BasicAutoLock() UNLOCK_FUNCTION() {
     lock_.AssertAcquired();
     lock_.Release();
@@ -142,12 +198,82 @@ class SCOPED_LOCKABLE BasicAutoLock {
 
  private:
   LockType& lock_;
-  DISALLOW_COPY_AND_ASSIGN(BasicAutoLock);
+};
+
+// This is an implementation used for MovableAutoLock templated on the lock
+// type.
+template <class LockType>
+class [[nodiscard]] SCOPED_LOCKABLE BasicMovableAutoLock {
+ public:
+  explicit BasicMovableAutoLock(
+      LockType& lock,
+      subtle::LockTracking tracking = subtle::LockTracking::kDisabled)
+      EXCLUSIVE_LOCK_FUNCTION(lock)
+      : lock_(&lock) {
+    lock_->Acquire(tracking);
+  }
+
+  BasicMovableAutoLock(const BasicMovableAutoLock&) = delete;
+  BasicMovableAutoLock& operator=(const BasicMovableAutoLock&) = delete;
+  BasicMovableAutoLock(BasicMovableAutoLock&& other)
+      : lock_(std::exchange(other.lock_, nullptr)) {}
+  BasicMovableAutoLock& operator=(BasicMovableAutoLock&& other) = delete;
+
+  ~BasicMovableAutoLock() UNLOCK_FUNCTION() {
+    // The lock may have been moved out.
+    if (lock_) {
+      lock_->AssertAcquired();
+      lock_->Release();
+    }
+  }
+
+ private:
+  // RAW_PTR_EXCLUSION: Stack-scoped.
+  RAW_PTR_EXCLUSION LockType* lock_;
+};
+
+// This is an implementation used for AutoTryLock templated on the lock type.
+template <class LockType>
+class [[nodiscard]] SCOPED_LOCKABLE BasicAutoTryLock {
+  STACK_ALLOCATED();
+
+ public:
+  // The `LOCKS_EXCLUDED(lock)` annotation requires that the caller has not
+  // acquired `lock`. Without the annotation, Clang's Thread Safety Analysis
+  // would generate a false positive despite correct usage. For instance, a
+  // caller that checks `is_acquired()` before writing to guarded data would be
+  // flagged with "writing variable 'foo' requires holding 'lock' exclusively."
+  // See <https://crbug.com/340196356>.
+  explicit BasicAutoTryLock(
+      LockType& lock,
+      subtle::LockTracking tracking = subtle::LockTracking::kDisabled)
+      LOCKS_EXCLUDED(lock)
+      : lock_(lock), is_acquired_(lock_.Try(tracking)) {}
+
+  BasicAutoTryLock(const BasicAutoTryLock&) = delete;
+  BasicAutoTryLock& operator=(const BasicAutoTryLock&) = delete;
+
+  ~BasicAutoTryLock() UNLOCK_FUNCTION() {
+    if (is_acquired_) {
+      lock_.AssertAcquired();
+      lock_.Release();
+    }
+  }
+
+  bool is_acquired() const EXCLUSIVE_TRYLOCK_FUNCTION(true) {
+    return is_acquired_;
+  }
+
+ private:
+  LockType& lock_;
+  const bool is_acquired_;
 };
 
 // This is an implementation used for AutoUnlock templated on the lock type.
 template <class LockType>
-class BasicAutoUnlock {
+class [[nodiscard]] BasicAutoUnlock {
+  STACK_ALLOCATED();
+
  public:
   explicit BasicAutoUnlock(LockType& lock) : lock_(lock) {
     // We require our caller to have the lock.
@@ -155,22 +281,33 @@ class BasicAutoUnlock {
     lock_.Release();
   }
 
+  BasicAutoUnlock(const BasicAutoUnlock&) = delete;
+  BasicAutoUnlock& operator=(const BasicAutoUnlock&) = delete;
+
   ~BasicAutoUnlock() { lock_.Acquire(); }
 
  private:
   LockType& lock_;
-  DISALLOW_COPY_AND_ASSIGN(BasicAutoUnlock);
 };
 
 // This is an implementation used for AutoLockMaybe templated on the lock type.
 template <class LockType>
-class SCOPED_LOCKABLE BasicAutoLockMaybe {
+class [[nodiscard]] SCOPED_LOCKABLE BasicAutoLockMaybe {
+  STACK_ALLOCATED();
+
  public:
-  explicit BasicAutoLockMaybe(LockType* lock) EXCLUSIVE_LOCK_FUNCTION(lock)
+  explicit BasicAutoLockMaybe(
+      LockType* lock,
+      subtle::LockTracking tracking = subtle::LockTracking::kDisabled)
+      EXCLUSIVE_LOCK_FUNCTION(lock)
       : lock_(lock) {
-    if (lock_)
-      lock_->Acquire();
+    if (lock_) {
+      lock_->Acquire(tracking);
+    }
   }
+
+  BasicAutoLockMaybe(const BasicAutoLockMaybe&) = delete;
+  BasicAutoLockMaybe& operator=(const BasicAutoLockMaybe&) = delete;
 
   ~BasicAutoLockMaybe() UNLOCK_FUNCTION() {
     if (lock_) {
@@ -181,19 +318,26 @@ class SCOPED_LOCKABLE BasicAutoLockMaybe {
 
  private:
   LockType* const lock_;
-  DISALLOW_COPY_AND_ASSIGN(BasicAutoLockMaybe);
 };
 
 // This is an implementation used for ReleasableAutoLock templated on the lock
 // type.
 template <class LockType>
-class SCOPED_LOCKABLE BasicReleasableAutoLock {
+class [[nodiscard]] SCOPED_LOCKABLE BasicReleasableAutoLock {
+  STACK_ALLOCATED();
+
  public:
-  explicit BasicReleasableAutoLock(LockType* lock) EXCLUSIVE_LOCK_FUNCTION(lock)
+  explicit BasicReleasableAutoLock(
+      LockType* lock,
+      subtle::LockTracking tracking = subtle::LockTracking::kDisabled)
+      EXCLUSIVE_LOCK_FUNCTION(lock)
       : lock_(lock) {
     DCHECK(lock_);
-    lock_->Acquire();
+    lock_->Acquire(tracking);
   }
+
+  BasicReleasableAutoLock(const BasicReleasableAutoLock&) = delete;
+  BasicReleasableAutoLock& operator=(const BasicReleasableAutoLock&) = delete;
 
   ~BasicReleasableAutoLock() UNLOCK_FUNCTION() {
     if (lock_) {
@@ -211,10 +355,14 @@ class SCOPED_LOCKABLE BasicReleasableAutoLock {
 
  private:
   LockType* lock_;
-  DISALLOW_COPY_AND_ASSIGN(BasicReleasableAutoLock);
 };
 
 }  // namespace internal
+
+// Check to see whether the current kernel supports priority inheritance
+// properly by adjusting process priorities to boost the futex owner.
+BASE_EXPORT bool KernelSupportsPriorityInheritanceFutex();
+
 }  // namespace base
 
 #endif  // BASE_SYNCHRONIZATION_LOCK_IMPL_H_

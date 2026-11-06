@@ -1,18 +1,21 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/memory/ptr_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/web_cache.h"
-#include "third_party/blink/renderer/bindings/core/v8/script_source_code.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_evaluation_result.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_gc_controller.h"
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/script/classic_script.h"
 #include "third_party/blink/renderer/platform/bindings/v8_dom_activity_logger.h"
+#include "third_party/blink/renderer/platform/heap/thread_state.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/text/base64.h"
 #include "v8/include/v8.h"
@@ -26,33 +29,36 @@ class TestActivityLogger : public V8DOMActivityLogger {
  public:
   ~TestActivityLogger() override = default;
 
-  void LogGetter(const String& api_name) override {
+  void LogGetter(ScriptState* script_state, const String& api_name) override {
     logged_activities_.push_back(api_name);
   }
 
-  void LogSetter(const String& api_name,
+  void LogSetter(ScriptState* script_state,
+                 const String& api_name,
                  const v8::Local<v8::Value>& new_value) override {
-    logged_activities_.push_back(
-        api_name + " | " + ToCoreStringWithUndefinedOrNullCheck(new_value));
+    logged_activities_.push_back(api_name + " | " +
+                                 ToCoreStringWithUndefinedOrNullCheck(
+                                     script_state->GetIsolate(), new_value));
   }
 
-  void LogMethod(const String& api_name,
-                 int argc,
-                 const v8::Local<v8::Value>* argv) override {
+  void LogMethod(ScriptState* script_state,
+                 const String& api_name,
+                 base::span<const v8::Local<v8::Value>> args) override {
     String activity_string = api_name;
-    for (int i = 0; i < argc; i++) {
-      activity_string = activity_string + " | " +
-                        ToCoreStringWithUndefinedOrNullCheck(argv[i]);
+    for (const auto& arg : args) {
+      activity_string =
+          activity_string + " | " +
+          ToCoreStringWithUndefinedOrNullCheck(script_state->GetIsolate(), arg);
     }
     logged_activities_.push_back(activity_string);
   }
 
-  void LogEvent(const String& event_name,
-                int argc,
-                const String* argv) override {
+  void LogEvent(ExecutionContext* execution_context,
+                const String& event_name,
+                base::span<const String> args) override {
     String activity_string = event_name;
-    for (int i = 0; i < argc; i++) {
-      activity_string = activity_string + " | " + argv[i];
+    for (const auto& arg : args) {
+      activity_string = activity_string + " | " + arg;
     }
     logged_activities_.push_back(activity_string);
   }
@@ -89,28 +95,28 @@ class ActivityLoggerTest : public testing::Test {
   }
 
   void ExecuteScriptInMainWorld(const String& script) const {
-    ClassicScript::CreateUnspecifiedScript(ScriptSourceCode(script))
-        ->RunScript(local_frame_->DomWindow());
+    ClassicScript::CreateUnspecifiedScript(script)->RunScript(
+        local_frame_->DomWindow());
     PumpPendingRequestsForFrameToLoad(web_view_helper_.LocalMainFrame());
   }
 
   void ExecuteScriptInIsolatedWorld(const String& script) const {
-    v8::HandleScope scope(v8::Isolate::GetCurrent());
-    ClassicScript::CreateUnspecifiedScript(ScriptSourceCode(script))
+    v8::HandleScope scope(local_frame_->DomWindow()->GetIsolate());
+    ClassicScript::CreateUnspecifiedScript(script)
         ->RunScriptInIsolatedWorldAndReturnValue(local_frame_->DomWindow(),
                                                  kIsolatedWorldId);
     PumpPendingRequestsForFrameToLoad(web_view_helper_.LocalMainFrame());
   }
 
   bool VerifyActivities(const String& activities) {
-    Vector<String> activity_vector;
-    activities.Split("\n", activity_vector);
-    return activity_logger_->VerifyActivities(activity_vector);
+    return activity_logger_->VerifyActivities(
+        activities.SplitSkippingEmpty('\n'));
   }
 
  private:
   static const int kIsolatedWorldId = 1;
 
+  test::TaskEnvironment task_environment_;
   WebViewHelper web_view_helper_;
   Persistent<LocalFrame> local_frame_;
   // TestActivityLogger is owned by a static table within V8DOMActivityLogger

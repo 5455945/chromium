@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,9 @@
 #include <memory>
 #include <string>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/values.h"
 #include "chrome/test/chromedriver/chrome/devtools_event_listener.h"
-
-namespace base {
-class DictionaryValue;
-}
 
 class DevToolsClient;
 struct Geoposition;
@@ -25,6 +21,11 @@ class Status;
 class GeolocationOverrideManager : public DevToolsEventListener {
  public:
   explicit GeolocationOverrideManager(DevToolsClient* client);
+
+  GeolocationOverrideManager(const GeolocationOverrideManager&) = delete;
+  GeolocationOverrideManager& operator=(const GeolocationOverrideManager&) =
+      delete;
+
   ~GeolocationOverrideManager() override;
 
   Status OverrideGeolocation(const Geoposition& geoposition);
@@ -33,15 +34,13 @@ class GeolocationOverrideManager : public DevToolsEventListener {
   Status OnConnected(DevToolsClient* client) override;
   Status OnEvent(DevToolsClient* client,
                  const std::string& method,
-                 const base::DictionaryValue& params) override;
+                 const base::DictValue& params) override;
 
  private:
   Status ApplyOverrideIfNeeded();
 
-  DevToolsClient* client_;
+  raw_ptr<DevToolsClient> client_;
   std::unique_ptr<Geoposition> overridden_geoposition_;
-
-  DISALLOW_COPY_AND_ASSIGN(GeolocationOverrideManager);
 };
 
 #endif  // CHROME_TEST_CHROMEDRIVER_CHROME_GEOLOCATION_OVERRIDE_MANAGER_H_

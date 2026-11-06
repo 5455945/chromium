@@ -1,28 +1,35 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_LOGIN_SCREENS_APP_DOWNLOADING_SCREEN_H_
 #define CHROME_BROWSER_ASH_LOGIN_SCREENS_APP_DOWNLOADING_SCREEN_H_
 
-#include <string>
-
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
-// TODO(https://crbug.com/1164001): move to forward declaration
-#include "chrome/browser/ui/webui/chromeos/login/app_downloading_screen_handler.h"
+#include "chrome/browser/ash/login/screens/oobe_mojo_binder.h"
+#include "chrome/browser/ui/webui/ash/login/mojom/screens_common.mojom.h"
 
 namespace ash {
 
+class AppDownloadingScreenView;
+
 // This is App Downloading screen that tells the user the selected Android apps
 // are being downloaded.
-class AppDownloadingScreen : public BaseScreen {
+class AppDownloadingScreen
+    : public BaseScreen,
+      public screens_common::mojom::AppDownloadingPageHandler,
+      public OobeMojoBinder<screens_common::mojom::AppDownloadingPageHandler> {
  public:
   using TView = AppDownloadingScreenView;
 
-  AppDownloadingScreen(AppDownloadingScreenView* view,
+  AppDownloadingScreen(base::WeakPtr<TView> view,
                        const base::RepeatingClosure& exit_callback);
+
+  AppDownloadingScreen(const AppDownloadingScreen&) = delete;
+  AppDownloadingScreen& operator=(const AppDownloadingScreen&) = delete;
+
   ~AppDownloadingScreen() override;
 
   void set_exit_callback_for_testing(base::RepeatingClosure exit_callback) {
@@ -33,21 +40,15 @@ class AppDownloadingScreen : public BaseScreen {
   // BaseScreen:
   void ShowImpl() override;
   void HideImpl() override;
-  void OnUserAction(const std::string& action_id) override;
+
+  // screens_common::mojom::AppDownloadingPageHandler
+  void OnContinueClicked() override;
 
  private:
-  AppDownloadingScreenView* const view_;
+  base::WeakPtr<TView> view_;
   base::RepeatingClosure exit_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(AppDownloadingScreen);
 };
 
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
-// migration is finished.
-namespace chromeos {
-using ::ash::AppDownloadingScreen;
-}
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_SCREENS_APP_DOWNLOADING_SCREEN_H_

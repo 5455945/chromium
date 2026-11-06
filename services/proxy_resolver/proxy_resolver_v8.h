@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,7 @@
 #include <string>
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "net/proxy_resolution/proxy_resolve_dns_operation.h"
 
 class GURL;
@@ -27,7 +26,8 @@ namespace proxy_resolver {
 // A synchronous ProxyResolver-like that uses V8 to evaluate PAC scripts.
 class ProxyResolverV8 {
  public:
-  // Interface for the javascript bindings.
+  // Interface for the javascript bindings. Methods are only invoked on the
+  // thread calling Create() / GetProxyForURL(), during that call.
   class JSBindings {
    public:
     JSBindings() {}
@@ -57,6 +57,9 @@ class ProxyResolverV8 {
                     JSBindings* bindings,
                     std::unique_ptr<ProxyResolverV8>* resolver);
 
+  ProxyResolverV8(const ProxyResolverV8&) = delete;
+  ProxyResolverV8& operator=(const ProxyResolverV8&) = delete;
+
   ~ProxyResolverV8();
 
   int GetProxyForURL(const GURL& url,
@@ -75,8 +78,6 @@ class ProxyResolverV8 {
   explicit ProxyResolverV8(std::unique_ptr<Context> context);
 
   std::unique_ptr<Context> context_;
-
-  DISALLOW_COPY_AND_ASSIGN(ProxyResolverV8);
 };
 
 }  // namespace proxy_resolver

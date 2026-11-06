@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,12 @@
 
 #include "ash/ash_export.h"
 #include "base/containers/circular_deque.h"
-#include "base/macros.h"
 #include "base/time/time.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
 
-namespace fast_ink {
+namespace ash {
 
 // FastInkPoints is a helper class used for displaying low-latency palette
 // tools. It contains a collection of points representing one or more
@@ -33,6 +32,10 @@ class ASH_EXPORT FastInkPoints {
   // Constructor with a parameter to choose the fade out time of the points in
   // the collection. Zero means no fadeout.
   explicit FastInkPoints(base::TimeDelta life_duration);
+
+  FastInkPoints(const FastInkPoints&) = delete;
+  FastInkPoints& operator=(const FastInkPoints&) = delete;
+
   ~FastInkPoints();
 
   // Adds a point.
@@ -82,10 +85,8 @@ class ASH_EXPORT FastInkPoints {
   // The latest time of the collection of points. This gets updated when new
   // points are added or when MoveForwardToTime is called.
   base::TimeTicks collection_latest_time_;
-
-  DISALLOW_COPY_AND_ASSIGN(FastInkPoints);
 };
 
-}  // namespace fast_ink
+}  // namespace ash
 
 #endif  // ASH_FAST_INK_FAST_INK_POINTS_H_

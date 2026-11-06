@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,18 @@ namespace blink {
 
 // HTTP header set in requests to indicate they should be marked DoNotTrack.
 BLINK_COMMON_EXPORT extern const char kDoNotTrackHeader[];
+
+// HTTP request header `Sec-GPC`, set to "1" when Global Privacy Control is
+// enabled for the request.
+BLINK_COMMON_EXPORT extern const char kGlobalPrivacyControlHeader[];
+
+// These values indicate the load progress constants shared between both
+// //content and //blink.
+//
+// Initial progress value is set to 0.1 to help provide feedback as soon as a
+// load starts.
+constexpr double kInitialLoadProgress = 0.1;
+constexpr double kFinalLoadProgress = 1.0;
 
 }  // namespace blink
 

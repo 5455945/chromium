@@ -1,13 +1,15 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/password_manager/core/browser/leak_detection/leak_detection_request_utils.h"
 
+#include "base/task/cancelable_task_tracker.h"
 #include "base/test/mock_callback.h"
 #include "base/test/task_environment.h"
 #include "components/password_manager/core/browser/leak_detection/encryption_utils.h"
 #include "components/password_manager/core/browser/leak_detection/single_lookup_response.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "crypto/sha2.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -29,7 +31,8 @@ TEST(LeakDetectionRequestUtils, PrepareSingleLeakRequestData) {
   base::test::TaskEnvironment task_env;
   base::MockCallback<SingleLeakRequestDataCallback> callback;
 
-  PrepareSingleLeakRequestData("jonsnow", "1234", callback.Get());
+  PrepareSingleLeakRequestData(LeakDetectionInitiator::kSignInCheck, u"jonsnow",
+                               PasswordString(u"1234"), callback.Get());
   EXPECT_CALL(
       callback,
       Run(AllOf(
@@ -48,8 +51,9 @@ TEST(LeakDetectionRequestUtils, PrepareSingleLeakRequestDataWithKey) {
   base::CancelableTaskTracker task_tracker;
   base::MockOnceCallback<void(LookupSingleLeakPayload)> callback;
 
-  PrepareSingleLeakRequestData(task_tracker, *task_runner, "random_key",
-                               "jonsnow", "1234", callback.Get());
+  PrepareSingleLeakRequestData(
+      task_tracker, *task_runner, LeakDetectionInitiator::kSignInCheck,
+      "random_key", u"jonsnow", PasswordString(u"1234"), callback.Get());
   EXPECT_CALL(callback,
               Run(AllOf(Field(&LookupSingleLeakPayload::username_hash_prefix,
                               ElementsAre(0x3D, 0x70, 0xD3, 0x40)),
@@ -66,8 +70,9 @@ TEST(LeakDetectionRequestUtils, PrepareSingleLeakRequestDataCancelled) {
 
   {
     base::CancelableTaskTracker task_tracker;
-    PrepareSingleLeakRequestData(task_tracker, *task_runner, "random_key",
-                                 "jonsnow", "1234", callback.Get());
+    PrepareSingleLeakRequestData(
+        task_tracker, *task_runner, LeakDetectionInitiator::kSignInCheck,
+        "random_key", u"jonsnow", PasswordString(u"1234"), callback.Get());
   }
 
   task_env.RunUntilIdle();

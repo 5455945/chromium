@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,6 +21,10 @@ namespace vr {
 class VR_UI_EXPORT Rect : public UiElement {
  public:
   Rect();
+
+  Rect(const Rect&) = delete;
+  Rect& operator=(const Rect&) = delete;
+
   ~Rect() override;
 
   // Syntactic sugar for setting both the edge and center colors simultaneously.
@@ -45,16 +49,12 @@ class VR_UI_EXPORT Rect : public UiElement {
                        int target_property_id,
                        gfx::KeyframeModel* keyframe_model) override;
 
-  float ComputedAndLocalOpacityForTest() const override;
-
  private:
   SkColor center_color_ = SK_ColorWHITE;
   SkColor edge_color_ = SK_ColorWHITE;
 
   // This value is not inherited by descendants.
   float local_opacity_ = 1.0f;
-
-  DISALLOW_COPY_AND_ASSIGN(Rect);
 };
 
 }  // namespace vr

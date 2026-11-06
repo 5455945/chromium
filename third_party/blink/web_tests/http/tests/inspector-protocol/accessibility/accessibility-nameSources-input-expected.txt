@@ -1,5 +1,10 @@
 Tests name sources in inputs.
 {
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 170
+    }
     domNode : input#text1
     ignored : false
     name : {
@@ -17,22 +22,27 @@ Tests name sources in inputs.
                 type : relatedElement
             }
             [3] : {
+                attribute : title
+                type : attribute
+            }
+            [4] : {
                 attribute : placeholder
                 type : placeholder
             }
-            [4] : {
+            [5] : {
                 attribute : aria-placeholder
                 type : placeholder
             }
-            [5] : {
+            [6] : {
                 attribute : title
                 type : attribute
             }
         ]
         type : computedString
-        value : 
+        value :
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : invalid
@@ -90,6 +100,11 @@ Tests name sources in inputs.
     }
 }
 {
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 170
+    }
     domNode : input#text2
     ignored : false
     name : {
@@ -107,15 +122,34 @@ Tests name sources in inputs.
                 type : relatedElement
             }
             [3] : {
-                attribute : placeholder
-                type : placeholder
+                attribute : title
+                attributeValue : {
+                    type : string
+                    value : text2-title
+                }
+                type : attribute
+                value : {
+                    type : computedString
+                    value : text2-title
+                }
             }
             [4] : {
-                attribute : aria-placeholder
+                attribute : placeholder
+                superseded : true
                 type : placeholder
             }
             [5] : {
+                attribute : aria-placeholder
+                superseded : true
+                type : placeholder
+            }
+            [6] : {
                 attribute : title
+                attributeValue : {
+                    type : string
+                    value : text2-title
+                }
+                superseded : true
                 type : attribute
                 value : {
                     type : computedString
@@ -127,6 +161,7 @@ Tests name sources in inputs.
         value : text2-title
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : invalid
@@ -184,9 +219,10 @@ Tests name sources in inputs.
     }
 }
 {
-    description : {
-        type : computedString
-        value : text3-title
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 170
     }
     domNode : input#text3
     ignored : false
@@ -205,18 +241,31 @@ Tests name sources in inputs.
                 type : relatedElement
             }
             [3] : {
+                attribute : title
+                attributeValue : {
+                    type : string
+                    value : text3-title
+                }
+                type : attribute
+                value : {
+                    type : computedString
+                    value : text3-title
+                }
+            }
+            [4] : {
                 attribute : placeholder
                 attributeValue : {
                     type : string
                     value : text3-placeholder
                 }
+                superseded : true
                 type : placeholder
                 value : {
                     type : computedString
                     value : text3-placeholder
                 }
             }
-            [4] : {
+            [5] : {
                 attribute : aria-placeholder
                 attributeValue : {
                     type : string
@@ -229,8 +278,12 @@ Tests name sources in inputs.
                     value : text3-aria-placeholder
                 }
             }
-            [5] : {
+            [6] : {
                 attribute : title
+                attributeValue : {
+                    type : string
+                    value : text3-title
+                }
                 superseded : true
                 type : attribute
                 value : {
@@ -240,9 +293,10 @@ Tests name sources in inputs.
             }
         ]
         type : computedString
-        value : text3-placeholder
+        value : text3-title
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : invalid
@@ -300,6 +354,11 @@ Tests name sources in inputs.
     }
 }
 {
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 170
+    }
     description : {
         type : computedString
         value : text4-title
@@ -334,6 +393,19 @@ Tests name sources in inputs.
                 }
             }
             [3] : {
+                attribute : title
+                attributeValue : {
+                    type : string
+                    value : text4-title
+                }
+                superseded : true
+                type : attribute
+                value : {
+                    type : computedString
+                    value : text4-title
+                }
+            }
+            [4] : {
                 attribute : placeholder
                 attributeValue : {
                     type : string
@@ -346,7 +418,7 @@ Tests name sources in inputs.
                     value : text4-placeholder
                 }
             }
-            [4] : {
+            [5] : {
                 attribute : aria-placeholder
                 attributeValue : {
                     type : string
@@ -359,8 +431,12 @@ Tests name sources in inputs.
                     value : text4-aria-placeholder
                 }
             }
-            [5] : {
+            [6] : {
                 attribute : title
+                attributeValue : {
+                    type : string
+                    value : text4-title
+                }
                 superseded : true
                 type : attribute
                 value : {
@@ -373,6 +449,7 @@ Tests name sources in inputs.
         value : label-for-text4
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : invalid
@@ -442,6 +519,11 @@ Tests name sources in inputs.
     }
 }
 {
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 170
+    }
     description : {
         type : computedString
         value : text5-title
@@ -485,6 +567,19 @@ Tests name sources in inputs.
                 }
             }
             [3] : {
+                attribute : title
+                attributeValue : {
+                    type : string
+                    value : text5-title
+                }
+                superseded : true
+                type : attribute
+                value : {
+                    type : computedString
+                    value : text5-title
+                }
+            }
+            [4] : {
                 attribute : placeholder
                 attributeValue : {
                     type : string
@@ -497,7 +592,7 @@ Tests name sources in inputs.
                     value : text5-placeholder
                 }
             }
-            [4] : {
+            [5] : {
                 attribute : aria-placeholder
                 attributeValue : {
                     type : string
@@ -510,8 +605,12 @@ Tests name sources in inputs.
                     value : text5-aria-placeholder
                 }
             }
-            [5] : {
+            [6] : {
                 attribute : title
+                attributeValue : {
+                    type : string
+                    value : text5-title
+                }
                 superseded : true
                 type : attribute
                 value : {
@@ -524,6 +623,7 @@ Tests name sources in inputs.
         value : text5-aria-label
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : invalid
@@ -581,6 +681,11 @@ Tests name sources in inputs.
     }
 }
 {
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 170
+    }
     description : {
         type : computedString
         value : text6-title
@@ -640,6 +745,19 @@ Tests name sources in inputs.
                 }
             }
             [3] : {
+                attribute : title
+                attributeValue : {
+                    type : string
+                    value : text6-title
+                }
+                superseded : true
+                type : attribute
+                value : {
+                    type : computedString
+                    value : text6-title
+                }
+            }
+            [4] : {
                 attribute : placeholder
                 attributeValue : {
                     type : string
@@ -652,7 +770,7 @@ Tests name sources in inputs.
                     value : text6-placeholder
                 }
             }
-            [4] : {
+            [5] : {
                 attribute : aria-placeholder
                 attributeValue : {
                     type : string
@@ -665,8 +783,12 @@ Tests name sources in inputs.
                     value : text6-aria-placeholder
                 }
             }
-            [5] : {
+            [6] : {
                 attribute : title
+                attributeValue : {
+                    type : string
+                    value : text6-title
+                }
                 superseded : true
                 type : attribute
                 value : {
@@ -679,6 +801,7 @@ Tests name sources in inputs.
         value : labelledby-for-text6
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : invalid
@@ -749,6 +872,11 @@ Tests name sources in inputs.
     }
 }
 {
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 170
+    }
     description : {
         type : computedString
         value : text7-title
@@ -783,17 +911,34 @@ Tests name sources in inputs.
                 }
             }
             [3] : {
+                attribute : title
+                attributeValue : {
+                    type : string
+                    value : text7-title
+                }
+                superseded : true
+                type : attribute
+                value : {
+                    type : computedString
+                    value : text7-title
+                }
+            }
+            [4] : {
                 attribute : placeholder
                 superseded : true
                 type : placeholder
             }
-            [4] : {
+            [5] : {
                 attribute : aria-placeholder
                 superseded : true
                 type : placeholder
             }
-            [5] : {
+            [6] : {
                 attribute : title
+                attributeValue : {
+                    type : string
+                    value : text7-title
+                }
                 superseded : true
                 type : attribute
                 value : {
@@ -806,6 +951,7 @@ Tests name sources in inputs.
         value : label-wrapping-text7
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : invalid
@@ -875,6 +1021,11 @@ Tests name sources in inputs.
     }
 }
 {
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 170
+    }
     domNode : input#text8
     ignored : false
     name : {
@@ -892,22 +1043,27 @@ Tests name sources in inputs.
                 type : relatedElement
             }
             [3] : {
+                attribute : title
+                type : attribute
+            }
+            [4] : {
                 attribute : placeholder
                 type : placeholder
             }
-            [4] : {
+            [5] : {
                 attribute : aria-placeholder
                 type : placeholder
             }
-            [5] : {
+            [6] : {
                 attribute : title
                 type : attribute
             }
         ]
         type : computedString
-        value : 
+        value :
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : invalid
@@ -965,6 +1121,11 @@ Tests name sources in inputs.
     }
 }
 {
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 170
+    }
     description : {
         type : computedString
         value : text9-title
@@ -1003,6 +1164,19 @@ Tests name sources in inputs.
                 }
             }
             [3] : {
+                attribute : title
+                attributeValue : {
+                    type : string
+                    value : text9-title
+                }
+                superseded : true
+                type : attribute
+                value : {
+                    type : computedString
+                    value : text9-title
+                }
+            }
+            [4] : {
                 attribute : placeholder
                 attributeValue : {
                     type : string
@@ -1015,7 +1189,7 @@ Tests name sources in inputs.
                     value : text9-placeholder
                 }
             }
-            [4] : {
+            [5] : {
                 attribute : aria-placeholder
                 attributeValue : {
                     type : string
@@ -1028,8 +1202,12 @@ Tests name sources in inputs.
                     value : text9-aria-placeholder
                 }
             }
-            [5] : {
+            [6] : {
                 attribute : title
+                attributeValue : {
+                    type : string
+                    value : text9-title
+                }
                 superseded : true
                 type : attribute
                 value : {
@@ -1042,6 +1220,7 @@ Tests name sources in inputs.
         value : label-for-text9 label-wrapping-text9
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : invalid
@@ -1115,6 +1294,11 @@ Tests name sources in inputs.
     }
 }
 {
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 170
+    }
     description : {
         type : computedString
         value : text10-title
@@ -1149,6 +1333,19 @@ Tests name sources in inputs.
                 }
             }
             [3] : {
+                attribute : title
+                attributeValue : {
+                    type : string
+                    value : text10-title
+                }
+                superseded : true
+                type : attribute
+                value : {
+                    type : computedString
+                    value : text10-title
+                }
+            }
+            [4] : {
                 attribute : placeholder
                 attributeValue : {
                     type : string
@@ -1161,7 +1358,7 @@ Tests name sources in inputs.
                     value : text10-placeholder
                 }
             }
-            [4] : {
+            [5] : {
                 attribute : aria-placeholder
                 attributeValue : {
                     type : string
@@ -1174,8 +1371,12 @@ Tests name sources in inputs.
                     value : text10-aria-placeholder
                 }
             }
-            [5] : {
+            [6] : {
                 attribute : title
+                attributeValue : {
+                    type : string
+                    value : text10-title
+                }
                 superseded : true
                 type : attribute
                 value : {
@@ -1188,6 +1389,7 @@ Tests name sources in inputs.
         value : label-wrapping-text10
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : invalid
@@ -1257,6 +1459,11 @@ Tests name sources in inputs.
     }
 }
 {
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 170
+    }
     domNode : input#text11
     ignored : false
     name : {
@@ -1291,16 +1498,21 @@ Tests name sources in inputs.
                 }
             }
             [3] : {
+                attribute : title
+                superseded : true
+                type : attribute
+            }
+            [4] : {
                 attribute : placeholder
                 superseded : true
                 type : placeholder
             }
-            [4] : {
+            [5] : {
                 attribute : aria-placeholder
                 superseded : true
                 type : placeholder
             }
-            [5] : {
+            [6] : {
                 attribute : title
                 superseded : true
                 type : attribute
@@ -1310,6 +1522,7 @@ Tests name sources in inputs.
         value : first-label-for-text11 second-label-for-text11
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : invalid
@@ -1383,9 +1596,10 @@ Tests name sources in inputs.
     }
 }
 {
-    description : {
-        type : computedString
-        value : text12-title
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 170
     }
     domNode : input#text12
     ignored : false
@@ -1404,23 +1618,41 @@ Tests name sources in inputs.
                 type : relatedElement
             }
             [3] : {
-                attribute : placeholder
-                type : placeholder
+                attribute : title
+                attributeValue : {
+                    type : string
+                    value : text12-title
+                }
+                type : attribute
+                value : {
+                    type : computedString
+                    value : text12-title
+                }
             }
             [4] : {
+                attribute : placeholder
+                superseded : true
+                type : placeholder
+            }
+            [5] : {
                 attribute : aria-placeholder
                 attributeValue : {
                     type : string
                     value : text12-aria-placeholder
                 }
+                superseded : true
                 type : placeholder
                 value : {
                     type : computedString
                     value : text12-aria-placeholder
                 }
             }
-            [5] : {
+            [6] : {
                 attribute : title
+                attributeValue : {
+                    type : string
+                    value : text12-title
+                }
                 superseded : true
                 type : attribute
                 value : {
@@ -1430,9 +1662,10 @@ Tests name sources in inputs.
             }
         ]
         type : computedString
-        value : text12-aria-placeholder
+        value : text12-title
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : invalid

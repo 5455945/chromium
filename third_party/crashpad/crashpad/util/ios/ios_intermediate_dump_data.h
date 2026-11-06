@@ -1,4 +1,4 @@
-// Copyright 2021 The Crashpad Authors. All rights reserved.
+// Copyright 2021 The Crashpad Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
 #include "util/ios/ios_intermediate_dump_object.h"
 
 namespace crashpad {
@@ -28,12 +27,15 @@ namespace internal {
 class IOSIntermediateDumpData : public IOSIntermediateDumpObject {
  public:
   IOSIntermediateDumpData();
+
+  IOSIntermediateDumpData(const IOSIntermediateDumpData&) = delete;
+  IOSIntermediateDumpData& operator=(const IOSIntermediateDumpData&) = delete;
+
   ~IOSIntermediateDumpData() override;
 
   //! \brief Constructs a new data object which owns a std::vector<uint8_t>.
   //!
-  //! \param[in] data An array of uint8_t.
-  //! \param[in] length The length of \a data.
+  //! \param[in] data A vector of uint8_t.
   IOSIntermediateDumpData(std::vector<uint8_t> data) : data_(std::move(data)) {}
 
   // IOSIntermediateDumpObject:
@@ -58,8 +60,6 @@ class IOSIntermediateDumpData : public IOSIntermediateDumpObject {
   bool GetValueInternal(void* value, size_t value_size) const;
 
   std::vector<uint8_t> data_;
-
-  DISALLOW_COPY_AND_ASSIGN(IOSIntermediateDumpData);
 };
 
 }  // namespace internal

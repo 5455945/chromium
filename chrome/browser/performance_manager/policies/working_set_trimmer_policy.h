@@ -1,11 +1,10 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_PERFORMANCE_MANAGER_POLICIES_WORKING_SET_TRIMMER_POLICY_H_
 #define CHROME_BROWSER_PERFORMANCE_MANAGER_POLICIES_WORKING_SET_TRIMMER_POLICY_H_
 
-#include "base/macros.h"
 #include "base/time/time.h"
 #include "components/performance_manager/public/graph/graph.h"
 #include "components/performance_manager/public/graph/node_attached_data.h"
@@ -25,7 +24,7 @@ namespace policies {
 //   frames become frozen and record the size of their working set after x
 //   minutes.
 //   TODO(fdoray): Record the working set size x minutes after emptying it.
-//   https://crbug.com/885293
+//   https://crbug.com/40594220
 //
 // Objective #2: Improve performance.
 //   We hypothesize that emptying the working set of a process causes its pages
@@ -33,10 +32,14 @@ namespace policies {
 //   memory available quickly for foreground processes and improves global
 //   browser performance.
 class WorkingSetTrimmerPolicy : public GraphOwned,
-                                public ProcessNode::ObserverDefaultImpl,
+                                public ProcessNodeObserver,
                                 public NodeDataDescriberDefaultImpl {
  public:
   WorkingSetTrimmerPolicy();
+
+  WorkingSetTrimmerPolicy(const WorkingSetTrimmerPolicy&) = delete;
+  WorkingSetTrimmerPolicy& operator=(const WorkingSetTrimmerPolicy&) = delete;
+
   ~WorkingSetTrimmerPolicy() override;
 
   // CreatePolicyForPlatform will create a working set trimmer policy for a
@@ -68,9 +71,7 @@ class WorkingSetTrimmerPolicy : public GraphOwned,
   // Sets the last trim time to TimeTicks::Now().
   void SetLastTrimTimeNow(const ProcessNode* process_node);
 
-  // TrimWorkingSet will trim a ProcessNode's working set, it will return true
-  // on success. This is virtual for testing.
-  virtual bool TrimWorkingSet(const ProcessNode* process_node);
+  virtual void TrimWorkingSet(const ProcessNode* process_node);
 
  private:
   friend class WorkingSetTrimmerPolicyTest;
@@ -79,9 +80,8 @@ class WorkingSetTrimmerPolicy : public GraphOwned,
   void SetLastTrimTime(const ProcessNode* process_node, base::TimeTicks time);
 
   // NodeDataDescriber implementation:
-  base::Value DescribeProcessNodeData(const ProcessNode* node) const override;
-
-  DISALLOW_COPY_AND_ASSIGN(WorkingSetTrimmerPolicy);
+  base::DictValue DescribeProcessNodeData(
+      const ProcessNode* node) const override;
 };
 
 }  // namespace policies

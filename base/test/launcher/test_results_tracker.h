@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,14 @@
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/launcher/test_result.h"
 #include "base/threading/thread_checker.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace base {
 
@@ -32,14 +34,21 @@ class FilePath;
 class TestResultsTracker {
  public:
   TestResultsTracker();
+
+  TestResultsTracker(const TestResultsTracker&) = delete;
+  TestResultsTracker& operator=(const TestResultsTracker&) = delete;
+
   ~TestResultsTracker();
 
   // Initialize the result tracker. Must be called exactly once before
   // calling any other methods. Returns true on success.
-  bool Init(const CommandLine& command_line) WARN_UNUSED_RESULT;
+  [[nodiscard]] bool Init(const CommandLine& command_line);
 
   // Called when a test iteration is starting.
   void OnTestIterationStarting();
+
+  // Reserves capacity in the set of discovered tests.
+  void ReserveTests(size_t count) { all_tests_.reserve(count); }
 
   // Adds |test_name| to the set of discovered tests (this includes all tests
   // present in the executable, not necessarily run).
@@ -84,13 +93,13 @@ class TestResultsTracker {
   // Saves a JSON summary of all test iterations results to |path|. Adds
   // |additional_tags| to the summary (just for this invocation). Returns
   // true on success.
-  bool SaveSummaryAsJSON(
+  [[nodiscard]] bool SaveSummaryAsJSON(
       const FilePath& path,
-      const std::vector<std::string>& additional_tags) const WARN_UNUSED_RESULT;
+      const std::vector<std::string>& additional_tags) const;
 
   // Map where keys are test result statuses, and values are sets of tests
   // which finished with that status.
-  typedef std::map<TestResult::Status, std::set<std::string> > TestStatusMap;
+  typedef std::map<TestResult::Status, std::set<std::string>> TestStatusMap;
 
   // Returns a test status map (see above) for current test iteration.
   TestStatusMap GetTestStatusMapForCurrentIteration() const;
@@ -101,9 +110,23 @@ class TestResultsTracker {
  private:
   FRIEND_TEST_ALL_PREFIXES(TestResultsTrackerTest,
                            SaveSummaryAsJSONWithLinkInResult);
+  FRIEND_TEST_ALL_PREFIXES(TestResultsTrackerTest,
+                           SaveSummaryAsJSONWithTagInResult);
+  FRIEND_TEST_ALL_PREFIXES(TestResultsTrackerTest,
+                           SaveSummaryAsJSONWithMultiTagsInResult);
+  FRIEND_TEST_ALL_PREFIXES(TestResultsTrackerTest,
+                           SaveSummaryAsJSONWithMultiTagsSameNameInResult);
+  FRIEND_TEST_ALL_PREFIXES(TestResultsTrackerTest,
+                           SaveSummaryAsJSONWithPropertyInResult);
+  FRIEND_TEST_ALL_PREFIXES(TestResultsTrackerTest,
+                           SaveSummaryAsJSONWithOutTimestampInResult);
+  FRIEND_TEST_ALL_PREFIXES(TestResultsTrackerTest,
+                           SaveSummaryAsJSONWithTimestampInResult);
+  FRIEND_TEST_ALL_PREFIXES(TestResultsTrackerTest,
+                           SaveSummaryAsJSONWithSubTestResult);
   void GetTestStatusForIteration(int iteration, TestStatusMap* map) const;
 
-  template<typename InputIterator>
+  template <typename InputIterator>
   void PrintTests(InputIterator first,
                   InputIterator last,
                   const std::string& description) const;
@@ -131,8 +154,7 @@ class TestResultsTracker {
   };
 
   struct CodeLocation {
-    CodeLocation(const std::string& f, int l) : file(f), line(l) {
-    }
+    CodeLocation(const std::string& f, int l) : file(f), line(l) {}
 
     std::string file;
     int line;
@@ -148,16 +170,16 @@ class TestResultsTracker {
   std::set<std::string> global_tags_;
 
   // Set of all test names discovered in the current executable.
-  std::set<std::string> all_tests_;
+  absl::flat_hash_set<std::string> all_tests_;
 
   // CodeLocation for all tests that will be run as a part of this shard.
   std::map<std::string, CodeLocation> test_locations_;
 
   // Name of tests that will run and produce results.
-  std::set<std::string> test_placeholders_;
+  absl::flat_hash_set<std::string> test_placeholders_;
 
   // Set of all disabled tests in the current executable.
-  std::set<std::string> disabled_tests_;
+  absl::flat_hash_set<std::string> disabled_tests_;
 
   // Store test results for each iteration.
   std::vector<PerIterationData> per_iteration_data_;
@@ -167,9 +189,7 @@ class TestResultsTracker {
   int iteration_;
 
   // File handle of output file (can be NULL if no file).
-  FILE* out_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestResultsTracker);
+  raw_ptr<FILE> out_;
 };
 
 }  // namespace base

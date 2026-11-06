@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -67,6 +67,11 @@ void GLStateRestorerImpl::RestoreBufferBinding(unsigned int target) {
 void GLStateRestorerImpl::RestoreVertexAttribArray(unsigned int index) {
   DCHECK(delegate_.get());
   delegate_->RestoreVertexAttribArray(index);
+}
+
+void GLStateRestorerImpl::PauseTransformFeedback() {
+  DCHECK(delegate_.get());
+  delegate_->PauseTransformFeedback();
 }
 
 void GLStateRestorerImpl::PauseQueries() {

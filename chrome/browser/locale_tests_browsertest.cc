@@ -1,13 +1,13 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stddef.h>
 
+#include <array>
 #include <memory>
 
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
 #include "base/environment.h"
 #include "build/build_config.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -24,19 +24,20 @@ namespace {
 class ScopedLocale {
  public:
   explicit ScopedLocale(const char* locale) : locale_(locale) {
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
     old_locale_ = getenv("LC_ALL");
 
-    static const struct {
+    struct Locales {
       const char* chrome_locale;
       const char* system_locale;
-    } kLocales[] = {
-      { "da", "da_DK.UTF-8" },
-      { "he", "he_IL.UTF-8" },
-      { "zh-TW", "zh_TW.UTF-8" }
     };
+    static const auto kLocales = std::to_array<Locales>({
+        {"da", "da_DK.UTF-8"},
+        {"he", "he_IL.UTF-8"},
+        {"zh-TW", "zh_TW.UTF-8"},
+    });
     bool found_locale = false;
-    for (size_t i = 0; i < base::size(kLocales); ++i) {
+    for (size_t i = 0; i < std::size(kLocales); ++i) {
       if (kLocales[i].chrome_locale == locale) {
         found_locale = true;
         setenv("LC_ALL", kLocales[i].system_locale, 1);
@@ -47,7 +48,7 @@ class ScopedLocale {
   }
 
   ~ScopedLocale() {
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
     std::unique_ptr<base::Environment> env(base::Environment::Create());
     if (old_locale_) {
       env->SetVar("LC_ALL", old_locale_);
@@ -61,7 +62,7 @@ class ScopedLocale {
 
  private:
   std::string locale_;
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   const char* old_locale_;
 #endif
 };

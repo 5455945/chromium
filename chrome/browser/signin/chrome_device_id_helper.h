@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <string>
 
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 
 class Profile;
 
@@ -19,13 +18,7 @@ class Profile;
 //     signin::GetSigninScopedDeviceId(profile->GetPrefs());
 std::string GetSigninScopedDeviceIdForProfile(Profile* profile);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-
-// Helper method. The device ID should generally be obtained through
-// GetSigninScopedDeviceIdForProfile().
-// If |for_ephemeral| is true, special kind of device ID for ephemeral users is
-// generated.
-std::string GenerateSigninScopedDeviceId(bool for_ephemeral);
+#if BUILDFLAG(IS_CHROMEOS)
 
 // Moves any existing device ID out of the pref service into the UserManager,
 // and creates a new ID if it is empty.

@@ -1,18 +1,22 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/crash/core/app/crash_export_thunks.h"
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <algorithm>
 #include <type_traits>
 
-#include "base/process/process.h"
-#include "base/strings/string_piece.h"
+#include "base/check.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
+#include "components/crash/core/app/crash_reporter_client.h"
 #include "components/crash/core/app/crashpad.h"
-#include "components/crash/core/app/dump_hung_process_with_ptype.h"
 #include "third_party/crashpad/crashpad/client/crashpad_client.h"
 
 void RequestSingleCrashUpload_ExportThunk(const char* local_id) {
@@ -21,8 +25,8 @@ void RequestSingleCrashUpload_ExportThunk(const char* local_id) {
 
 size_t GetCrashReports_ExportThunk(crash_reporter::Report* reports,
                                    size_t reports_size) {
-  static_assert(std::is_pod<crash_reporter::Report>::value,
-                "crash_reporter::Report must be POD");
+  static_assert(std::is_trivially_copyable<crash_reporter::Report>::value,
+                "crash_reporter::Report must be trivially copyable");
   // Since this could be called across module boundaries, retrieve the full
   // list of reports into this vector, and then manually copy however much fits
   // into the caller's copy.
@@ -34,7 +38,7 @@ size_t GetCrashReports_ExportThunk(crash_reporter::Report* reports,
 
   size_t to_copy = std::min(reports_size, crash_reports.size());
   for (size_t i = 0; i < to_copy; ++i)
-    reports[i] = crash_reports[i];
+    UNSAFE_TODO(reports[i]) = crash_reports[i];
 
   return crash_reports.size();
 }
@@ -55,6 +59,14 @@ void SetUploadConsent_ExportThunk(bool consent) {
   crash_reporter::SetUploadConsent(consent);
 }
 
+bool GetUploadConsent_ExportThunk() {
+  return crash_reporter::GetCrashReporterClient()->GetCollectStatsConsent();
+}
+
+void GetProductInfo_ExportThunk(crash_reporter::ProductInfo* product_info) {
+  return crash_reporter::GetCrashReporterClient()->GetProductInfo(product_info);
+}
+
 HANDLE InjectDumpForHungInput_ExportThunk(HANDLE process) {
   return CreateRemoteThread(
       process, nullptr, 0,
@@ -70,9 +82,13 @@ void ClearReportsBetween_ExportThunk(time_t begin, time_t end) {
   crash_reporter::ClearReportsBetweenImpl(begin, end);
 }
 
-bool DumpHungProcessWithPtype_ExportThunk(HANDLE process_handle,
-                                          const char* ptype) {
-  base::Process process(process_handle);
-
-  return crash_reporter::DumpHungProcessWithPtypeImpl(process, ptype);
+bool WriteUserStreamData_ExportThunk(uint32_t user_stream_type,
+                                     const void* data,
+                                     size_t size) {
+  CHECK(data || size == 0);
+  // SAFETY: Callers pass `data()` and `size()` of a valid
+  // `base::span<const uint8_t>`. Enforced by `CHECK` above.
+  return crash_reporter::WriteUserStreamDataImpl(
+      user_stream_type,
+      UNSAFE_BUFFERS(base::span(static_cast<const uint8_t*>(data), size)));
 }

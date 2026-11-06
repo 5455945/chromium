@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,9 +10,8 @@
 #include <wrl/client.h>
 #include <wrl/implements.h>
 
-#include "base/callback.h"
 #include "base/cancelable_callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 
 namespace device {
 
@@ -23,6 +22,10 @@ class FakeRadioWinrt
           ABI::Windows::Devices::Radios::IRadio> {
  public:
   FakeRadioWinrt();
+
+  FakeRadioWinrt(const FakeRadioWinrt&) = delete;
+  FakeRadioWinrt& operator=(const FakeRadioWinrt&) = delete;
+
   ~FakeRadioWinrt() override;
 
   // IRadio:
@@ -63,11 +66,9 @@ class FakeRadioWinrt
 
   // This is needed to be able respond to SimulateAdapterPowerFailure() while
   // |set_state_callback_| is in a pending state.
-  // TODO(https://crbug.com/878680): Implement SimulateAdapterPowerSuccess() and
+  // TODO(crbug.com/41410591): Implement SimulateAdapterPowerSuccess() and
   // clean this up.
   base::CancelableOnceClosure cancelable_closure_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeRadioWinrt);
 };
 
 class FakeRadioStaticsWinrt
@@ -77,6 +78,10 @@ class FakeRadioStaticsWinrt
           ABI::Windows::Devices::Radios::IRadioStatics> {
  public:
   FakeRadioStaticsWinrt();
+
+  FakeRadioStaticsWinrt(const FakeRadioStaticsWinrt&) = delete;
+  FakeRadioStaticsWinrt& operator=(const FakeRadioStaticsWinrt&) = delete;
+
   ~FakeRadioStaticsWinrt() override;
 
   void SimulateRequestAccessAsyncError(
@@ -100,8 +105,6 @@ class FakeRadioStaticsWinrt
  private:
   ABI::Windows::Devices::Radios::RadioAccessStatus access_status_ =
       ABI::Windows::Devices::Radios::RadioAccessStatus_Allowed;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeRadioStaticsWinrt);
 };
 
 }  // namespace device

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include "base/files/file_path.h"
 
 // Maximum number of icon files allowed to delete per jumplist update.
-const int kFileDeleteLimit = 30;
+inline constexpr int kFileDeleteLimit = 30;
 
 // This method is similar to base::DeleteFileRecursive in
 // file_util_win.cc with the following differences.

@@ -1,14 +1,14 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/arc/fileapi/arc_file_system_mounter.h"
 
 #include "base/files/file_path.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "chrome/browser/ash/arc/fileapi/arc_content_file_system_url_util.h"
 #include "chrome/browser/ash/arc/fileapi/arc_documents_provider_util.h"
-#include "components/arc/arc_browser_context_keyed_service_factory_base.h"
+#include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
 #include "content/public/browser/browser_thread.h"
 #include "storage/browser/file_system/external_mount_points.h"
 
@@ -27,11 +27,12 @@ class ArcFileSystemMounterFactory
   static constexpr const char* kName = "ArcFileSystemMounterFactory";
 
   static ArcFileSystemMounterFactory* GetInstance() {
-    return base::Singleton<ArcFileSystemMounterFactory>::get();
+    static base::NoDestructor<ArcFileSystemMounterFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend base::DefaultSingletonTraits<ArcFileSystemMounterFactory>;
+  friend base::NoDestructor<ArcFileSystemMounterFactory>;
   ArcFileSystemMounterFactory() = default;
   ~ArcFileSystemMounterFactory() override = default;
 };
@@ -46,7 +47,7 @@ ArcFileSystemMounter* ArcFileSystemMounter::GetForBrowserContext(
 
 ArcFileSystemMounter::ArcFileSystemMounter(content::BrowserContext* context,
                                            ArcBridgeService* bridge_service) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   storage::ExternalMountPoints* mount_points =
       storage::ExternalMountPoints::GetSystemInstance();
@@ -63,13 +64,18 @@ ArcFileSystemMounter::ArcFileSystemMounter(content::BrowserContext* context,
 }
 
 ArcFileSystemMounter::~ArcFileSystemMounter() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   storage::ExternalMountPoints* mount_points =
       storage::ExternalMountPoints::GetSystemInstance();
 
   mount_points->RevokeFileSystem(kContentFileSystemMountPointName);
-  mount_points->RevokeFileSystem(kDocumentsProviderMountPointPath);
+  mount_points->RevokeFileSystem(kDocumentsProviderMountPointName);
+}
+
+// static
+void ArcFileSystemMounter::EnsureFactoryBuilt() {
+  ArcFileSystemMounterFactory::GetInstance();
 }
 
 }  // namespace arc

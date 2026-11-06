@@ -1,21 +1,17 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <stdint.h>
-
-#include <string>
-
 #import "ios/web/navigation/nscoder_util.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import <stdint.h>
+
+#import <string>
 
 namespace web {
 namespace nscoder_util {
 
-void EncodeString(NSCoder* coder, NSString* key, const std::string& string) {
+void EncodeString(NSCoder* coder, NSString* key, std::string_view string) {
   [coder encodeBytes:reinterpret_cast<const uint8_t*>(string.data())
               length:string.size()
               forKey:key];

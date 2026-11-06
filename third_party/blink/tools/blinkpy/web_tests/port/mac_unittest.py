@@ -28,20 +28,22 @@
 
 import optparse
 
+from blinkpy.common.system.platform_info_mock import MockPlatformInfo
 from blinkpy.web_tests.port import mac
 from blinkpy.web_tests.port import port_testcase
 
 
 class MacPortTest(port_testcase.PortTestCase):
     os_name = 'mac'
-    os_version = 'mac10.12'
+    os_version = 'mac15'
     port_name = 'mac'
-    full_port_name = 'mac-mac10.12'
+    full_port_name = 'mac-mac15'
     port_maker = mac.MacPort
 
-    def assert_name(self, port_name, os_version_string, expected):
+    def assert_name(self, port_name, os_version_string, expected, machine=None):
         port = self.make_port(
-            os_version=os_version_string, port_name=port_name)
+            os_version=os_version_string, port_name=port_name, machine=machine
+        )
         self.assertEqual(expected, port.name())
 
     def test_operating_system(self):
@@ -49,24 +51,57 @@ class MacPortTest(port_testcase.PortTestCase):
 
     def test_get_platform_tags(self):
         port = self.make_port()
-        self.assertEqual(port.get_platform_tags(),
-                         {'mac', 'mac10.12', 'x86', 'release'})
+        self.assertEqual(
+            port.get_platform_tags(), {'mac', 'mac15', 'x86', 'release'}
+        )
+
+    def test_versions(self):
+        self.assert_name(None, 'mac13', 'mac-mac13')
+        self.assert_name(None, 'mac14', 'mac-mac14')
+        self.assert_name(None, 'mac15', 'mac-mac15')
+        self.assert_name('mac', 'mac13', 'mac-mac13')
+        self.assert_name('mac', 'mac14', 'mac-mac14')
+        self.assert_name('mac', 'mac15', 'mac-mac15')
+
+        self.assert_name(None, 'mac13', 'mac-mac13-arm64', 'arm64')
+        self.assert_name(None, 'mac14', 'mac-mac14-arm64', 'arm64')
+        self.assert_name(None, 'mac15', 'mac-mac15-arm64', 'arm64')
+        self.assert_name('mac', 'mac13', 'mac-mac13-arm64', 'arm64')
+        self.assert_name('mac', 'mac14', 'mac-mac14-arm64', 'arm64')
+        self.assert_name('mac', 'mac15', 'mac-mac15-arm64', 'arm64')
 
     def test_driver_name_option(self):
         self.assertTrue(
-            self.make_port()._path_to_driver().endswith('Content Shell'))
+            self.make_port().path_to_driver().endswith('Content Shell')
+        )
         port = self.make_port(
-            options=optparse.Values(dict(driver_name='OtherDriver')))
-        self.assertTrue(port._path_to_driver().endswith('OtherDriver'))  # pylint: disable=protected-access
+            options=optparse.Values(dict(driver_name='OtherDriver'))
+        )
+        self.assertTrue(port.path_to_driver().endswith('OtherDriver'))
 
     def test_path_to_image_diff(self):
-        self.assertEqual(self.make_port()._path_to_image_diff(),
-                         '/mock-checkout/out/Release/image_diff')
+        self.assertEqual(
+            self.make_port()._path_to_image_diff(),
+            '/mock-checkout/out/Release/image_diff',
+        )
 
     def test_path_to_apache_config_file(self):
         port = self.make_port()
-        port._apache_version = lambda: '2.4'  # pylint: disable=protected-access
+        port._apache_version = lambda: '2.4'
         self.assertEqual(
             port.path_to_apache_config_file(),
-            '/mock-checkout/third_party/blink/tools/apache_config/apache2-httpd-2.4-php7.conf'
+            '/mock-checkout/third_party/blink/tools/apache_config/apache2-httpd-2.4-php.conf',
         )
+
+    def test_default_smoke_test_only(self):
+        """Verify that older Mac versions run only smoke tests by default.
+
+        The smoke test default should not depend on the current host's platform.
+        """
+        port = self.make_port(os_version='mac15')
+        self.assertFalse(port.default_smoke_test_only())
+        all_tests_platform = MockPlatformInfo('mac', 'mac15')  # noqa: F841
+
+    def test_default_timeout_ms(self):
+        port = self.make_port(os_version='mac15')
+        default_timeout = port._default_timeout_ms()  # noqa: F841

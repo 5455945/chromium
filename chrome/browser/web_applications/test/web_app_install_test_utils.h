@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,17 +10,20 @@
 #include <vector>
 
 #include "build/build_config.h"
-#include "chrome/browser/web_applications/components/web_app_id.h"
-#include "chrome/browser/web_applications/components/web_application_info.h"
+#include "chrome/browser/web_applications/jobs/manifest_to_web_app_install_info_job.h"
+#include "chrome/browser/web_applications/web_app_install_info.h"
+#include "chrome/browser/web_applications/web_app_install_params.h"
 #include "chrome/common/buildflags.h"
-
-#if defined(OS_WIN) || defined(OS_MAC) || \
-    (defined(OS_LINUX) && !BUILDFLAG(IS_CHROMEOS_LACROS))
-#include "components/services/app_service/public/cpp/url_handler_info.h"
-#endif
+#include "components/webapps/browser/installable/installable_metrics.h"
+#include "components/webapps/common/web_app_id.h"
+#include "third_party/blink/public/common/manifest/manifest.h"
 
 class GURL;
 class Profile;
+
+namespace content {
+class WebContents;
+}  // namespace content
 
 namespace web_app {
 
@@ -36,25 +39,75 @@ void AwaitStartWebAppProviderAndSubsystems(Profile* profile);
 // Wait until the provided WebAppProvider is ready.
 void WaitUntilReady(WebAppProvider* provider);
 
-AppId InstallDummyWebApp(Profile* profile,
-                         const std::string& app_name,
-                         const GURL& app_url);
+// Wait until the provided WebAppProvider is ready and its subsystems startup
+// is complete.
+void WaitUntilWebAppProviderAndSubsystemsReady(WebAppProvider* provider);
 
-// Synchronous version of InstallManager::InstallWebAppFromInfo. May be used in
-// unit tests and browser tests.
-AppId InstallWebApp(Profile* profile, std::unique_ptr<WebApplicationInfo>);
-
-#if defined(OS_WIN) || defined(OS_MAC) || \
-    (defined(OS_LINUX) && !BUILDFLAG(IS_CHROMEOS_LACROS))
-// Install a web app with url_handlers then register it with the
-// UrlHandlerManager. This is sufficient for testing URL matching and launch
-// at startup.
-AppId InstallWebAppWithUrlHandlers(
+// Installs a standalone web app for testing with a specific set of opinions:
+// - `start_url` and `install_url` are set to `app_url`.
+// - `scope` is set to `app_url` without the filename.
+// - `title` and `description` are set to `app_name`.
+// - `user_display_mode` is `kStandalone`.
+//
+// Use this when you just need a quick, basic installed app and don't care about
+// specific or differing values for those fields. For more precise control, use
+// `InstallWebApp()` directly.
+webapps::AppId InstallDummyWebApp(
     Profile* profile,
-    const GURL& start_url,
-    const std::u16string& app_name,
-    const std::vector<apps::UrlHandlerInfo>& url_handlers);
-#endif
+    const std::string& app_name,
+    const GURL& app_url,
+    const webapps::WebappInstallSource install_source =
+        webapps::WebappInstallSource::OMNIBOX_INSTALL_ICON);
+
+// Synchronous version of
+// WebAppCommandScheduler::InstallFromInfoWithParams. Will automatically choose
+// the proto::InstallState based on if the test is is handling os integration
+// using an OsIntegrationTestOverrideBlockingRegistration. May be used in unit
+// tests and browser tests.
+webapps::AppId InstallWebApp(
+    Profile* profile,
+    std::unique_ptr<WebAppInstallInfo> web_app_info,
+    bool overwrite_existing_manifest_fields = false,
+    webapps::WebappInstallSource install_source =
+        webapps::WebappInstallSource::OMNIBOX_INSTALL_ICON);
+
+// Synchronous version of
+// WebAppCommandScheduler::InstallFromInfoNoIntegrationForTesting. May be used
+// in unit tests and browser tests.
+webapps::AppId InstallWebAppWithoutOsIntegration(
+    Profile* profile,
+    std::unique_ptr<WebAppInstallInfo> web_app_info,
+    bool overwrite_existing_manifest_fields = false,
+    webapps::WebappInstallSource install_source =
+        webapps::WebappInstallSource::OMNIBOX_INSTALL_ICON);
+
+// Synchronously uninstall a web app. May be used in unit tests and browser
+// tests. Emulates a user uninstall - if the web app cannot be uninstalled by
+// the user, then this will fail.
+void UninstallWebApp(Profile* profile,
+                     const webapps::AppId& app_id,
+                     webapps::WebappUninstallSource uninstall_source =
+                         webapps::WebappUninstallSource::kAppMenu);
+
+// Synchronously uninstall all web apps for the given profile. May be used in
+// unit tests and browser tests. Returns `false` if there was a failure.
+bool UninstallAllWebApps(Profile* profile);
+
+// Fetches the manifest for the given web contents and installs the app that
+// exists there. Unit tests should use this in combination with the
+// FakeWebContentsManager to set the manifest & page state for the current web
+// contents page.
+webapps::AppId InstallForWebContents(
+    Profile* profile,
+    content::WebContents* web_contents,
+    webapps::WebappInstallSource install_surface);
+
+// Parses the manifest to create a `WebAppInstallInfo` instance out of it.
+std::unique_ptr<WebAppInstallInfo> GetInstallInfoForCurrentManifest(
+    base::WeakPtr<content::WebContents> web_contents,
+    const blink::Manifest& manifest,
+    WebAppInstallInfoConstructOptions construct_options =
+        WebAppInstallInfoConstructOptions{});
 
 }  // namespace test
 }  // namespace web_app

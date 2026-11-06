@@ -1,22 +1,37 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/login/saml/password_sync_token_verifier.h"
 
-#include "base/task/post_task.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
-#include "chrome/browser/ash/login/saml/in_session_password_sync_manager.h"
-#include "chrome/browser/ash/login/saml/in_session_password_sync_manager_factory.h"
+#include <memory>
+#include <string>
+
+#include "ash/constants/ash_features.h"
+#include "ash/constants/ash_login_pref_names.h"
+#include "ash/public/cpp/reauth_reason.h"
+#include "base/check.h"
+#include "base/check_deref.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/location.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/task/sequenced_task_runner.h"
+#include "chrome/browser/ash/login/lock/online_reauth/lock_screen_reauth_manager.h"
+#include "chrome/browser/ash/login/lock/online_reauth/lock_screen_reauth_manager_factory.h"
+#include "chrome/browser/ash/login/saml/password_sync_token_fetcher.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_manager/known_user.h"
-#include "content/public/browser/storage_partition.h"
+#include "components/user_manager/user.h"
+#include "components/user_manager/user_manager.h"
+#include "net/base/backoff_entry.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
-namespace chromeos {
-
+namespace ash {
 namespace {
-const char dummy_token[] = "dummy-token";
+
+const char fake_token[] = "fake-token";
 }
 
 const net::BackoffEntry::Policy
@@ -30,19 +45,24 @@ const net::BackoffEntry::Policy
         true,  // Don't use initial delay unless last request was an error.
 };
 
-PasswordSyncTokenVerifier::PasswordSyncTokenVerifier(Profile* primary_profile)
-    : primary_profile_(primary_profile),
+PasswordSyncTokenVerifier::PasswordSyncTokenVerifier(
+    PrefService* local_state,
+    Profile* primary_profile,
+    signin::IdentityManager* identity_manager)
+    : local_state_(CHECK_DEREF(local_state)),
+      primary_profile_(primary_profile),
       primary_user_(ProfileHelper::Get()->GetUserByProfile(primary_profile)),
+      identity_manager_(CHECK_DEREF(identity_manager)),
       retry_backoff_(&kFetchTokenRetryBackoffPolicy) {
-  DCHECK(primary_profile_);
-  DCHECK(primary_user_);
+  CHECK(primary_profile_, base::NotFatalUntil::M160);
+  CHECK(primary_user_, base::NotFatalUntil::M160);
 }
 
 PasswordSyncTokenVerifier::~PasswordSyncTokenVerifier() = default;
 
 void PasswordSyncTokenVerifier::RecheckAfter(base::TimeDelta delay) {
   CancelPendingChecks();
-  base::SequencedTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&PasswordSyncTokenVerifier::CheckForPasswordNotInSync,
                      weak_ptr_factory_.GetWeakPtr()),
@@ -50,14 +70,15 @@ void PasswordSyncTokenVerifier::RecheckAfter(base::TimeDelta delay) {
 }
 
 void PasswordSyncTokenVerifier::CreateTokenAsync() {
-  DCHECK(!password_sync_token_fetcher_);
+  CHECK(!password_sync_token_fetcher_, base::NotFatalUntil::M160);
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory =
       primary_profile_->GetURLLoaderFactory();
-  if (!url_loader_factory.get())
+  if (!url_loader_factory.get()) {
     return;
+  }
 
   password_sync_token_fetcher_ = std::make_unique<PasswordSyncTokenFetcher>(
-      url_loader_factory, primary_profile_, this);
+      url_loader_factory, &identity_manager_.get(), this);
   password_sync_token_fetcher_->StartTokenCreate();
 }
 
@@ -68,24 +89,45 @@ void PasswordSyncTokenVerifier::CheckForPasswordNotInSync() {
   if (!prefs->GetBoolean(prefs::kSamlInSessionPasswordChangeEnabled)) {
     return;
   }
-  DCHECK(!password_sync_token_fetcher_);
+
+  if (ash::features::IsManagedLocalPinAndPasswordEnabled()) {
+    auth_factor_configuration_helper_.CheckHasOnlinePasswordAndContinue(
+        primary_user_->GetAccountId(),
+        /*on_has_online_password=*/
+        base::BindOnce(&PasswordSyncTokenVerifier::PerformTokenCheck,
+                       weak_ptr_factory_.GetWeakPtr()),
+        /*on_no_online_password=*/base::DoNothing());
+    return;
+  }
+
+  PerformTokenCheck();
+}
+
+void PasswordSyncTokenVerifier::PerformTokenCheck() {
+  CHECK(!password_sync_token_fetcher_, base::NotFatalUntil::M160);
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory =
       primary_profile_->GetURLLoaderFactory();
   // url_loader_factory is nullptr in unit tests so constructing
   // PasswordSyncTokenFetcher does not make sense there.
-  if (!url_loader_factory.get())
+  if (!url_loader_factory.get()) {
     return;
+  }
   password_sync_token_fetcher_ = std::make_unique<PasswordSyncTokenFetcher>(
-      url_loader_factory, primary_profile_, this);
+      url_loader_factory, &identity_manager_.get(), this);
 
   // Get current sync token for primary_user_.
-  std::string sync_token = prefs->GetString(prefs::kSamlPasswordSyncToken);
-  // No local sync token on the device - create it by sending user through the
+  std::string token_to_verify = fake_token;
+  user_manager::KnownUser known_user(&local_state_.get());
+  const std::string* sync_token =
+      known_user.GetPasswordSyncToken(primary_user_->GetAccountId());
+  // Local copy of the token exists on the device and will be used for
+  // verification. Otherwise we will create it by sending user through the
   // online re-auth.
-  if (sync_token.empty())
-    sync_token = dummy_token;
+  if (sync_token && !sync_token->empty()) {
+    token_to_verify = *sync_token;
+  }
 
-  password_sync_token_fetcher_->StartTokenVerify(sync_token);
+  password_sync_token_fetcher_->StartTokenVerify(token_to_verify);
 }
 
 void PasswordSyncTokenVerifier::FetchSyncTokenOnReauth() {
@@ -94,15 +136,30 @@ void PasswordSyncTokenVerifier::FetchSyncTokenOnReauth() {
     return;
   }
 
-  DCHECK(!password_sync_token_fetcher_);
+  if (ash::features::IsManagedLocalPinAndPasswordEnabled()) {
+    auth_factor_configuration_helper_.CheckHasOnlinePasswordAndContinue(
+        primary_user_->GetAccountId(),
+        /*on_has_online_password=*/
+        base::BindOnce(&PasswordSyncTokenVerifier::PerformFetchToken,
+                       weak_ptr_factory_.GetWeakPtr()),
+        /*on_no_online_password=*/base::DoNothing());
+    return;
+  }
+
+  PerformFetchToken();
+}
+
+void PasswordSyncTokenVerifier::PerformFetchToken() {
+  CHECK(!password_sync_token_fetcher_, base::NotFatalUntil::M160);
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory =
       primary_profile_->GetURLLoaderFactory();
   // No url_loader_factory in unit tests.
-  if (!url_loader_factory.get())
+  if (!url_loader_factory.get()) {
     return;
+  }
 
   password_sync_token_fetcher_ = std::make_unique<PasswordSyncTokenFetcher>(
-      url_loader_factory, primary_profile_, this);
+      url_loader_factory, &identity_manager_.get(), this);
   password_sync_token_fetcher_->StartTokenGet();
 }
 
@@ -110,7 +167,7 @@ void PasswordSyncTokenVerifier::CancelPendingChecks() {
   // We should not have any active request at this point. DCHECK makes sure it
   // is really the case for the dev build. In a release build InvalidateWeakPtrs
   // helps to recover by cancelling potential existing requests.
-  DCHECK(!weak_ptr_factory_.HasWeakPtrs());
+  CHECK(!weak_ptr_factory_.HasWeakPtrs(), base::NotFatalUntil::M160);
   weak_ptr_factory_.InvalidateWeakPtrs();
 }
 
@@ -119,14 +176,11 @@ void PasswordSyncTokenVerifier::RecordTokenPollingStart() {
 }
 
 void PasswordSyncTokenVerifier::OnTokenCreated(const std::string& sync_token) {
-  DCHECK(!sync_token.empty());
-  PrefService* prefs = primary_profile_->GetPrefs();
+  CHECK(!sync_token.empty(), base::NotFatalUntil::M160);
 
-  // Set token value in prefs for in-session operations and ephemeral users and
-  // local settings for login screen sync.
-  prefs->SetString(prefs::kSamlPasswordSyncToken, sync_token);
-  user_manager::known_user::SetPasswordSyncToken(primary_user_->GetAccountId(),
-                                                 sync_token);
+  // Set token value in local state.
+  user_manager::KnownUser known_user(&local_state_.get());
+  known_user.SetPasswordSyncToken(primary_user_->GetAccountId(), sync_token);
   password_sync_token_fetcher_.reset();
   RecordTokenPollingStart();
   RecheckAfter(retry_backoff_.GetTimeUntilRelease());
@@ -135,11 +189,9 @@ void PasswordSyncTokenVerifier::OnTokenCreated(const std::string& sync_token) {
 void PasswordSyncTokenVerifier::OnTokenFetched(const std::string& sync_token) {
   password_sync_token_fetcher_.reset();
   if (!sync_token.empty()) {
-    // Set token fetched from the endpoint in prefs and local settings.
-    PrefService* prefs = primary_profile_->GetPrefs();
-    prefs->SetString(prefs::kSamlPasswordSyncToken, sync_token);
-    user_manager::known_user::SetPasswordSyncToken(
-        primary_user_->GetAccountId(), sync_token);
+    // Set token fetched from the endpoint in local state.
+    user_manager::KnownUser known_user(&local_state_.get());
+    known_user.SetPasswordSyncToken(primary_user_->GetAccountId(), sync_token);
     RecordTokenPollingStart();
     RecheckAfter(retry_backoff_.GetTimeUntilRelease());
   } else {
@@ -154,17 +206,18 @@ void PasswordSyncTokenVerifier::OnTokenVerified(bool is_valid) {
   password_sync_token_fetcher_.reset();
   // Schedule next token check after base interval.
   RecheckAfter(retry_backoff_.GetTimeUntilRelease());
-  if (is_valid)
+  if (is_valid) {
     return;
+  }
 
   user_manager::UserManager::Get()->SaveForceOnlineSignin(
       primary_user_->GetAccountId(), true);
   // Re-auth on lock.
-  InSessionPasswordSyncManager* password_sync_manager =
-      InSessionPasswordSyncManagerFactory::GetForProfile(primary_profile_);
-  if (password_sync_manager) {
-    password_sync_manager->MaybeForceReauthOnLockScreen(
-        InSessionPasswordSyncManager::ReauthenticationReason::kInvalidToken);
+  LockScreenReauthManager* lock_screen_reauth_manager =
+      LockScreenReauthManagerFactory::GetForProfile(primary_profile_);
+  if (lock_screen_reauth_manager) {
+    lock_screen_reauth_manager->MaybeForceReauthOnLockScreen(
+        ReauthReason::kSamlPasswordSyncTokenValidationFailed);
   }
 }
 
@@ -183,4 +236,4 @@ void PasswordSyncTokenVerifier::OnApiCallFailed(
   }
 }
 
-}  // namespace chromeos
+}  // namespace ash

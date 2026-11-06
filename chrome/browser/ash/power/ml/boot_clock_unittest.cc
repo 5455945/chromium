@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,8 +16,7 @@ namespace ml {
 TEST(BootClockTest, Basic) {
   BootClock boot_clock;
 
-  constexpr base::TimeDelta sleep_duration =
-      base::TimeDelta::FromMilliseconds(10);
+  constexpr base::TimeDelta sleep_duration = base::Milliseconds(10);
   const base::TimeDelta init_time_since_boot = boot_clock.GetTimeSinceBoot();
   EXPECT_GE(init_time_since_boot, base::TimeDelta());
   const base::TimeDelta expected_end_time_since_boot =
@@ -32,8 +31,7 @@ TEST(BootClockTest, UnderMockTime) {
       base::test::TaskEnvironment::TimeSource::MOCK_TIME);
   BootClock boot_clock;
 
-  constexpr base::TimeDelta mock_sleep_duration =
-      base::TimeDelta::FromSeconds(200);
+  constexpr base::TimeDelta mock_sleep_duration = base::Seconds(200);
   const base::TimeDelta init_time_since_boot = boot_clock.GetTimeSinceBoot();
   EXPECT_GE(init_time_since_boot, base::TimeDelta());
   const base::TimeDelta expected_end_time_since_boot =

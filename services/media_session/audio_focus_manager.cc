@@ -1,18 +1,18 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/media_session/audio_focus_manager.h"
 
 #include <iterator>
+#include <ranges>
 #include <utility>
+#include <vector>
 
-#include "base/bind.h"
-#include "base/containers/adapters.h"
-#include "base/containers/cxx20_erase.h"
+#include "base/functional/bind.h"
+#include "base/notimplemented.h"
 #include "base/power_monitor/power_monitor.h"
 #include "base/power_monitor/power_observer.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/unguessable_token.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/media_session/audio_focus_request.h"
@@ -40,11 +40,14 @@ class MediaPowerDelegate : public base::PowerSuspendObserver {
  public:
   explicit MediaPowerDelegate(base::WeakPtr<AudioFocusManager> owner)
       : owner_(owner) {
-    base::PowerMonitor::AddPowerSuspendObserver(this);
+    base::PowerMonitor::GetInstance()->AddPowerSuspendObserver(this);
   }
 
+  MediaPowerDelegate(const MediaPowerDelegate&) = delete;
+  MediaPowerDelegate& operator=(const MediaPowerDelegate&) = delete;
+
   ~MediaPowerDelegate() override {
-    base::PowerMonitor::RemovePowerSuspendObserver(this);
+    base::PowerMonitor::GetInstance()->RemovePowerSuspendObserver(this);
   }
 
   // base::PowerSuspendObserver:
@@ -55,8 +58,6 @@ class MediaPowerDelegate : public base::PowerSuspendObserver {
 
  private:
   const base::WeakPtr<AudioFocusManager> owner_;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaPowerDelegate);
 };
 
 class AudioFocusManager::SourceObserverHolder {
@@ -70,6 +71,9 @@ class AudioFocusManager::SourceObserverHolder {
     observer_.set_disconnect_handler(base::BindOnce(
         &AudioFocusManager::CleanupSourceObservers, base::Unretained(owner)));
   }
+
+  SourceObserverHolder(const SourceObserverHolder&) = delete;
+  SourceObserverHolder& operator=(const SourceObserverHolder&) = delete;
 
   ~SourceObserverHolder() = default;
 
@@ -92,8 +96,6 @@ class AudioFocusManager::SourceObserverHolder {
  private:
   const base::UnguessableToken identity_;
   mojo::Remote<mojom::AudioFocusObserver> observer_;
-
-  DISALLOW_COPY_AND_ASSIGN(SourceObserverHolder);
 };
 
 void AudioFocusManager::RequestAudioFocus(
@@ -281,6 +283,26 @@ void AudioFocusManager::RequestIdReleased(
   }
 }
 
+void AudioFocusManager::StartDuckingAllAudio(
+    const std::optional<base::UnguessableToken>& exempted_request_id) {
+  ducking_all_audio_ = true;
+  ducking_exempted_request_id_ = exempted_request_id;
+  EnforceAudioFocus();
+}
+
+void AudioFocusManager::StopDuckingAllAudio() {
+  ducking_all_audio_ = false;
+  EnforceAudioFocus();
+}
+
+void AudioFocusManager::FlushForTesting(FlushForTestingCallback callback) {
+  for (auto& row : audio_focus_stack_) {
+    row->FlushForTesting();  // IN-TEST
+  }
+  observers_.FlushForTesting();  // IN-TEST
+  std::move(callback).Run();
+}
+
 void AudioFocusManager::CreateActiveMediaController(
     mojo::PendingReceiver<mojom::MediaController> receiver) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
@@ -354,7 +376,7 @@ void AudioFocusManager::EnforceAudioFocus() {
 
   EnforcementState state;
 
-  for (auto& session : base::Reversed(audio_focus_stack_)) {
+  for (auto& session : std::views::reverse(audio_focus_stack_)) {
     EnforceSingleSession(session.get(), state);
 
     // Update the flags based on the audio focus type of this session. If the
@@ -381,9 +403,11 @@ void AudioFocusManager::EnforceAudioFocus() {
 void AudioFocusManager::MaybeUpdateActiveSession() {
   AudioFocusRequest* active = nullptr;
 
-  for (auto& row : base::Reversed(audio_focus_stack_)) {
-    if (!row->info()->is_controllable)
+  for (auto& row : std::views::reverse(audio_focus_stack_)) {
+    if (!row->info()->is_controllable ||
+        row->info()->ignore_for_active_session) {
       continue;
+    }
 
     active = row.get();
     break;
@@ -471,6 +495,11 @@ bool AudioFocusManager::ShouldSessionBeSuspended(
 bool AudioFocusManager::ShouldSessionBeDucked(
     const AudioFocusRequest* session,
     const EnforcementState& state) const {
+  if (ducking_all_audio_ && (!ducking_exempted_request_id_.has_value() ||
+                             *ducking_exempted_request_id_ != session->id())) {
+    return true;
+  }
+
   switch (enforcement_mode_) {
     case mojom::EnforcementMode::kSingleSession:
     case mojom::EnforcementMode::kSingleGroup:
@@ -505,7 +534,7 @@ void AudioFocusManager::EnforceSingleSession(AudioFocusRequest* session,
 }
 
 void AudioFocusManager::CleanupSourceObservers() {
-  base::EraseIf(source_observers_,
+  std::erase_if(source_observers_,
                 [](const auto& holder) { return !holder->is_valid(); });
 }
 

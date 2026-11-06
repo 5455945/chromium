@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,10 @@
 
 #include "ash/ash_export.h"
 #include "ash/wm/base_state.h"
-#include "ash/wm/wm_event.h"
-#include "base/macros.h"
-#include "ui/display/display.h"
-#include "ui/gfx/geometry/rect.h"
 
 namespace ash {
+
+class WMEvent;
 
 // ClientControlledState delegates the window state transition and
 // bounds control to the client. Its window state and bounds are
@@ -49,6 +47,10 @@ class ASH_EXPORT ClientControlledState : public BaseState {
       gfx::Rect* bounds);
 
   explicit ClientControlledState(std::unique_ptr<Delegate> delegate);
+
+  ClientControlledState(const ClientControlledState&) = delete;
+  ClientControlledState& operator=(const ClientControlledState&) = delete;
+
   ~ClientControlledState() override;
 
   // Resets |delegate_|.
@@ -60,22 +62,15 @@ class ASH_EXPORT ClientControlledState : public BaseState {
   void set_bounds_locally(bool set) { set_bounds_locally_ = set; }
   bool set_bounds_locally() const { return set_bounds_locally_; }
 
-  // Type of animation type to be applied when changing bounds locally.
-  // TODO(oshima): Use transform animation for snapping.
-  enum BoundsChangeAnimationType {
-    kAnimationNone,
-    kAnimationCrossFade,
-    kAnimationAnimated,
-  };
-
   // Sets the type of animation for the next bounds change
   // applied locally.
   void set_next_bounds_change_animation_type(
-      BoundsChangeAnimationType animation_type) {
+      WindowState::BoundsChangeAnimationType animation_type) {
     next_bounds_change_animation_type_ = animation_type;
   }
 
   // WindowState::State:
+  void OnWMEvent(WindowState* window_state, const WMEvent* event) override;
   void AttachState(WindowState* window_state,
                    WindowState::State* previous_state) override;
   void DetachState(WindowState* window_state) override;
@@ -97,9 +92,16 @@ class ASH_EXPORT ClientControlledState : public BaseState {
   bool EnterNextState(WindowState* window_state,
                       chromeos::WindowStateType next_state_type);
 
+  Delegate* delegate_for_testing() { return delegate_.get(); }
+
  private:
   chromeos::WindowStateType GetResolvedNextWindowStateType(
       WindowState* window_state,
+      const WMEvent* event);
+
+  void UpdateWindowForTransitionEvents(
+      WindowState* window_state,
+      chromeos::WindowStateType next_state_type,
       const WMEvent* event);
 
   std::unique_ptr<Delegate> delegate_;
@@ -108,9 +110,8 @@ class ASH_EXPORT ClientControlledState : public BaseState {
   base::TimeDelta bounds_change_animation_duration_ =
       WindowState::kBoundsChangeSlideDuration;
 
-  BoundsChangeAnimationType next_bounds_change_animation_type_ = kAnimationNone;
-
-  DISALLOW_COPY_AND_ASSIGN(ClientControlledState);
+  WindowState::BoundsChangeAnimationType next_bounds_change_animation_type_ =
+      WindowState::BoundsChangeAnimationType::kNone;
 };
 
 }  // namespace ash

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,10 @@
 #define CHROME_BROWSER_NOTIFICATIONS_NOTIFICATION_HANDLER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/callback_forward.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/functional/callback_forward.h"
 
 class GURL;
 class Profile;
@@ -27,7 +27,7 @@ class NotificationHandler {
     WEB_PERSISTENT = 0,
     WEB_NON_PERSISTENT = 1,
     EXTENSION = 2,
-    SEND_TAB_TO_SELF = 3,
+    // SEND_TAB_TO_SELF = 3,  // Deprecated.
     TRANSIENT = 4,  // A generic type for any notification that does not outlive
                     // the browser instance and is controlled by a
                     // NotificationDelegate.
@@ -36,9 +36,13 @@ class NotificationHandler {
     //                          // user via a notification.
     SHARING = 6,
     ANNOUNCEMENT = 7,
-    NEARBY_SHARE = 8,
+    // NEARBY_SHARE = 8,  // Deprecated.
     NOTIFICATIONS_MUTED = 9,
-    MAX = NOTIFICATIONS_MUTED,
+    TAILORED_SECURITY = 10,
+    DEFAULT_BROWSER_CHANGED = 11,
+    EXTENSION_REQUEST = 12,
+    GLIC_ACTOR_TASK = 13,
+    MAX = GLIC_ACTOR_TASK,
   };
 
   virtual ~NotificationHandler();
@@ -60,15 +64,45 @@ class NotificationHandler {
   virtual void OnClick(Profile* profile,
                        const GURL& origin,
                        const std::string& notification_id,
-                       const absl::optional<int>& action_index,
-                       const absl::optional<std::u16string>& reply,
+                       const std::optional<int>& action_index,
+                       const std::optional<std::u16string>& reply,
                        base::OnceClosure completed_closure);
 
-  // Called when notifications of the given origin have to be disabled.
-  virtual void DisableNotifications(Profile* profile, const GURL& origin);
+  // Called when notifications of the given origin have to be disabled. The
+  // |notification_id| is included on Android and indicates the notification
+  // that led to further notifications being disabled. The |is_suspicious|
+  // parameter is used for logging metrics.
+  virtual void DisableNotifications(
+      Profile* profile,
+      const GURL& origin,
+      const std::optional<std::string>& notification_id,
+      const std::optional<bool>& is_suspicious);
 
   // Called when the settings page for the given origin has to be opened.
   virtual void OpenSettings(Profile* profile, const GURL& origin);
+
+  // Called when a user clicks to report a notification as safe.
+  virtual void ReportNotificationAsSafe(const std::string& notification_id,
+                                        const GURL& url,
+                                        Profile* profile);
+
+  // Called when a user clicks to report a warned notification as spam.
+  virtual void ReportWarnedNotificationAsSpam(
+      const std::string& notification_id,
+      const GURL& url,
+      Profile* profile);
+
+  // Called when a user clicks to report an unwarned notification as spam.
+  virtual void ReportUnwarnedNotificationAsSpam(
+      const std::string& notification_id,
+      const GURL& url,
+      Profile* profile);
+
+  // Called when a user taps to show the original contents of a notification
+  // after being shown a suspicious notification warning.
+  virtual void OnShowOriginalNotification(const GURL& url,
+                                          const std::string& notification_id,
+                                          Profile* profile);
 };
 
 #endif  // CHROME_BROWSER_NOTIFICATIONS_NOTIFICATION_HANDLER_H_

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,8 @@
 
 #include <utility>
 
-#include "base/sequenced_task_runner.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/logging.h"
+#include "base/task/sequenced_task_runner.h"
 
 #define MAKE_SURE_ON_SEQUENCE(callback, ...)                                   \
   if (!task_runner_->RunsTasksInCurrentSequence()) {                           \
@@ -21,11 +21,11 @@ namespace chromecast {
 namespace media {
 
 VideoGeometrySetterService::VideoGeometrySetterService()
-    : task_runner_(base::SequencedTaskRunnerHandle::Get()),
+    : task_runner_(base::SequencedTaskRunner::GetCurrentDefault()),
       weak_factory_(this) {}
 
 VideoGeometrySetterService::~VideoGeometrySetterService() {
-  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+  CHECK(task_runner_->RunsTasksInCurrentSequence(), base::NotFatalUntil::M163);
 }
 
 void VideoGeometrySetterService::GetVideoGeometryChangeSubscriber(
@@ -50,7 +50,7 @@ void VideoGeometrySetterService::SubscribeToVideoGeometryChange(
     const base::UnguessableToken& overlay_plane_id,
     mojo::PendingRemote<mojom::VideoGeometryChangeClient> client_pending_remote,
     SubscribeToVideoGeometryChangeCallback callback) {
-  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+  CHECK(task_runner_->RunsTasksInCurrentSequence(), base::NotFatalUntil::M163);
   auto client = mojo::Remote<mojom::VideoGeometryChangeClient>(
       std::move(client_pending_remote));
   // The remote end closes the message pipe for the client when it no longer
@@ -69,7 +69,7 @@ void VideoGeometrySetterService::SetVideoGeometry(
     const gfx::RectF& rect_f,
     gfx::OverlayTransform transform,
     const base::UnguessableToken& overlay_plane_id) {
-  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+  CHECK(task_runner_->RunsTasksInCurrentSequence(), base::NotFatalUntil::M163);
   auto video_geometry_change_client =
       video_geometry_change_clients_.find(overlay_plane_id);
   if (video_geometry_change_client != video_geometry_change_clients_.end()) {
@@ -82,7 +82,7 @@ void VideoGeometrySetterService::SetVideoGeometry(
 // the mapping.
 void VideoGeometrySetterService::OnVideoGeometryChangeClientGone(
     const base::UnguessableToken overlay_plane_id) {
-  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+  CHECK(task_runner_->RunsTasksInCurrentSequence(), base::NotFatalUntil::M163);
   video_geometry_change_clients_.erase(overlay_plane_id);
 }
 

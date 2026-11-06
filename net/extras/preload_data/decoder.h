@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,11 @@
 
 #include <string>
 
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_span.h"
 
-namespace net {
-
-namespace extras {
+namespace net::extras {
 
 // Decodes an entry from preloaded data.
 // Clients must implement ReadEntry() method to read the specific type of data
@@ -26,7 +26,10 @@ class PreloadDecoder {
   // BitReader is a class that allows a bytestring to be read bit-by-bit.
   class BitReader {
    public:
-    BitReader(const uint8_t* bytes, size_t num_bits);
+    BitReader(base::span<const uint8_t> bytes, size_t num_bits);
+
+    BitReader(const BitReader&) = delete;
+    BitReader& operator=(const BitReader&) = delete;
 
     // Next sets |*out| to the next bit from the input. It returns false if no
     // more bits are available or true otherwise.
@@ -74,18 +77,16 @@ class PreloadDecoder {
     bool Seek(size_t offset);
 
    private:
-    const uint8_t* const bytes_;
+    const base::raw_span<const uint8_t> bytes_;
     const size_t num_bits_;
     const size_t num_bytes_;
     // current_byte_index_ contains the current byte offset in |bytes_|.
-    size_t current_byte_index_;
+    size_t current_byte_index_ = 0;
     // current_byte_ contains the current byte of the input.
     uint8_t current_byte_;
     // num_bits_used_ contains the number of bits of |current_byte_| that have
     // been read.
-    unsigned num_bits_used_;
-
-    DISALLOW_COPY_AND_ASSIGN(BitReader);
+    unsigned num_bits_used_ = 8;
   };
 
   // HuffmanDecoder is a very simple Huffman reader. The input Huffman tree is
@@ -98,22 +99,25 @@ class PreloadDecoder {
   // The tree is decoded by walking rather than a table-driven approach.
   class HuffmanDecoder {
    public:
-    HuffmanDecoder(const uint8_t* tree, size_t tree_bytes);
+    explicit HuffmanDecoder(base::span<const uint8_t> tree);
+
+    HuffmanDecoder(const HuffmanDecoder&) = delete;
+    HuffmanDecoder& operator=(const HuffmanDecoder&) = delete;
 
     bool Decode(PreloadDecoder::BitReader* reader, char* out) const;
 
    private:
-    const uint8_t* const tree_;
-    const size_t tree_bytes_;
-
-    DISALLOW_COPY_AND_ASSIGN(HuffmanDecoder);
+    const base::raw_span<const uint8_t> tree_;
   };
 
-  PreloadDecoder(const uint8_t* huffman_tree,
-                 size_t huffman_tree_size,
-                 const uint8_t* trie,
+  PreloadDecoder(base::span<const uint8_t> huffman_tree,
+                 base::span<const uint8_t> trie,
                  size_t trie_bits,
                  size_t trie_root_position);
+
+  PreloadDecoder(const PreloadDecoder&) = delete;
+  PreloadDecoder& operator=(const PreloadDecoder&) = delete;
+
   virtual ~PreloadDecoder();
 
   // Resolves search keyword given by |search| in the preloaded data. Returns
@@ -153,12 +157,8 @@ class PreloadDecoder {
   BitReader bit_reader_;
 
   const size_t trie_root_position_;
-
-  DISALLOW_COPY_AND_ASSIGN(PreloadDecoder);
 };
 
-}  // namespace extras
-
-}  // namespace net
+}  // namespace net::extras
 
 #endif  // NET_EXTRAS_PRELOAD_DATA_DECODER_H_

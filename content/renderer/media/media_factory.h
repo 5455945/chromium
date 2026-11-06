@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,17 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/single_thread_task_runner.h"
+#include "build/build_config.h"
 #include "build/buildflag.h"
 #include "build/chromecast_buildflags.h"
 #include "components/viz/common/surfaces/surface_id.h"
+#include "media/base/key_system_info.h"
+#include "media/base/key_systems.h"
+#include "media/base/key_systems_support_registration.h"
+#include "media/base/media_player_logging_id.h"
 #include "media/base/renderer_factory_selector.h"
 #include "media/base/routing_token_callback.h"
 #include "media/media_buildflags.h"
@@ -25,22 +32,30 @@
 
 #if BUILDFLAG(ENABLE_MEDIA_REMOTING)
 // Needed by remoting sender.
-#include "media/mojo/mojom/remoting.mojom.h"
+#include "media/mojo/mojom/remoting.mojom.h"  // nogncheck
 #endif  // BUILDFLAG(ENABLE_MEDIA_REMOTING)
 
 namespace blink {
 class BrowserInterfaceBrokerProxy;
 class WebContentDecryptionModule;
 class WebEncryptedMediaClient;
+class WebEncryptedMediaClientImpl;
 class WebLocalFrame;
 class WebMediaPlayer;
+class WebMediaPlayerBuilder;
 class WebMediaPlayerClient;
 class WebMediaPlayerEncryptedMediaClient;
-}
+}  // namespace blink
+
+#if BUILDFLAG(ENABLE_CAST_RECEIVER)
+namespace cast_streaming {
+class ResourceProvider;
+}  // namespace cast_streaming
+#endif
 
 namespace cc {
 class LayerTreeSettings;
-}
+}  // namespace cc
 
 namespace media {
 class CdmFactory;
@@ -50,10 +65,7 @@ class MediaLog;
 class MediaObserver;
 class RemotePlaybackClientWrapper;
 class RendererWebMediaPlayerDelegate;
-class ResourceFetchContext;
-class UrlIndex;
-class WebEncryptedMediaClientImpl;
-}
+}  // namespace media
 
 namespace content {
 
@@ -64,10 +76,6 @@ struct RenderFrameMediaPlaybackOptions;
 // Assist to RenderFrameImpl in creating various media clients.
 class MediaFactory {
  public:
-  // Helper function returning whether VideoSurfaceLayer should be enabled for
-  // MediaStreams.
-  static bool VideoSurfaceLayerEnabledForMS();
-
   // Create a MediaFactory to assist the |render_frame| with media tasks.
   // |request_routing_token_cb| bound to |render_frame| IPC functions for
   // obtaining overlay tokens.
@@ -89,7 +97,7 @@ class MediaFactory {
   // |encrypted_client| (otherwise null). |sink_id|, when not empty, identifies
   // the audio sink to use for this player (see HTMLMediaElement.sinkId).
   // |parent_frame_sink_id| identifies the local root widget's FrameSinkId.
-  blink::WebMediaPlayer* CreateMediaPlayer(
+  std::unique_ptr<blink::WebMediaPlayer> CreateMediaPlayer(
       const blink::WebMediaPlayerSource& source,
       blink::WebMediaPlayerClient* client,
       blink::MediaInspectorContext* inspector_context,
@@ -99,36 +107,33 @@ class MediaFactory {
       viz::FrameSinkId parent_frame_sink_id,
       const cc::LayerTreeSettings& settings,
       scoped_refptr<base::SingleThreadTaskRunner>
-          main_thread_compositor_task_runner);
+          main_thread_compositor_task_runner,
+      scoped_refptr<base::TaskRunner> compositor_worker_task_runner);
 
   // Provides an EncryptedMediaClient to connect blink's EME layer to media's
   // implementation of requestMediaKeySystemAccess. Will always return the same
   // client whose lifetime is tied to this Factory (same as the RenderFrame).
   blink::WebEncryptedMediaClient* EncryptedMediaClient();
 
-  // Helper function so that RenderThreadImpl can create a DecoderFactory for
-  // WebRTC.  Ideally, it would ask per-frame for a decoder factory, but that
-  // requires changing quite a bit about WebRTC initialization.
-  //
-  // TODO(crbug.com/1157149): RenderThreadImpl should not own these.  Instead,
-  // ownership should be per-frame.  In that case, this doesn't need to be here;
-  // RenderFrameImpl already has as whole MediaFactory instance.  We'd just need
-  // to expose an instance method to get the decoder factory.
-  //
-  // `interface_factory` must outlive the returned DecoderFactory.
-  static std::unique_ptr<media::DefaultDecoderFactory> CreateDecoderFactory(
-      media::mojom::InterfaceFactory* interface_factory);
+  // Returns `DecoderFactory`, which can be used to created decoders in WebRTC.
+  // Can be dereferenced only on the media thread.
+  base::WeakPtr<media::DecoderFactory> GetDecoderFactory();
 
  private:
+  // Initializes `decoder_factory_` if it hasn't been initialized yet.
+  void EnsureDecoderFactory();
+
   std::unique_ptr<media::RendererFactorySelector> CreateRendererFactorySelector(
+      media::MediaPlayerLoggingID player_id,
       media::MediaLog* media_log,
       blink::WebURL url,
       const RenderFrameMediaPlaybackOptions& renderer_media_playback_options,
       media::DecoderFactory* decoder_factory,
-      std::unique_ptr<media::RemotePlaybackClientWrapper> client_wrapper,
-      base::WeakPtr<media::MediaObserver>* out_media_observer);
+      media::RemotePlaybackClientWrapper* client_wrapper,
+      base::WeakPtr<media::MediaObserver>* out_media_observer,
+      int element_id);
 
-  blink::WebMediaPlayer* CreateWebMediaPlayerForMediaStream(
+  std::unique_ptr<blink::WebMediaPlayer> CreateWebMediaPlayerForMediaStream(
       blink::WebMediaPlayerClient* client,
       blink::MediaInspectorContext* inspector_context,
       const blink::WebString& sink_id,
@@ -136,17 +141,22 @@ class MediaFactory {
       viz::FrameSinkId parent_frame_sink_id,
       const cc::LayerTreeSettings& settings,
       scoped_refptr<base::SingleThreadTaskRunner>
-          main_thread_compositor_task_runner);
+          main_thread_compositor_task_runner,
+      scoped_refptr<base::TaskRunner> compositor_worker_task_runner);
 
   // Returns the media delegate for WebMediaPlayer usage.  If
   // |media_player_delegate_| is NULL, one is created.
   media::RendererWebMediaPlayerDelegate* GetWebMediaPlayerDelegate();
 
-  media::DecoderFactory* GetDecoderFactory();
-
 #if BUILDFLAG(ENABLE_MEDIA_REMOTING)
   media::mojom::RemoterFactory* GetRemoterFactory();
 #endif
+
+  // Initializes the key systems remote and receivers.
+  std::unique_ptr<media::KeySystemSupportRegistration> GetSupportedKeySystems(
+      media::GetSupportedKeySystemsCB cb);
+
+  media::KeySystems* GetKeySystems();
 
   media::CdmFactory* GetCdmFactory();
 
@@ -154,9 +164,11 @@ class MediaFactory {
 
   std::unique_ptr<media::MojoRendererFactory> CreateMojoRendererFactory();
 
+  const blink::BrowserInterfaceBrokerProxy& GetInterfaceBroker() const;
+
   // The render frame we're helping. RenderFrameImpl owns this factory, so the
   // pointer will always be valid.
-  RenderFrameImpl* render_frame_;
+  raw_ptr<RenderFrameImpl> render_frame_;
 
   // The media interface provider attached to this frame, lazily initialized.
   std::unique_ptr<MediaInterfaceFactory> media_interface_factory_;
@@ -164,31 +176,37 @@ class MediaFactory {
   // Injected callback for requesting overlay routing tokens.
   media::RequestRoutingTokenCallback request_routing_token_cb_;
 
-  // Handy pointer to RenderFrame's browser interface broker. Null until
-  // SetupMojo(). Lifetime matches that of the owning |render_frame_|. Will
-  // always be valid once assigned.
-  blink::BrowserInterfaceBrokerProxy* interface_broker_ = nullptr;
-
   // Manages play, pause notifications for WebMediaPlayer implementations; its
   // lifetime is tied to the RenderFrame via the RenderFrameObserver interface.
-  media::RendererWebMediaPlayerDelegate* media_player_delegate_ = nullptr;
+  raw_ptr<media::RendererWebMediaPlayerDelegate, DanglingUntriaged>
+      media_player_delegate_ = nullptr;
+
+  // The `KeySystems` to be used by `web_encrypted_media_client_`. This object
+  // must outlive `web_encrypted_media_client_` and `cdm_factory_` since they
+  // reference it.
+  std::unique_ptr<media::KeySystems> key_systems_;
 
   // The CDM and decoder factory attached to this frame, lazily initialized.
   std::unique_ptr<media::DefaultDecoderFactory> decoder_factory_;
   std::unique_ptr<media::CdmFactory> cdm_factory_;
 
-  // Media resource cache, lazily initialized.
-  std::unique_ptr<media::ResourceFetchContext> fetch_context_;
-  std::unique_ptr<media::UrlIndex> url_index_;
+  // `WebMediaPlayer` builder, that acts as a media resource cache, lazily
+  // initialized.
+  std::unique_ptr<blink::WebMediaPlayerBuilder> media_player_builder_;
 
   // EncryptedMediaClient attached to this frame; lazily initialized.
-  std::unique_ptr<media::WebEncryptedMediaClientImpl>
+  std::unique_ptr<blink::WebEncryptedMediaClientImpl>
       web_encrypted_media_client_;
 
 #if BUILDFLAG(ENABLE_MEDIA_REMOTING)
   // Lazy-bound remote for the RemoterFactory service in the browser
   // process. Always use the GetRemoterFactory() accessor instead of this.
   mojo::Remote<media::mojom::RemoterFactory> remoter_factory_;
+#endif
+
+#if BUILDFLAG(ENABLE_CAST_RECEIVER)
+  std::unique_ptr<cast_streaming::ResourceProvider>
+      cast_streaming_resource_provider_;
 #endif
 };
 

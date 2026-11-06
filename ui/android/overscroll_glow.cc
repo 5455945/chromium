@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,9 @@
 
 #include <stddef.h>
 
-#include "cc/layers/layer.h"
+#include <array>
+
+#include "cc/slim/layer.h"
 #include "ui/android/edge_effect.h"
 #include "ui/android/window_android_compositor.h"
 
@@ -39,7 +41,7 @@ OverscrollGlow::OverscrollGlow(OverscrollGlowClient* client)
       initialized_(false),
       allow_horizontal_overscroll_(true),
       allow_vertical_overscroll_(true) {
-  DCHECK(client);
+  CHECK(client, base::NotFatalUntil::M163);
 }
 
 OverscrollGlow::~OverscrollGlow() {
@@ -120,8 +122,8 @@ bool OverscrollGlow::OnOverscrolled(base::TimeTicks current_time,
 }
 
 bool OverscrollGlow::Animate(base::TimeTicks current_time,
-                             cc::Layer* parent_layer) {
-  DCHECK(parent_layer);
+                             cc::slim::Layer* parent_layer) {
+  CHECK(parent_layer, base::NotFatalUntil::M163);
   if (!CheckNeedsAnimate())
     return false;
 
@@ -137,10 +139,9 @@ bool OverscrollGlow::Animate(base::TimeTicks current_time,
   return CheckNeedsAnimate();
 }
 
-void OverscrollGlow::OnFrameUpdated(
-    const gfx::SizeF& viewport_size,
-    const gfx::SizeF& content_size,
-    const gfx::Vector2dF& content_scroll_offset) {
+void OverscrollGlow::OnFrameUpdated(const gfx::SizeF& viewport_size,
+                                    const gfx::SizeF& content_size,
+                                    const gfx::PointF& content_scroll_offset) {
   viewport_size_ = viewport_size;
   edge_offsets_[EdgeEffect::EDGE_TOP] = -content_scroll_offset.y();
   edge_offsets_[EdgeEffect::EDGE_LEFT] = -content_scroll_offset.x();
@@ -170,8 +171,8 @@ bool OverscrollGlow::CheckNeedsAnimate() {
   return false;
 }
 
-void OverscrollGlow::UpdateLayerAttachment(cc::Layer* parent) {
-  DCHECK(parent);
+void OverscrollGlow::UpdateLayerAttachment(cc::slim::Layer* parent) {
+  CHECK(parent, base::NotFatalUntil::M163);
   if (!root_layer_.get())
     return;
 
@@ -197,11 +198,11 @@ bool OverscrollGlow::InitializeIfNecessary() {
   if (client_ == nullptr)
     return false;
 
-  DCHECK(!root_layer_.get());
-  root_layer_ = cc::Layer::Create();
+  CHECK(!root_layer_.get(), base::NotFatalUntil::M163);
+  root_layer_ = cc::slim::Layer::Create();
   for (size_t i = 0; i < EDGE_COUNT; ++i) {
     edge_effects_[i] = client_->CreateEdgeEffect();
-    DCHECK(edge_effects_[i]);
+    CHECK(edge_effects_[i], base::NotFatalUntil::M163);
   }
 
   initialized_ = true;
@@ -211,15 +212,15 @@ bool OverscrollGlow::InitializeIfNecessary() {
 void OverscrollGlow::Pull(base::TimeTicks current_time,
                           const gfx::Vector2dF& overscroll_delta,
                           const gfx::Vector2dF& overscroll_location) {
-  DCHECK(initialized_);
-  DCHECK(!overscroll_delta.IsZero());
-  DCHECK(!viewport_size_.IsEmpty());
+  CHECK(initialized_, base::NotFatalUntil::M163);
+  CHECK(!overscroll_delta.IsZero(), base::NotFatalUntil::M163);
+  CHECK(!viewport_size_.IsEmpty(), base::NotFatalUntil::M163);
   const float inv_width = 1.f / viewport_size_.width();
   const float inv_height = 1.f / viewport_size_.height();
 
   gfx::Vector2dF overscroll_pull =
       gfx::ScaleVector2d(overscroll_delta, inv_width, inv_height);
-  const float edge_pull[EDGE_COUNT] = {
+  const std::array<float, EDGE_COUNT> edge_pull = {
       min(overscroll_pull.y(), 0.f),  // Top
       min(overscroll_pull.x(), 0.f),  // Left
       max(overscroll_pull.y(), 0.f),  // Bottom
@@ -230,7 +231,7 @@ void OverscrollGlow::Pull(base::TimeTicks current_time,
       gfx::ScaleVector2d(overscroll_location, inv_width, inv_height);
   displacement.set_x(max(0.f, min(1.f, displacement.x())));
   displacement.set_y(max(0.f, min(1.f, displacement.y())));
-  const float edge_displacement[EDGE_COUNT] = {
+  const std::array<float, EDGE_COUNT> edge_displacement = {
       1.f - displacement.x(),  // Top
       displacement.y(),        // Left
       displacement.x(),        // Bottom
@@ -251,11 +252,11 @@ void OverscrollGlow::Absorb(base::TimeTicks current_time,
                             const gfx::Vector2dF& velocity,
                             bool x_overscroll_started,
                             bool y_overscroll_started) {
-  DCHECK(initialized_);
-  DCHECK(!velocity.IsZero());
+  CHECK(initialized_, base::NotFatalUntil::M163);
+  CHECK(!velocity.IsZero(), base::NotFatalUntil::M163);
 
   // Only trigger on initial overscroll at a non-zero velocity
-  const float overscroll_velocities[EDGE_COUNT] = {
+  const std::array<float, EDGE_COUNT> overscroll_velocities = {
       y_overscroll_started ? min(velocity.y(), 0.f) : 0,  // Top
       x_overscroll_started ? min(velocity.x(), 0.f) : 0,  // Left
       y_overscroll_started ? max(velocity.y(), 0.f) : 0,  // Bottom
@@ -272,13 +273,13 @@ void OverscrollGlow::Absorb(base::TimeTicks current_time,
 }
 
 void OverscrollGlow::Release(base::TimeTicks current_time) {
-  DCHECK(initialized_);
+  CHECK(initialized_, base::NotFatalUntil::M163);
   for (size_t i = 0; i < EDGE_COUNT; ++i)
     edge_effects_[i]->Release(current_time);
 }
 
 EdgeEffect* OverscrollGlow::GetOppositeEdge(int edge_index) {
-  DCHECK(initialized_);
+  CHECK(initialized_, base::NotFatalUntil::M163);
   return edge_effects_[(edge_index + 2) % EDGE_COUNT].get();
 }
 

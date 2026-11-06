@@ -29,16 +29,18 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_IMAGE_DATA_BUFFER_H_
 
 #include <memory>
+
+#include "base/containers/span.h"
 #include "base/memory/scoped_refptr.h"
-#include "third_party/blink/renderer/platform/geometry/float_rect.h"
-#include "third_party/blink/renderer/platform/geometry/int_size.h"
-#include "third_party/blink/renderer/platform/graphics/graphics_types.h"
 #include "third_party/blink/renderer/platform/graphics/static_bitmap_image.h"
+#include "third_party/blink/renderer/platform/image-encoders/image_encoder.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "third_party/skia/include/core/SkPixmap.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
+#include "ui/gfx/hdr_metadata.h"
 
 namespace blink {
 
@@ -48,7 +50,9 @@ class PLATFORM_EXPORT ImageDataBuffer {
  public:
   static std::unique_ptr<ImageDataBuffer> Create(
       scoped_refptr<StaticBitmapImage>);
-  static std::unique_ptr<ImageDataBuffer> Create(const SkPixmap&);
+  static std::unique_ptr<ImageDataBuffer> Create(
+      const SkPixmap&,
+      const gfx::HDRMetadata& hdr_metadata = gfx::HDRMetadata());
 
   String ToDataURL(const ImageEncodingMimeType mime_type,
                    const double& quality) const;
@@ -56,30 +60,18 @@ class PLATFORM_EXPORT ImageDataBuffer {
                    const double& quality,
                    Vector<unsigned char>* encoded_image) const;
 
-  const unsigned char* Pixels() const;
-  const IntSize& size() const { return size_; }
-  int Height() const { return size_.Height(); }
-  int Width() const { return size_.Width(); }
-  size_t ComputeByteSize() const { return pixmap_.computeByteSize(); }
+  base::span<const uint8_t> PixelData() const;
 
  private:
-  ImageDataBuffer(const IntSize&,
-                  const unsigned char*,
-                  const CanvasColorParams&);
-  ImageDataBuffer(const SkPixmap&);
+  ImageDataBuffer(const SkPixmap&, const gfx::HDRMetadata&);
   ImageDataBuffer(scoped_refptr<StaticBitmapImage>);
 
   bool IsValid() { return is_valid_; }  // Only used by Create()
 
-  bool EncodeImageInternal(const ImageEncodingMimeType mime_type,
-                           const double& quality,
-                           Vector<unsigned char>* encoded_image,
-                           const SkPixmap& pixmap) const;
-
   sk_sp<SkImage> retained_image_;
   SkPixmap pixmap_;
+  gfx::HDRMetadata hdr_metadata_;
   bool is_valid_ = false;
-  IntSize size_;
 };
 
 }  // namespace blink

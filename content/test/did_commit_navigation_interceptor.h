@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,9 @@
 #include <map>
 #include <memory>
 
-#include "base/callback.h"
-#include "base/macros.h"
 #include "base/run_loop.h"
 #include "content/common/frame.mojom.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "url/gurl.h"
 
 namespace content {
 
@@ -29,6 +26,12 @@ class DidCommitNavigationInterceptor : public WebContentsObserver {
   // Constructs an instance that will intercept DidCommitProvisionalLoad calls
   // in any frame of the |web_contents| while the instance is in scope.
   explicit DidCommitNavigationInterceptor(WebContents* web_contents);
+
+  DidCommitNavigationInterceptor(const DidCommitNavigationInterceptor&) =
+      delete;
+  DidCommitNavigationInterceptor& operator=(
+      const DidCommitNavigationInterceptor&) = delete;
+
   ~DidCommitNavigationInterceptor() override;
 
   // Called just before DidCommitNavigation with |navigation_request|, |params|
@@ -50,8 +53,6 @@ class DidCommitNavigationInterceptor : public WebContentsObserver {
   void RenderFrameDeleted(RenderFrameHost* render_frame_host) override;
 
   std::map<RenderFrameHost*, std::unique_ptr<FrameAgent>> frame_agents_;
-
-  DISALLOW_COPY_AND_ASSIGN(DidCommitNavigationInterceptor);
 };
 
 }  // namespace content

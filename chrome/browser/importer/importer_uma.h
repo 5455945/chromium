@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,9 @@
 #define CHROME_BROWSER_IMPORTER_IMPORTER_UMA_H_
 
 #include <string>
+
 #include "base/metrics/histogram.h"
-#include "chrome/common/importer/importer_type.h"
+#include "components/user_data_importer/common/importer_type.h"
 
 namespace importer {
 
@@ -16,7 +17,7 @@ namespace importer {
 // |metric_postfix| require a matching "Import.ImporterType.|metric_postfix|"
 // entry in tools/metrics/histograms/histograms.xml.
 void LogImporterUseToMetrics(const std::string& metric_prefix,
-                             ImporterType type);
+                             user_data_importer::ImporterType type);
 
 }  // namespace importer
 

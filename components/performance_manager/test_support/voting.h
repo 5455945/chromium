@@ -1,14 +1,12 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PERFORMANCE_MANAGER_TEST_SUPPORT_VOTING_H_
 #define COMPONENTS_PERFORMANCE_MANAGER_TEST_SUPPORT_VOTING_H_
 
-#include "components/performance_manager/public/voting/voting.h"
-
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
+#include "components/performance_manager/public/voting/voting.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace performance_manager {
@@ -27,38 +25,32 @@ class DummyVoteObserver : public VoteObserver<VoteImpl> {
   VotingChannel<VoteImpl> BuildVotingChannel();
 
   size_t GetVoteCount() const;
-  size_t GetVoteCountForContext(
-      const typename VoteImpl::ContextType* context) const;
+  size_t GetVoteCountForContext(typename VoteImpl::ContextType context) const;
   size_t GetVoteCountForVoterId(voting::VoterId<VoteImpl> voter_id) const;
 
   bool HasVote(voting::VoterId<VoteImpl> voter_id,
-               const typename VoteImpl::ContextType* context) const;
+               typename VoteImpl::ContextType context) const;
 
   bool HasVote(voting::VoterId<VoteImpl> voter_id,
-               const typename VoteImpl::ContextType* context,
+               typename VoteImpl::ContextType context,
                const VoteImpl& vote) const;
 
   bool HasVote(voting::VoterId<VoteImpl> voter_id,
-               const typename VoteImpl::ContextType* context,
+               typename VoteImpl::ContextType context,
                typename VoteImpl::VoteType vote_value,
                const char* reason = nullptr) const;
 
  protected:
   // VoteObserver:
-  void OnVoteSubmitted(voting::VoterId<VoteImpl> voter_id,
-                       const ContextType* context,
-                       const VoteImpl& vote) override;
-  void OnVoteChanged(voting::VoterId<VoteImpl> voter_id,
-                     const ContextType* context,
-                     const VoteImpl& new_vote) override;
-  void OnVoteInvalidated(voting::VoterId<VoteImpl> voter_id,
-                         const ContextType* context) override;
+  void OnVoteSet(voting::VoterId<VoteImpl> voter_id,
+                 ContextType context,
+                 const std::optional<VoteImpl>& vote) override;
 
  private:
   VotingChannelFactory<VoteImpl> voting_channel_factory_{this};
 
   base::flat_map<voting::VoterId<VoteImpl>,
-                 base::flat_map<const ContextType*, VoteImpl>>
+                 base::flat_map<ContextType, VoteImpl>>
       votes_by_voter_id_;
 };
 
@@ -94,7 +86,7 @@ size_t DummyVoteObserver<VoteImpl>::GetVoteCountForVoterId(
 
 template <class VoteImpl>
 size_t DummyVoteObserver<VoteImpl>::GetVoteCountForContext(
-    const typename VoteImpl::ContextType* context) const {
+    typename VoteImpl::ContextType context) const {
   size_t vote_count = 0;
   for (const auto& votes : votes_by_voter_id_) {
     vote_count += votes.second.count(context);
@@ -105,20 +97,20 @@ size_t DummyVoteObserver<VoteImpl>::GetVoteCountForContext(
 template <class VoteImpl>
 bool DummyVoteObserver<VoteImpl>::HasVote(
     voting::VoterId<VoteImpl> voter_id,
-    const typename VoteImpl::ContextType* context) const {
+    typename VoteImpl::ContextType context) const {
   auto votes_it = votes_by_voter_id_.find(voter_id);
   if (votes_it == votes_by_voter_id_.end())
     return false;
 
   const auto& votes = votes_it->second;
 
-  return base::Contains(votes, context);
+  return votes.contains(context);
 }
 
 template <class VoteImpl>
 bool DummyVoteObserver<VoteImpl>::HasVote(
     voting::VoterId<VoteImpl> voter_id,
-    const typename VoteImpl::ContextType* context,
+    typename VoteImpl::ContextType context,
     const VoteImpl& vote) const {
   auto votes_it = votes_by_voter_id_.find(voter_id);
   if (votes_it == votes_by_voter_id_.end())
@@ -136,42 +128,28 @@ bool DummyVoteObserver<VoteImpl>::HasVote(
 template <class VoteImpl>
 bool DummyVoteObserver<VoteImpl>::HasVote(
     voting::VoterId<VoteImpl> voter_id,
-    const typename VoteImpl::ContextType* context,
+    typename VoteImpl::ContextType context,
     typename VoteImpl::VoteType vote_value,
     const char* reason) const {
   return HasVote(voter_id, context, VoteImpl(vote_value, reason));
 }
 
 template <class VoteImpl>
-void DummyVoteObserver<VoteImpl>::OnVoteSubmitted(VoterId<VoteImpl> voter_id,
-                                                  const ContextType* context,
-                                                  const VoteImpl& vote) {
-  bool inserted = votes_by_voter_id_[voter_id].emplace(context, vote).second;
-  DCHECK(inserted);
-}
-
-template <class VoteImpl>
-void DummyVoteObserver<VoteImpl>::OnVoteChanged(VoterId<VoteImpl> voter_id,
-                                                const ContextType* context,
-                                                const VoteImpl& new_vote) {
-  auto it = votes_by_voter_id_[voter_id].find(context);
-  DCHECK(it != votes_by_voter_id_[voter_id].end());
-  it->second = new_vote;
-}
-
-template <class VoteImpl>
-void DummyVoteObserver<VoteImpl>::OnVoteInvalidated(
+void DummyVoteObserver<VoteImpl>::OnVoteSet(
     VoterId<VoteImpl> voter_id,
-    const ContextType* context) {
-  auto it = votes_by_voter_id_.find(voter_id);
-  DCHECK(it != votes_by_voter_id_.end());
-
-  base::flat_map<const ContextType*, VoteImpl>& votes = it->second;
-  size_t removed = votes.erase(context);
-  DCHECK_EQ(removed, 1u);
-
-  if (votes.empty())
-    votes_by_voter_id_.erase(it);
+    ContextType context,
+    const std::optional<VoteImpl>& vote) {
+  if (vote.has_value()) {
+    votes_by_voter_id_[voter_id][context] = *vote;
+  } else {
+    auto it = votes_by_voter_id_.find(voter_id);
+    if (it != votes_by_voter_id_.end()) {
+      it->second.erase(context);
+      if (it->second.empty()) {
+        votes_by_voter_id_.erase(it);
+      }
+    }
+  }
 }
 
 }  // namespace test

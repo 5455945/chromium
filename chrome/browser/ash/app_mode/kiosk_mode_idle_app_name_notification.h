@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,6 @@
 
 #include <memory>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "base/timer/timer.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "ui/base/user_activity/user_activity_observer.h"
@@ -26,6 +24,10 @@ class KioskModeIdleAppNameNotification
   static void Shutdown();
 
   KioskModeIdleAppNameNotification();
+  KioskModeIdleAppNameNotification(const KioskModeIdleAppNameNotification&) =
+      delete;
+  KioskModeIdleAppNameNotification& operator=(
+      const KioskModeIdleAppNameNotification&) = delete;
   ~KioskModeIdleAppNameNotification() override;
 
  private:
@@ -41,10 +43,10 @@ class KioskModeIdleAppNameNotification
   // Begins listening for user activity and calls ResetTimer().
   void Start();
 
-  // Resets |timer_| to fire when the application idle message should be shown.
+  // Resets `timer_` to fire when the application idle message should be shown.
   void ResetTimer();
 
-  // Invoked by |timer_| to display the application idle message.
+  // Invoked by `timer_` to display the application idle message.
   void OnTimeout();
 
   base::OneShotTimer timer_;
@@ -54,16 +56,8 @@ class KioskModeIdleAppNameNotification
 
   // The notification object which owns and shows the notification.
   std::unique_ptr<IdleAppNameNotificationView> notification_;
-
-  DISALLOW_COPY_AND_ASSIGN(KioskModeIdleAppNameNotification);
 };
 
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove when the migration of
-// //chrome/browser/chromeos is finished.
-namespace chromeos {
-using ::ash::KioskModeIdleAppNameNotification;
-}
 
 #endif  // CHROME_BROWSER_ASH_APP_MODE_KIOSK_MODE_IDLE_APP_NAME_NOTIFICATION_H_

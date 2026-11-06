@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,18 +11,18 @@
 #include <set>
 #include <string>
 
+#include "base/containers/heap_array.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_file.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/message_loop/message_pump_for_io.h"
 #include "base/process/process_handle.h"
 #include "base/synchronization/atomic_flag.h"
 #include "base/synchronization/lock.h"
 #include "base/task/current_thread.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 #include "components/crash/core/app/breakpad_linux_impl.h"
 #endif
 
@@ -31,15 +31,15 @@ class SequencedTaskRunner;
 class Thread;
 }
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 
 namespace breakpad {
 
 struct BreakpadInfo;
 
-// This is the host for processes which run breakpad inside the sandbox on
-// Linux or Android. We perform the crash dump from the browser because it
-// allows us to be outside the sandbox.
+// This is the host for processes which run Breakpad inside the sandbox on
+// CastOS. We perform the crash dump from the browser because it allows us to
+// be outside the sandbox.
 //
 // Processes signal that they need to be dumped by sending a datagram over a
 // UNIX domain socket. All processes of the same type share the client end of
@@ -50,6 +50,10 @@ class CrashHandlerHostLinux : public base::MessagePumpForIO::FdWatcher,
   CrashHandlerHostLinux(const std::string& process_type,
                         const base::FilePath& dumps_path,
                         bool upload);
+
+  CrashHandlerHostLinux(const CrashHandlerHostLinux&) = delete;
+  CrashHandlerHostLinux& operator=(const CrashHandlerHostLinux&) = delete;
+
   ~CrashHandlerHostLinux() override;
 
   // Starts the uploader thread. Must be called immediately after creating the
@@ -77,7 +81,7 @@ class CrashHandlerHostLinux : public base::MessagePumpForIO::FdWatcher,
 
   // Do work on |blocking_task_runner_| for OnFileCanReadWithoutBlocking().
   void WriteDumpFile(BreakpadInfo* info,
-                     std::unique_ptr<char[]> crash_context,
+                     base::HeapArray<char> crash_context,
                      pid_t crashing_pid);
 
   // Continue OnFileCanReadWithoutBlocking()'s work on the IO thread.
@@ -87,11 +91,11 @@ class CrashHandlerHostLinux : public base::MessagePumpForIO::FdWatcher,
   void FindCrashingThreadAndDump(
       pid_t crashing_pid,
       const std::string& expected_syscall_data,
-      std::unique_ptr<char[]> crash_context,
+      base::HeapArray<char> crash_context,
       std::unique_ptr<crash_reporter::internal::TransitionalCrashKeyStorage>
           crash_keys,
 #if defined(ADDRESS_SANITIZER)
-      std::unique_ptr<char[]> asan_report,
+      base::HeapArray<char> asan_report,
 #endif
       uint64_t uptime,
       size_t oom_size,
@@ -100,7 +104,7 @@ class CrashHandlerHostLinux : public base::MessagePumpForIO::FdWatcher,
 
   const std::string process_type_;
   const base::FilePath dumps_path_;
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
   const bool upload_;
 #endif
 
@@ -112,15 +116,13 @@ class CrashHandlerHostLinux : public base::MessagePumpForIO::FdWatcher,
   base::AtomicFlag shutting_down_;
 
   scoped_refptr<base::SequencedTaskRunner> blocking_task_runner_;
-
-  DISALLOW_COPY_AND_ASSIGN(CrashHandlerHostLinux);
 };
 
 }  // namespace breakpad
 
-#endif  // !defined(OS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID)
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
 
 namespace crashpad {
 
@@ -144,6 +146,9 @@ class CrashHandlerHost : public base::MessagePumpForIO::FdWatcher,
   // Return a pointer to the global CrashHandlerHost instance, which is created
   // by the first call to this method.
   static CrashHandlerHost* Get();
+
+  CrashHandlerHost(const CrashHandlerHost&) = delete;
+  CrashHandlerHost& operator=(const CrashHandlerHost&) = delete;
 
   // Get the file descriptor which processes should be given in order to signal
   // crashes to the browser.
@@ -169,16 +174,14 @@ class CrashHandlerHost : public base::MessagePumpForIO::FdWatcher,
   void WillDestroyCurrentMessageLoop() override;
 
   base::Lock observers_lock_;
-  std::set<Observer*> observers_;
+  std::set<raw_ptr<Observer, SetExperimental>> observers_;
   base::MessagePumpForIO::FdWatchController fd_watch_controller_;
   base::ScopedFD process_socket_;
   base::ScopedFD browser_socket_;
-
-  DISALLOW_COPY_AND_ASSIGN(CrashHandlerHost);
 };
 
 }  // namespace crashpad
 
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 #endif  // COMPONENTS_CRASH_CONTENT_BROWSER_CRASH_HANDLER_HOST_LINUX_H_

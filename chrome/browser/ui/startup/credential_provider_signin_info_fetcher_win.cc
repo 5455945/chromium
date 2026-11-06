@@ -1,12 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/startup/credential_provider_signin_info_fetcher_win.h"
+
 #include <memory>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
-
-#include "chrome/browser/ui/startup/credential_provider_signin_info_fetcher_win.h"
 
 #include "base/logging.h"
 #include "base/strings/string_split.h"
@@ -21,9 +23,9 @@
 
 CredentialProviderSigninInfoFetcher::CredentialProviderSigninInfoFetcher(
     const std::string& refresh_token,
-    const std::string& consumer_name,
+    std::string consumer_name,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
-    : consumer_name_(consumer_name),
+    : consumer_name_(std::move(consumer_name)),
       scoped_access_token_fetcher_(
           GaiaAccessTokenFetcher::
               CreateExchangeRefreshTokenForAccessTokenInstance(
@@ -40,9 +42,9 @@ CredentialProviderSigninInfoFetcher::~CredentialProviderSigninInfoFetcher() =
 
 void CredentialProviderSigninInfoFetcher::SetCompletionCallbackAndStart(
     const std::string& access_token,
-    const std::string& additional_mdm_oauth_scopes,
+    std::string_view additional_mdm_oauth_scopes,
     FetchCompletionCallback completion_callback) {
-  DCHECK(!completion_callback.is_null());
+  CHECK(!completion_callback.is_null(), base::NotFatalUntil::M162);
   completion_callback_ = std::move(completion_callback);
   GaiaUrls* gaia_urls = GaiaUrls::GetInstance();
 
@@ -50,11 +52,11 @@ void CredentialProviderSigninInfoFetcher::SetCompletionCallbackAndStart(
   // used for MDM registration.
   std::vector<std::string> access_scopes = {"email", "profile", "openid"};
 
-  std::vector<std::string> extra_scopes(
-      base::SplitString(additional_mdm_oauth_scopes, ",", base::TRIM_WHITESPACE,
-                        base::SPLIT_WANT_NONEMPTY));
-  access_scopes.insert(access_scopes.end(), extra_scopes.begin(),
-                       extra_scopes.end());
+  for (std::string_view scope : base::SplitStringPiece(
+           additional_mdm_oauth_scopes, ",", base::TRIM_WHITESPACE,
+           base::SPLIT_WANT_NONEMPTY)) {
+    access_scopes.emplace_back(scope);
+  }
 
   scoped_access_token_fetcher_->Start(gaia_urls->oauth2_chrome_client_id(),
                                       gaia_urls->oauth2_chrome_client_secret(),
@@ -63,21 +65,29 @@ void CredentialProviderSigninInfoFetcher::SetCompletionCallbackAndStart(
 }
 
 void CredentialProviderSigninInfoFetcher::OnGetTokenInfoResponse(
-    std::unique_ptr<base::DictionaryValue> token_info) {
-  DCHECK(token_handle_.empty());
-  bool has_error = !token_info->GetString("token_handle", &token_handle_) ||
-                   token_handle_.empty();
+    const base::DictValue& token_info) {
+  CHECK(token_handle_.empty(), base::NotFatalUntil::M162);
+  if (const std::string* token_handle = token_info.FindString("token_handle");
+      token_handle) {
+    token_handle_ = *token_handle;
+  }
+  bool has_error = token_handle_.empty();
   WriteResultsIfFinished(has_error);
 }
 
 void CredentialProviderSigninInfoFetcher::OnGetUserInfoResponse(
-    std::unique_ptr<base::DictionaryValue> user_info) {
-  DCHECK(!mdm_access_token_.empty());
-  DCHECK(!mdm_id_token_.empty());
-  DCHECK(full_name_.empty());
-  bool has_error =
-      !user_info->GetString("name", &full_name_) || full_name_.empty();
-  user_info->GetString("picture", &picture_url_);
+    const base::DictValue& user_info) {
+  CHECK(!mdm_access_token_.empty(), base::NotFatalUntil::M162);
+  CHECK(!mdm_id_token_.empty(), base::NotFatalUntil::M162);
+  CHECK(full_name_.empty(), base::NotFatalUntil::M162);
+  if (const std::string* full_name = user_info.FindString("name"); full_name) {
+    full_name_ = *full_name;
+  }
+  if (const std::string* picture_url = user_info.FindString("picture");
+      picture_url) {
+    picture_url_ = *picture_url;
+  }
+  bool has_error = full_name_.empty();
   WriteResultsIfFinished(has_error);
 }
 
@@ -93,9 +103,9 @@ void CredentialProviderSigninInfoFetcher::OnNetworkError(int response_code) {
 
 void CredentialProviderSigninInfoFetcher::OnGetTokenSuccess(
     const TokenResponse& token_response) {
-  DCHECK(mdm_access_token_.empty());
-  DCHECK(mdm_id_token_.empty());
-  DCHECK(full_name_.empty());
+  CHECK(mdm_access_token_.empty(), base::NotFatalUntil::M162);
+  CHECK(mdm_id_token_.empty(), base::NotFatalUntil::M162);
+  CHECK(full_name_.empty(), base::NotFatalUntil::M162);
   mdm_access_token_ = token_response.access_token;
   mdm_id_token_ = token_response.id_token;
 
@@ -125,27 +135,26 @@ void CredentialProviderSigninInfoFetcher::RequestUserInfoFromAccessToken(
 
 void CredentialProviderSigninInfoFetcher::WriteResultsIfFinished(
     bool has_error) {
-  DCHECK(completion_callback_);
+  CHECK(completion_callback_, base::NotFatalUntil::M162);
 
   if (!has_error && (mdm_access_token_.empty() || mdm_id_token_.empty() ||
                      full_name_.empty() || token_handle_.empty())) {
     return;
   }
 
-  base::Value fetch_result(base::Value::Type::DICTIONARY);
+  base::DictValue fetch_result;
   if (!has_error) {
-    fetch_result.SetKey(credential_provider::kKeyMdmAccessToken,
-                        base::Value(mdm_access_token_));
-    fetch_result.SetKey(credential_provider::kKeyMdmIdToken,
-                        base::Value(mdm_id_token_));
-    fetch_result.SetKey(credential_provider::kKeyFullname,
-                        base::Value(full_name_));
+    fetch_result.Set(credential_provider::kKeyMdmAccessToken,
+                     std::move(mdm_access_token_));
+    fetch_result.Set(credential_provider::kKeyMdmIdToken,
+                     std::move(mdm_id_token_));
+    fetch_result.Set(credential_provider::kKeyFullname, std::move(full_name_));
     if (!picture_url_.empty()) {
-      fetch_result.SetKey(credential_provider::kKeyPicture,
-                          base::Value(picture_url_));
+      fetch_result.Set(credential_provider::kKeyPicture,
+                       std::move(picture_url_));
     }
-    fetch_result.SetKey(credential_provider::kKeyTokenHandle,
-                        base::Value(token_handle_));
+    fetch_result.Set(credential_provider::kKeyTokenHandle,
+                     std::move(token_handle_));
   }
 
   std::move(completion_callback_).Run(std::move(fetch_result));

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,17 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <optional>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/location.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "base/sequenced_task_runner.h"
 #include "base/synchronization/lock.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/thread_annotations.h"
 #include "mojo/public/cpp/system/buffer.h"
 #include "services/device/public/cpp/generic_sensor/sensor_reading.h"
 #include "services/device/public/mojom/sensor.mojom.h"
@@ -25,6 +27,7 @@ namespace device {
 
 class PlatformSensorProvider;
 class PlatformSensorConfiguration;
+struct SensorReadingSharedBuffer;
 
 // Base class for the sensors provided by the platform. Concrete instances of
 // this class are created by platform specific PlatformSensorProvider.
@@ -40,6 +43,9 @@ class PlatformSensor : public base::RefCountedThreadSafe<PlatformSensor> {
    protected:
     virtual ~Client() {}
   };
+
+  PlatformSensor(const PlatformSensor&) = delete;
+  PlatformSensor& operator=(const PlatformSensor&) = delete;
 
   virtual mojom::ReportingMode GetReportingMode() = 0;
   virtual PlatformSensorConfiguration GetDefaultConfiguration() = 0;
@@ -59,6 +65,17 @@ class PlatformSensor : public base::RefCountedThreadSafe<PlatformSensor> {
 
   // Can be overridden to reset this sensor by the PlatformSensorProvider.
   virtual void SensorReplaced();
+
+  // Checks if new value is significantly different than old value.
+  // When the reading we get does not differ significantly from our current
+  // value, we discard this reading and do not emit any events. This is a
+  // privacy measure to avoid giving readings that are too specific.
+  virtual bool IsSignificantlyDifferent(const SensorReading& lhs,
+                                        const SensorReading& rhs,
+                                        mojom::SensorType sensor_type);
+
+  // Returns true if this is a virtual (emulated) sensor with synthetic data.
+  virtual bool IsVirtual() const;
 
   mojom::SensorType GetType() const;
 
@@ -91,7 +108,7 @@ class PlatformSensor : public base::RefCountedThreadSafe<PlatformSensor> {
   virtual ~PlatformSensor();
   PlatformSensor(mojom::SensorType type,
                  SensorReadingSharedBuffer* reading_buffer,
-                 PlatformSensorProvider* provider);
+                 base::WeakPtr<PlatformSensorProvider> provider);
 
   using ReadingBuffer = SensorReadingSharedBuffer;
 
@@ -104,10 +121,6 @@ class PlatformSensor : public base::RefCountedThreadSafe<PlatformSensor> {
   // invoke NotifySensorReadingChanged() on |main_task_runner_|.
   // Note: this method is thread-safe.
   void UpdateSharedBufferAndNotifyClients(const SensorReading& reading);
-
-  // Updates shared buffer with provided SensorReading
-  // Note: this method is thread-safe.
-  void UpdateSharedBuffer(const SensorReading& reading);
 
   void NotifySensorReadingChanged();
   void NotifySensorError();
@@ -123,21 +136,44 @@ class PlatformSensor : public base::RefCountedThreadSafe<PlatformSensor> {
 
   base::ObserverList<Client, true>::Unchecked clients_;
 
+  base::WeakPtr<PlatformSensor> AsWeakPtr();
+
  private:
   friend class base::RefCountedThreadSafe<PlatformSensor>;
 
+  // Updates shared buffer with provided SensorReading. For sensors whose
+  // reporting mode is ON_CHANGE, |reading_buffer_| is updated only if
+  // |reading| and its rounded version pass the required threshold and
+  // significance checks. Returns true if |reading_buffer_| has been updated,
+  // and false otherwise.
+  // Note: this method is thread-safe.
+  bool UpdateSharedBuffer(const SensorReading& reading)
+      EXCLUSIVE_LOCKS_REQUIRED(lock_);
+
+  // Stores an empty reading into the shared buffer and resets
+  // |last_{raw,rounded}_reading|.
+  void ResetSharedBuffer() EXCLUSIVE_LOCKS_REQUIRED(lock_);
+
+  // Writes the given reading to |reading_buffer_|. Requires |is_active_| to be
+  // true.
+  void WriteToSharedBuffer(const SensorReading&)
+      EXCLUSIVE_LOCKS_REQUIRED(lock_);
+
   scoped_refptr<base::SequencedTaskRunner> main_task_runner_;
 
-  SensorReadingSharedBuffer* reading_buffer_;  // NOTE: Owned by |provider_|.
+  // Pointer to the buffer where sensor readings will be written. The buffer is
+  // owned by `provider_` and must not be accessed if `provider_` is null.
+  raw_ptr<SensorReadingSharedBuffer> reading_buffer_;
+
   mojom::SensorType type_;
   ConfigMap config_map_;
-  PlatformSensorProvider* provider_;
-  bool is_active_ = false;
-  SensorReading last_raw_reading_;
-  mutable base::Lock lock_;  // Protect have_raw_reading_ and last_raw_reading_.
-  bool have_raw_reading_;
+  base::WeakPtr<PlatformSensorProvider> provider_;
+  bool is_active_ GUARDED_BY(lock_);
+  std::optional<SensorReading> last_raw_reading_ GUARDED_BY(lock_);
+  std::optional<SensorReading> last_rounded_reading_ GUARDED_BY(lock_);
+  // Protect last_raw_reading_ & last_rounded_reading_.
+  mutable base::Lock lock_;
   base::WeakPtrFactory<PlatformSensor> weak_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(PlatformSensor);
 };
 
 }  // namespace device

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -8,21 +8,31 @@
 
 #include <memory>
 
-#include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/extensions/crx_installer.h"
+#include "base/auto_reset.h"
+#include "build/build_config.h"
+#include "chrome/browser/extensions/browser_window_util.h"
 #include "chrome/browser/extensions/extension_install_prompt.h"
 #include "chrome/browser/extensions/extension_management.h"
-#include "chrome/browser/extensions/webstore_installer.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "components/download/public/common/download_item.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_item_utils.h"
-#include "content/public/browser/notification_service.h"
-#include "extensions/browser/extension_system.h"
+#include "extensions/browser/crx_installer.h"
+#include "extensions/browser/extension_util.h"
+#include "extensions/browser/install_prompt_data.h"
+#include "extensions/browser/webstore_installer.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/extension.h"
+#include "extensions/common/extension_urls.h"
 #include "extensions/common/user_script.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#endif
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using content::BrowserThread;
 using download::DownloadItem;
@@ -36,7 +46,7 @@ bool g_allow_offstore_install_for_testing = false;
 
 // Hold a mock ExtensionInstallPrompt object that will be used when the
 // download system opens a CRX.
-ExtensionInstallPrompt* mock_install_prompt_for_testing = NULL;
+ExtensionInstallPrompt* mock_install_prompt_for_testing = nullptr;
 
 // Called to get an extension install UI object.  In tests, will return
 // a mock if the test calls download_util::SetMockInstallPromptForTesting()
@@ -48,31 +58,42 @@ std::unique_ptr<ExtensionInstallPrompt> CreateExtensionInstallPrompt(
   // install UI.
   if (mock_install_prompt_for_testing) {
     ExtensionInstallPrompt* result = mock_install_prompt_for_testing;
-    mock_install_prompt_for_testing = NULL;
+    mock_install_prompt_for_testing = nullptr;
     return std::unique_ptr<ExtensionInstallPrompt>(result);
-  } else {
-    content::WebContents* web_contents =
-        content::DownloadItemUtils::GetWebContents(
-            const_cast<DownloadItem*>(&download_item));
-    if (!web_contents) {
-      Browser* browser = chrome::FindLastActiveWithProfile(profile);
-      if (!browser) {
-        browser = Browser::Create(
-            Browser::CreateParams(Browser::TYPE_NORMAL, profile, true));
-      }
-      web_contents = browser->tab_strip_model()->GetActiveWebContents();
-    }
-    return std::make_unique<ExtensionInstallPrompt>(web_contents);
   }
+  content::WebContents* web_contents =
+      content::DownloadItemUtils::GetWebContents(
+          const_cast<DownloadItem*>(&download_item));
+  if (!web_contents) {
+    BrowserWindowInterface* browser =
+        extensions::browser_window_util::GetLastActiveBrowserWithProfile(
+            *profile, false);
+    if (!browser) {
+#if BUILDFLAG(IS_ANDROID)
+      // TODO(crbug.com/474161414): Implement fallback if no browser is found.
+      // Android does not have Browser implementation yet, but we are okay with
+      // not showing an installed dialog if no window is open. The caller
+      // handles having an empty ExtensionInstallPrompt.
+      return nullptr;
+#else
+      browser = CreateBrowserWindow(BrowserWindowCreateParams(
+          BrowserWindowInterface::TYPE_NORMAL, profile, true));
+#endif
+    }
+    TabListInterface* tab_list = TabListInterface::From(browser);
+    web_contents = tab_list->GetActiveTab()->GetContents();
+  }
+  return std::make_unique<ExtensionInstallPrompt>(
+      web_contents, std::make_unique<extensions::InstallPromptData>(
+                        extensions::InstallPromptData::UNSET_PROMPT_TYPE));
 }
+}  // namespace
 
 bool OffStoreInstallAllowedByPrefs(Profile* profile, const DownloadItem& item) {
   return g_allow_offstore_install_for_testing ||
          extensions::ExtensionManagementFactory::GetForBrowserContext(profile)
              ->IsOffstoreInstallAllowed(item.GetURL(), item.GetReferrerUrl());
 }
-
-}  // namespace
 
 // Tests can call this method to inject a mock ExtensionInstallPrompt
 // to be used to confirm permissions on a downloaded CRX.
@@ -84,67 +105,26 @@ void SetMockInstallPromptForTesting(
 scoped_refptr<extensions::CrxInstaller> CreateCrxInstaller(
     Profile* profile,
     const download::DownloadItem& download_item) {
-  extensions::ExtensionService* service =
-      extensions::ExtensionSystem::Get(profile)->extension_service();
-  CHECK(service);
-
   scoped_refptr<extensions::CrxInstaller> installer(
       extensions::CrxInstaller::Create(
-          service,
-          CreateExtensionInstallPrompt(profile, download_item),
+          profile, CreateExtensionInstallPrompt(profile, download_item),
           WebstoreInstaller::GetAssociatedApproval(download_item)));
 
   installer->set_error_on_unsupported_requirements(true);
   installer->set_delete_source(true);
-  installer->set_install_cause(extension_misc::INSTALL_CAUSE_USER_DOWNLOAD);
+  installer->set_was_triggered_by_user_download();
+  installer->set_download_url(download_item.GetURL());
   installer->set_original_mime_type(download_item.GetOriginalMimeType());
   installer->set_apps_require_extension_mime_type(true);
 
   return installer;
 }
 
-scoped_refptr<extensions::CrxInstaller> OpenChromeExtension(
-    Profile* profile,
-    const DownloadItem& download_item) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-
-  scoped_refptr<extensions::CrxInstaller> installer(
-      CreateCrxInstaller(profile, download_item));
-
-  if (OffStoreInstallAllowedByPrefs(profile, download_item)) {
-    installer->set_off_store_install_allow_reason(
-        extensions::CrxInstaller::OffStoreInstallAllowedBecausePref);
-  }
-
-  if (extensions::UserScript::IsURLUserScript(download_item.GetURL(),
-                                              download_item.GetMimeType())) {
-    installer->InstallUserScript(download_item.GetFullPath(),
-                                 download_item.GetURL());
-  } else {
-    DCHECK(!WebstoreInstaller::GetAssociatedApproval(download_item));
-    installer->InstallCrx(download_item.GetFullPath());
-  }
-
-  return installer;
-}
-
-bool IsExtensionDownload(const DownloadItem& download_item) {
-  if (download_item.GetTargetDisposition() ==
-      DownloadItem::TARGET_DISPOSITION_PROMPT)
-    return false;
-
-  if (download_item.GetMimeType() == extensions::Extension::kMimeType ||
-      extensions::UserScript::IsURLUserScript(download_item.GetURL(),
-                                              download_item.GetMimeType())) {
-    return true;
-  } else {
-    return false;
-  }
-}
-
 bool IsTrustedExtensionDownload(Profile* profile, const DownloadItem& item) {
-  return IsExtensionDownload(item) &&
-         OffStoreInstallAllowedByPrefs(profile, item);
+  return extensions::util::IsExtensionDownload(item) &&
+         (OffStoreInstallAllowedByPrefs(profile, item) ||
+          extension_urls::IsWebstoreUpdateUrl(item.GetOriginalUrl()) ||
+          extension_urls::IsWebstoreDomain(item.GetOriginalUrl()));
 }
 
 std::unique_ptr<base::AutoReset<bool>> OverrideOffstoreInstallAllowedForTesting(

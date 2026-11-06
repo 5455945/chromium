@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,14 @@
 #ifndef GPU_COMMAND_BUFFER_SERVICE_CONTEXT_STATE_H_
 #define GPU_COMMAND_BUFFER_SERVICE_CONTEXT_STATE_H_
 
+#include <array>
 #include <memory>
 #include <vector>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
 #include "gpu/command_buffer/service/gl_utils.h"
 #include "gpu/command_buffer/service/sampler_manager.h"
@@ -50,7 +54,7 @@ struct GPU_GLES2_EXPORT TextureUnit {
   // glBindTexture
   scoped_refptr<TextureRef> bound_texture_external_oes;
 
-  // texture currently bound to this unit's GL_TEXTURE_RECTANGLE_ARB with
+  // texture currently bound to this unit's GL_TEXTURE_RECTANGLE_ANGLE with
   // glBindTexture
   scoped_refptr<TextureRef> bound_texture_rectangle_arb;
 
@@ -80,8 +84,9 @@ struct GPU_GLES2_EXPORT TextureUnit {
       case GL_UNSIGNED_INT_SAMPLER_CUBE:
         return bound_texture_cube_map.get();
       case GL_SAMPLER_EXTERNAL_OES:
+      case GL_SAMPLER_EXTERNAL_2D_Y2Y_EXT:
         return bound_texture_external_oes.get();
-      case GL_SAMPLER_2D_RECT_ARB:
+      case GL_SAMPLER_2D_RECT_ANGLE:
         return bound_texture_rectangle_arb.get();
       case GL_SAMPLER_3D:
       case GL_INT_SAMPLER_3D:
@@ -94,7 +99,6 @@ struct GPU_GLES2_EXPORT TextureUnit {
         return bound_texture_2d_array.get();
       default:
         NOTREACHED();
-        return nullptr;
     }
   }
 
@@ -106,7 +110,7 @@ struct GPU_GLES2_EXPORT TextureUnit {
         return bound_texture_cube_map.get();
       case GL_TEXTURE_EXTERNAL_OES:
         return bound_texture_external_oes.get();
-      case GL_TEXTURE_RECTANGLE_ARB:
+      case GL_TEXTURE_RECTANGLE_ANGLE:
         return bound_texture_rectangle_arb.get();
       case GL_TEXTURE_3D:
         return bound_texture_3d.get();
@@ -114,7 +118,6 @@ struct GPU_GLES2_EXPORT TextureUnit {
         return bound_texture_2d_array.get();
       default:
         NOTREACHED();
-        return nullptr;
     }
   }
 
@@ -129,7 +132,7 @@ struct GPU_GLES2_EXPORT TextureUnit {
       case GL_TEXTURE_EXTERNAL_OES:
         bound_texture_external_oes = texture_ref;
         break;
-      case GL_TEXTURE_RECTANGLE_ARB:
+      case GL_TEXTURE_RECTANGLE_ANGLE:
         bound_texture_rectangle_arb = texture_ref;
         break;
       case GL_TEXTURE_3D:
@@ -171,7 +174,7 @@ class GPU_GLES2_EXPORT Vec4 {
     GLuint uint_value;
   };
 
-  ValueUnion v_[4];
+  std::array<ValueUnion, 4> v_;
   ShaderVariableBaseType type_;
 };
 
@@ -275,7 +278,6 @@ struct GPU_GLES2_EXPORT ContextState {
       cached_stencil_back_writemask = mask;
     } else {
       NOTREACHED();
-      return;
     }
     api()->glStencilMaskSeparateFn(op, mask);
   }
@@ -319,15 +321,21 @@ struct GPU_GLES2_EXPORT ContextState {
   // parameters user values; otherwise, set them to 0.
   void UpdateUnpackParameters() const;
 
+  // Resets UNPACK_ROW_LENGTH and UNPACK_IMAGE_HEIGHT in the real driver to
+  // their initial values (0) for a compressed texture upload; pixel storage
+  // modes are ignored when decoding a compressed texture image (ES 3.2
+  // sec. 8.7). No-op when the driver is not ES3-capable, like
+  // UpdateUnpackParameters(), which restores the tracked values afterwards.
+  void SetUnpackParametersForCompressedTexImage() const;
+
   void SetMaxWindowRectangles(size_t max);
   size_t GetMaxWindowRectangles() const;
   void SetWindowRectangles(GLenum mode,
-                           size_t count,
-                           const volatile GLint* box);
+                           base::span<const volatile GLint> box);
   template <typename T>
   void GetWindowRectangle(GLuint index, T* box) {
     for (size_t i = 0; i < 4; ++i) {
-      box[i] = window_rectangles_[4 * index + i];
+      UNSAFE_TODO(box[i]) = window_rectangles_[4 * index + i];
     }
   }
   void UpdateWindowRectangles() const;
@@ -393,7 +401,6 @@ struct GPU_GLES2_EXPORT ContextState {
   bool pack_reverse_row_order = false;
   bool ignore_cached_state = false;
 
-  mutable bool fbo_binding_for_scissor_workaround_dirty = false;
   mutable bool stencil_state_changed_since_validation = true;
 
   GLuint current_draw_framebuffer_client_id = 0;
@@ -421,8 +428,8 @@ struct GPU_GLES2_EXPORT ContextState {
   // vector<[x,y,w,h]>. Always has space for MAX_WINDOW_RECTANGLES rectangles.
   std::vector<GLint> window_rectangles_;
 
-  gl::GLApi* api_ = nullptr;
-  FeatureInfo* feature_info_;
+  raw_ptr<gl::GLApi, DanglingUntriaged> api_ = nullptr;
+  raw_ptr<FeatureInfo, DanglingUntriaged> feature_info_;
 
   bool context_lost_ = false;
 };

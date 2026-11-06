@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,9 @@
 
 #include <utility>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/to_string.h"
 #include "components/payments/core/error_strings.h"
 #include "components/payments/core/native_error_strings.h"
 #include "components/payments/core/payment_address.h"
@@ -17,6 +18,7 @@
 #include "content/public/browser/devtools_background_services_context.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "url/origin.h"
 
 namespace payments {
@@ -56,12 +58,13 @@ void RunCallbackWithError(const std::string& error,
 
 PaymentHandlerHost::PaymentHandlerHost(content::WebContents* web_contents,
                                        base::WeakPtr<Delegate> delegate)
-    : WebContentsObserver(web_contents), delegate_(delegate) {
+    : delegate_(delegate) {
   DCHECK(web_contents);
   DCHECK(delegate_);
+  web_contents_ = web_contents->GetWeakPtr();
 }
 
-PaymentHandlerHost::~PaymentHandlerHost() {}
+PaymentHandlerHost::~PaymentHandlerHost() = default;
 
 mojo::PendingRemote<mojom::PaymentHandlerHost> PaymentHandlerHost::Bind() {
   receiver_.reset();
@@ -80,7 +83,7 @@ void PaymentHandlerHost::UpdateWith(
   if (!change_payment_request_details_callback_)
     return;
 
-  auto* dev_tools = GetDevTools(web_contents(), sw_origin_for_logs_);
+  auto* dev_tools = GetDevTools(web_contents_.get(), sw_origin_for_logs_);
   if (dev_tools) {
     std::map<std::string, std::string> data = {{"Error", response->error}};
 
@@ -146,12 +149,13 @@ void PaymentHandlerHost::UpdateWith(
         data.emplace(prefix + " Label", option->label);
         data.emplace(prefix + " Amount Currency", option->amount->currency);
         data.emplace(prefix + " Amount Value", option->amount->value);
-        data.emplace(prefix + " Selected", option->selected ? "true" : "false");
+        data.emplace(prefix + " Selected", base::ToString(option->selected));
       }
     }
 
     dev_tools->LogBackgroundServiceEvent(
-        registration_id_for_logs_, sw_origin_for_logs_,
+        registration_id_for_logs_,
+        blink::StorageKey::CreateFirstParty(sw_origin_for_logs_),
         content::DevToolsBackgroundService::kPaymentHandler, "Update with",
         /*instance_id=*/payment_request_id_for_logs_, data);
   }
@@ -169,6 +173,9 @@ void PaymentHandlerHost::OnPaymentDetailsNotUpdated() {
 
 void PaymentHandlerHost::Disconnect() {
   receiver_.reset();
+  if (disconnect_callback_) {
+    std::move(disconnect_callback_).Run();
+  }
 }
 
 base::WeakPtr<PaymentHandlerHost> PaymentHandlerHost::AsWeakPtr() {
@@ -198,10 +205,11 @@ void PaymentHandlerHost::ChangePaymentMethod(
     return;
   }
 
-  auto* dev_tools = GetDevTools(web_contents(), sw_origin_for_logs_);
+  auto* dev_tools = GetDevTools(web_contents_.get(), sw_origin_for_logs_);
   if (dev_tools) {
     dev_tools->LogBackgroundServiceEvent(
-        registration_id_for_logs_, sw_origin_for_logs_,
+        registration_id_for_logs_,
+        blink::StorageKey::CreateFirstParty(sw_origin_for_logs_),
         content::DevToolsBackgroundService::kPaymentHandler,
         "Change payment method",
         /*instance_id=*/payment_request_id_for_logs_,
@@ -228,10 +236,11 @@ void PaymentHandlerHost::ChangeShippingOption(
     return;
   }
 
-  auto* dev_tools = GetDevTools(web_contents(), sw_origin_for_logs_);
+  auto* dev_tools = GetDevTools(web_contents_.get(), sw_origin_for_logs_);
   if (dev_tools) {
     dev_tools->LogBackgroundServiceEvent(
-        registration_id_for_logs_, sw_origin_for_logs_,
+        registration_id_for_logs_,
+        blink::StorageKey::CreateFirstParty(sw_origin_for_logs_),
         content::DevToolsBackgroundService::kPaymentHandler,
         "Change shipping option",
         /*instance_id=*/payment_request_id_for_logs_,
@@ -257,7 +266,7 @@ void PaymentHandlerHost::ChangeShippingAddress(
     return;
   }
 
-  auto* dev_tools = GetDevTools(web_contents(), sw_origin_for_logs_);
+  auto* dev_tools = GetDevTools(web_contents_.get(), sw_origin_for_logs_);
   if (dev_tools) {
     std::map<std::string, std::string> shipping_address_map;
     shipping_address_map.emplace("Country", shipping_address->country);
@@ -282,7 +291,8 @@ void PaymentHandlerHost::ChangeShippingAddress(
     shipping_address_map.emplace("Phone", shipping_address->phone);
 
     dev_tools->LogBackgroundServiceEvent(
-        registration_id_for_logs_, sw_origin_for_logs_,
+        registration_id_for_logs_,
+        blink::StorageKey::CreateFirstParty(sw_origin_for_logs_),
         content::DevToolsBackgroundService::kPaymentHandler,
         "Change shipping address",
         /*instance_id=*/payment_request_id_for_logs_, shipping_address_map);

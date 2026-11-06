@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,6 +24,20 @@ void RecordConnectedGamepad(GamepadId gamepad_id) {
 
 void RecordUnknownGamepad(GamepadSource source) {
   UMA_HISTOGRAM_ENUMERATION("Gamepad.UnknownGamepadConnected", source);
+}
+
+void RecordGameControllerMacOutcome(GameControllerMacOutcome outcome) {
+  UMA_HISTOGRAM_ENUMERATION("Gamepad.Mac.GameController.ConnectionOutcome",
+                            outcome);
+}
+
+void RecordGamepadPlatformMacOutcome(GamepadPlatformMacOutcome outcome) {
+  UMA_HISTOGRAM_ENUMERATION("Gamepad.Mac.GamepadPlatform.ConnectionOutcome",
+                            outcome);
+}
+
+void RecordXboxMacOutcome(XboxMacOutcome outcome) {
+  UMA_HISTOGRAM_ENUMERATION("Gamepad.Mac.Xbox.ConnectionOutcome", outcome);
 }
 
 }  // namespace device

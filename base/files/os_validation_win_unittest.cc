@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,9 @@
 #include <iterator>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <tuple>
 
-#include "base/callback_helpers.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -19,6 +19,7 @@
 #include "base/strings/string_util.h"
 #include "base/win/scoped_handle.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 
 #define FPL FILE_PATH_LITERAL
 
@@ -29,12 +30,12 @@ namespace base {
 class OsValidationTest : public ::testing::Test {
  protected:
   // ::testing::Test:
-  static void SetUpTestCase() {
+  static void SetUpTestSuite() {
     temp_dir_ = std::make_unique<ScopedTempDir>().release();
     ASSERT_TRUE(temp_dir_->CreateUniqueTempDir());
   }
 
-  static void TearDownTestCase() {
+  static void TearDownTestSuite() {
     // Explicitly delete the dir to catch any deletion errors.
     ASSERT_TRUE(temp_dir_->Delete());
     auto temp_dir = base::WrapUnique(temp_dir_);
@@ -79,19 +80,12 @@ class OpenFileTest : public OsValidationTest,
     std::tie(standard_rights, generic_rights, std::ignore) = GetParam();
 
     // Extract the five standard rights bits.
-    DWORD synchronize_bit;
-    DWORD write_dac_bit;
-    DWORD read_control_bit;
-    DWORD delete_bit;
-    std::tie(synchronize_bit, write_dac_bit, read_control_bit, delete_bit) =
+    auto [synchronize_bit, write_dac_bit, read_control_bit, delete_bit] =
         standard_rights;
 
     // Extract the three generic file rights masks.
-    DWORD file_generic_read_bits;
-    DWORD file_generic_write_bits;
-    DWORD file_generic_execute_bits;
-    std::tie(file_generic_read_bits, file_generic_write_bits,
-             file_generic_execute_bits) = generic_rights;
+    auto [file_generic_read_bits, file_generic_write_bits,
+          file_generic_execute_bits] = generic_rights;
 
     // Combine and return the desired access rights.
     return synchronize_bit | write_dac_bit | read_control_bit | delete_bit |
@@ -107,10 +101,7 @@ class OpenFileTest : public OsValidationTest,
     std::tie(std::ignore, std::ignore, sharing_bits) = GetParam();
 
     // Extract the sharing mode bits.
-    DWORD share_read_bit;
-    DWORD share_write_bit;
-    DWORD share_delete_bit;
-    std::tie(share_read_bit, share_write_bit, share_delete_bit) = sharing_bits;
+    auto [share_read_bit, share_write_bit, share_delete_bit] = sharing_bits;
 
     // Combine and return the sharing mode.
     return share_read_bit | share_write_bit | share_delete_bit;
@@ -197,7 +188,7 @@ class OpenFileTest : public OsValidationTest,
     file_handle_.Set(::CreateFileW(temp_file_path_.value().c_str(), access_,
                                    share_mode_, nullptr, OPEN_EXISTING,
                                    FILE_ATTRIBUTE_NORMAL, nullptr));
-    ASSERT_TRUE(file_handle_.IsValid()) << ::GetLastError();
+    ASSERT_TRUE(file_handle_.is_valid()) << ::GetLastError();
 
     // Get a second unique name in the temp dir to which the file might be
     // moved.
@@ -216,12 +207,12 @@ class OpenFileTest : public OsValidationTest,
   DWORD share_mode() const { return share_mode_; }
   const FilePath& temp_file_path() const { return temp_file_path_; }
   const FilePath& temp_file_dest_path() const { return temp_file_dest_path_; }
-  HANDLE file_handle() const { return file_handle_.Get(); }
+  HANDLE file_handle() const { return file_handle_.get(); }
 
  private:
   struct BitAndName {
     DWORD bit;
-    StringPiece name;
+    std::string_view name;
   };
 
   // Appends the names of the bits present in |bitfield| to |result| based on
@@ -233,9 +224,10 @@ class OpenFileTest : public OsValidationTest,
     while (bits_begin < bits_end) {
       const BitAndName& bit_name = *bits_begin;
       if (bitfield & bit_name.bit) {
-        if (!result->empty())
+        if (!result->empty()) {
           result->append(" | ");
-        result->append(bit_name.name.data(), bit_name.name.size());
+        }
+        result->append(bit_name.name);
         bitfield &= ~bit_name.bit;
       }
       ++bits_begin;
@@ -279,8 +271,9 @@ TEST_P(OpenFileTest, MoveFileEx) {
 // deletion.
 TEST_P(OpenFileTest, DeleteThenMove) {
   // Don't test combinations that cannot be deleted.
-  if (!CanMoveFile(access(), share_mode()))
+  if (!CanMoveFile(access(), share_mode())) {
     return;
+  }
   ASSERT_NE(::DeleteFileW(temp_file_path().value().c_str()), 0)
       << "Last error code: " << ::GetLastError();
   // Move fails with ERROR_ACCESS_DENIED (STATUS_DELETE_PENDING under the
@@ -294,8 +287,9 @@ TEST_P(OpenFileTest, DeleteThenMove) {
 // deleted.
 TEST_P(OpenFileTest, MapThenDelete) {
   // There is nothing to test if the file can't be read.
-  if (!(access() & FILE_READ_DATA))
+  if (!(access() & FILE_READ_DATA)) {
     return;
+  }
 
   // Pick the protection option that matches the access rights used to open the
   // file.
@@ -322,13 +316,12 @@ TEST_P(OpenFileTest, MapThenDelete) {
   win::ScopedHandle mapping(::CreateFileMappingA(
       file_handle(), nullptr, protection | SEC_IMAGE, 0, 0, nullptr));
   auto result = ::GetLastError();
-  ASSERT_TRUE(mapping.IsValid()) << result;
+  ASSERT_TRUE(mapping.is_valid()) << result;
 
-  auto* view = ::MapViewOfFile(mapping.Get(), FILE_MAP_READ, 0, 0, 0);
+  auto* view = ::MapViewOfFile(mapping.get(), FILE_MAP_READ, 0, 0, 0);
   result = ::GetLastError();
   ASSERT_NE(view, nullptr) << result;
-  ScopedClosureRunner unmapper(
-      BindOnce([](const void* view) { ::UnmapViewOfFile(view); }, view));
+  absl::Cleanup unmapper = [view] { ::UnmapViewOfFile(view); };
 
   // Mapped files cannot be deleted under any circumstances.
   EXPECT_EQ(::DeleteFileW(temp_file_path().value().c_str()), 0);
@@ -355,7 +348,7 @@ TEST_P(OpenFileTest, MapThenDelete) {
 //
 // base_unittests.exe --single-process-tests --gtest_also_run_disabled_tests \
 //     --gtest_filter=*OpenFileTest*
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     DISABLED_Test,
     OpenFileTest,
     ::testing::Combine(

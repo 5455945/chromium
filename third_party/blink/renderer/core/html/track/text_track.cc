@@ -31,11 +31,13 @@
 
 #include "third_party/blink/renderer/core/html/track/text_track.h"
 
+#include "third_party/blink/renderer/core/event_target_names.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
 #include "third_party/blink/renderer/core/html/track/cue_timeline.h"
 #include "third_party/blink/renderer/core/html/track/text_track_cue_list.h"
 #include "third_party/blink/renderer/core/html/track/text_track_list.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "ui/accessibility/accessibility_features.h"
 
 namespace blink {
 
@@ -66,35 +68,22 @@ const AtomicString& TextTrack::MetadataKeyword() {
   return metadata;
 }
 
-const AtomicString& TextTrack::DisabledKeyword() {
-  DEFINE_STATIC_LOCAL(const AtomicString, disabled, ("disabled"));
-  return disabled;
-}
-
-const AtomicString& TextTrack::HiddenKeyword() {
-  DEFINE_STATIC_LOCAL(const AtomicString, hidden, ("hidden"));
-  return hidden;
-}
-
-const AtomicString& TextTrack::ShowingKeyword() {
-  DEFINE_STATIC_LOCAL(const AtomicString, showing, ("showing"));
-  return showing;
-}
-
-TextTrack::TextTrack(const AtomicString& kind,
+TextTrack::TextTrack(const V8TextTrackKind& kind,
                      const AtomicString& label,
                      const AtomicString& language,
+                     HTMLElement& source_element,
                      const AtomicString& id,
                      TextTrackType type)
-    : TrackBase(WebMediaPlayer::kTextTrack, kind, label, language, id),
+    : TrackBase(WebMediaPlayer::kTextTrack, label, language, id),
       active_cues_(nullptr),
       track_list_(nullptr),
-      mode_(DisabledKeyword()),
+      source_element_(source_element),
       track_type_(type),
       readiness_state_(kNotLoaded),
       track_index_(kInvalidTrackIndex),
       rendered_track_index_(kInvalidTrackIndex),
-      has_been_configured_(false) {}
+      has_been_configured_(false),
+      kind_(kind.AsEnum()) {}
 
 TextTrack::~TextTrack() = default;
 
@@ -122,30 +111,31 @@ void TextTrack::SetTrackList(TextTrackList* track_list) {
 }
 
 bool TextTrack::IsVisualKind() const {
-  return kind() == SubtitlesKeyword() || kind() == CaptionsKeyword();
+  return kind() == V8TextTrackKind::Enum::kSubtitles ||
+         kind() == V8TextTrackKind::Enum::kCaptions;
 }
 
-void TextTrack::setMode(const AtomicString& mode) {
-  DCHECK(mode == DisabledKeyword() || mode == HiddenKeyword() ||
-         mode == ShowingKeyword());
-
+void TextTrack::setMode(const V8TextTrackMode& mode) {
   // On setting, if the new value isn't equal to what the attribute would
   // currently return, the new value must be processed as follows ...
-  if (mode_ == mode)
+  if (mode_ == mode.AsEnum())
     return;
+
+  mode_ = mode.AsEnum();
 
   if (cues_ && GetCueTimeline()) {
     // If mode changes to disabled, remove this track's cues from the client
     // because they will no longer be accessible from the cues() function.
-    if (mode == DisabledKeyword())
+    if (mode == TextTrackMode::kDisabled)
       GetCueTimeline()->RemoveCues(this, cues_.Get());
-    else if (mode != ShowingKeyword())
+    else if (mode != TextTrackMode::kShowing)
       GetCueTimeline()->HideCues(this, cues_.Get());
   }
 
-  mode_ = mode;
-
-  if (mode != DisabledKeyword() && GetReadinessState() == kLoaded) {
+  // Recheck `mode_` in case synchronous script (e.g., blur/focusout during
+  // RemoveCues() or HideCues()) changed the track mode.
+  if (mode != TextTrackMode::kDisabled && mode_ == mode &&
+      GetReadinessState() == kLoaded) {
     if (cues_ && GetCueTimeline())
       GetCueTimeline()->AddCues(this, cues_.Get());
   }
@@ -154,13 +144,17 @@ void TextTrack::setMode(const AtomicString& mode) {
     MediaElement()->TextTrackModeChanged(this);
 }
 
+void TextTrack::SetModeEnum(TextTrackMode mode) {
+  setMode(V8TextTrackMode(mode));
+}
+
 TextTrackCueList* TextTrack::cues() {
   // 4.8.10.12.5 If the text track mode ... is not the text track disabled mode,
   // then the cues attribute must return a live TextTrackCueList object ...
   // Otherwise, it must return null. When an object is returned, the
   // same object must be returned each time.
   // http://www.whatwg.org/specs/web-apps/current-work/#dom-texttrack-cues
-  if (mode_ != DisabledKeyword())
+  if (mode_ != TextTrackMode::kDisabled)
     return EnsureTextTrackCueList();
   return nullptr;
 }
@@ -191,7 +185,7 @@ void TextTrack::AddListOfCues(
     cues->Add(new_cue);
   }
 
-  if (GetCueTimeline() && mode() != DisabledKeyword())
+  if (GetCueTimeline() && mode() != TextTrackMode::kDisabled)
     GetCueTimeline()->AddCues(this, cues);
 }
 
@@ -202,15 +196,18 @@ TextTrackCueList* TextTrack::activeCues() {
   // order. Otherwise, it must return null. When an object is returned, the same
   // object must be returned each time.
   // http://www.whatwg.org/specs/web-apps/current-work/#dom-texttrack-activecues
-  if (!cues_ || mode_ == DisabledKeyword())
+  if (mode_ == TextTrackMode::kDisabled) {
     return nullptr;
+  }
 
   if (!active_cues_) {
     active_cues_ = MakeGarbageCollected<TextTrackCueList>();
   }
 
-  cues_->CollectActiveCues(*active_cues_);
-  return active_cues_;
+  if (cues_) {
+    cues_->CollectActiveCues(*active_cues_);
+  }
+  return active_cues_.Get();
 }
 
 void TextTrack::addCue(TextTrackCue* cue) {
@@ -229,21 +226,24 @@ void TextTrack::addCue(TextTrackCue* cue) {
 
   // 3. If the given cue is in a text track list of cues, then remove cue
   // from that text track list of cues.
-  if (TextTrack* cue_track = cue->track())
+  // Loop in case removing the cue's display tree synchronously fires a
+  // blur/focusout event whose listener re-adds `cue` to a track.
+  while (TextTrack* cue_track = cue->track()) {
     cue_track->removeCue(cue, ASSERT_NO_EXCEPTION);
+  }
 
   // 4. Add cue to the method's TextTrack object's text track's text track list
   // of cues.
   cue->SetTrack(this);
   EnsureTextTrackCueList()->Add(cue);
 
-  if (GetCueTimeline() && mode_ != DisabledKeyword())
+  if (GetCueTimeline() && mode_ != TextTrackMode::kDisabled)
     GetCueTimeline()->AddCue(this, cue);
 }
 
 void TextTrack::SetCSSStyleSheets(
     HeapVector<Member<CSSStyleSheet>> style_sheets) {
-  DCHECK(style_sheets_.IsEmpty());
+  DCHECK(style_sheets_.empty());
   style_sheets_ = std::move(style_sheets);
 }
 
@@ -286,9 +286,12 @@ void TextTrack::removeCue(TextTrackCue* cue, ExceptionState& exception_state) {
 
 void TextTrack::CueWillChange(TextTrackCue* cue) {
   // The cue may need to be repositioned in the media element's interval tree,
-  // may need to be re-rendered, etc, so remove it before the modification...
-  if (GetCueTimeline())
-    GetCueTimeline()->RemoveCue(this, cue);
+  // may need to be re-rendered, etc, so detach it from the timeline before the
+  // modification, but defer display tree removal until CueDidChange() so
+  // synchronous blur/focusout events cannot observe the cue mid-mutation.
+  if (GetCueTimeline()) {
+    GetCueTimeline()->WillChangeCue(this, cue);
+  }
 }
 
 void TextTrack::CueDidChange(TextTrackCue* cue, bool update_cue_index) {
@@ -302,11 +305,15 @@ void TextTrack::CueDidChange(TextTrackCue* cue, bool update_cue_index) {
 
   // Since a call to cueDidChange is always preceded by a call to
   // cueWillChange, the cue should no longer be active when we reach this
-  // point (since it was removed from the timeline in cueWillChange).
+  // point (since it was detached from the timeline in cueWillChange).
   DCHECK(!cue->IsActive());
 
-  if (mode_ == DisabledKeyword())
+  // Removing the display tree may synchronously dispatch blur/focusout events
+  // whose listeners move the cue or disable the track.
+  cue->RemoveDisplayTree(TextTrackCue::kDontNotifyRegion);
+  if (cue->track() != this || mode_ == TextTrackMode::kDisabled) {
     return;
+  }
 
   // ... and add it back again if the track is enabled.
   if (GetCueTimeline())
@@ -328,12 +335,12 @@ void TextTrack::InvalidateTrackIndex() {
 }
 
 bool TextTrack::IsRendered() const {
-  return mode_ == ShowingKeyword() && IsVisualKind();
+  return mode_ == TextTrackMode::kShowing && IsVisualKind();
 }
 
 bool TextTrack::CanBeRendered() const {
-  // A track can be displayed when it's of kind captions or subtitles and hasn't
-  // failed to load.
+  // A track can be displayed when it's of kind captions, subtitles, or
+  // descriptions and hasn't failed to load.
   return GetReadinessState() != kFailedToLoad && IsVisualKind();
 }
 
@@ -348,9 +355,10 @@ TextTrackCueList* TextTrack::EnsureTextTrackCueList() {
 int TextTrack::TrackIndexRelativeToRenderedTracks() {
   DCHECK(track_list_);
 
-  if (rendered_track_index_ == kInvalidTrackIndex)
+  if (rendered_track_index_ == kInvalidTrackIndex) {
     rendered_track_index_ =
         track_list_->GetTrackIndexRelativeToRenderedTracks(this);
+  }
 
   return rendered_track_index_;
 }
@@ -360,8 +368,10 @@ const AtomicString& TextTrack::InterfaceName() const {
 }
 
 ExecutionContext* TextTrack::GetExecutionContext() const {
-  HTMLMediaElement* owner = MediaElement();
-  return owner ? owner->GetExecutionContext() : nullptr;
+  DCHECK(source_element_);
+  DCHECK(!MediaElement() || source_element_->GetExecutionContext() ==
+                                MediaElement()->GetExecutionContext());
+  return source_element_->GetExecutionContext();
 }
 
 HTMLMediaElement* TextTrack::MediaElement() const {
@@ -381,8 +391,9 @@ void TextTrack::Trace(Visitor* visitor) const {
   visitor->Trace(active_cues_);
   visitor->Trace(track_list_);
   visitor->Trace(style_sheets_);
+  visitor->Trace(source_element_);
   TrackBase::Trace(visitor);
-  EventTargetWithInlineData::Trace(visitor);
+  EventTarget::Trace(visitor);
 }
 
 }  // namespace blink

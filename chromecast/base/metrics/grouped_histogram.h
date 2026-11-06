@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,4 +22,4 @@ void TagAppStartForGroupedHistograms(const std::string& app_name);
 } // namespace metrics
 } // namespace chromecast
 
-#endif // CHROMECAST_BASE_METRICS_GROUPED_HISTOGRAM_H_
+#endif  // CHROMECAST_BASE_METRICS_GROUPED_HISTOGRAM_H_

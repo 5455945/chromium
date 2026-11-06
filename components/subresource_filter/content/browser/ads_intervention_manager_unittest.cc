@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -32,7 +32,7 @@ class AdsInterventionManagerTest : public testing::Test {
     HostContentSettingsMap::RegisterProfilePrefs(prefs_.registry());
     settings_map_ = new HostContentSettingsMap(
         &prefs_, false /* is_off_the_record */, false /* store_last_modified */,
-        false /* restore_session */);
+        false /* restore_session */, false /* should_record_metrics */);
     settings_manager_ =
         std::make_unique<SubresourceFilterContentSettingsManager>(
             settings_map_.get());
@@ -44,7 +44,10 @@ class AdsInterventionManagerTest : public testing::Test {
     ads_intervention_manager_->set_clock_for_testing(test_clock_.get());
   }
 
-  void TearDown() override { settings_map_->ShutdownOnUIThread(); }
+  void TearDown() override {
+    ads_intervention_manager_.reset();
+    settings_map_->ShutdownOnUIThread();
+  }
 
   base::SimpleTestClock* test_clock() { return test_clock_.get(); }
 
@@ -71,7 +74,7 @@ TEST_F(AdsInterventionManagerTest,
        NoIntervention_NoActiveInterventionReturned) {
   GURL url("https://example.test/");
 
-  absl::optional<AdsInterventionManager::LastAdsIntervention> ads_intervention =
+  std::optional<AdsInterventionManager::LastAdsIntervention> ads_intervention =
       ads_intervention_manager_->GetLastAdsIntervention(url);
   EXPECT_FALSE(ads_intervention.has_value());
 }
@@ -81,22 +84,22 @@ TEST_F(AdsInterventionManagerTest, SingleIntervention_TimeSinceMatchesClock) {
 
   ads_intervention_manager_->TriggerAdsInterventionForUrlOnSubsequentLoads(
       url, mojom::AdsViolation::kMobileAdDensityByHeightAbove30);
-  test_clock()->Advance(base::TimeDelta::FromHours(1));
+  test_clock()->Advance(base::Hours(1));
 
-  absl::optional<AdsInterventionManager::LastAdsIntervention> ads_intervention =
+  std::optional<AdsInterventionManager::LastAdsIntervention> ads_intervention =
       ads_intervention_manager_->GetLastAdsIntervention(url);
   EXPECT_TRUE(ads_intervention.has_value());
   EXPECT_EQ(ads_intervention->ads_violation,
             mojom::AdsViolation::kMobileAdDensityByHeightAbove30);
-  EXPECT_EQ(ads_intervention->duration_since, base::TimeDelta::FromHours(1));
+  EXPECT_EQ(ads_intervention->duration_since, base::Hours(1));
 
   // Advance the clock by two hours, duration since should now be 3 hours.
-  test_clock()->Advance(base::TimeDelta::FromHours(2));
+  test_clock()->Advance(base::Hours(2));
   ads_intervention = ads_intervention_manager_->GetLastAdsIntervention(url);
   EXPECT_TRUE(ads_intervention.has_value());
   EXPECT_EQ(ads_intervention->ads_violation,
             mojom::AdsViolation::kMobileAdDensityByHeightAbove30);
-  EXPECT_EQ(ads_intervention->duration_since, base::TimeDelta::FromHours(3));
+  EXPECT_EQ(ads_intervention->duration_since, base::Hours(3));
 }
 
 }  // namespace subresource_filter

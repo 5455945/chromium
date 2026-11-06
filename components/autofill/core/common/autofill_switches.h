@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,9 +13,10 @@ namespace switches {
 // All switches in alphabetical order. The switches should be documented
 // alongside the definition of their values in the .cc file.
 extern const char kAutofillAPIKey[];
+extern const char kAutofillCustomFormControlScriptsDir[];
 extern const char kAutofillServerURL[];
-extern const char kAutofillMetadataUploadEncoding[];
 extern const char kAutofillUploadThrottlingPeriodInDays[];
+extern const char kAutoGrantEmailVerificationPermissionForTesting[];
 extern const char kIgnoreAutocompleteOffForAutofill[];
 extern const char kShowAutofillTypePredictions[];
 extern const char kShowAutofillSignatures[];

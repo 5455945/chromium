@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,111 +7,150 @@
 #include <map>
 #include <string>
 
-#include "base/bind.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
+#include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/metrics/field_trial_params.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "cc/base/switches.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
 #include "chrome/browser/metrics/chrome_metrics_service_client.h"
 #include "chrome/browser/metrics/variations/chrome_variations_service_client.h"
-#include "chrome/browser/metrics/variations/ui_string_overrider_factory.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/ui/browser_otr_state.h"
+#include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/installer/util/google_update_settings.h"
 #include "components/metrics/enabled_state_provider.h"
+#include "components/metrics/metrics_pref_names.h"
 #include "components/metrics/metrics_state_manager.h"
+#include "components/metrics/startup_visibility.h"
 #include "components/prefs/pref_service.h"
 #include "components/variations/service/variations_service.h"
+#include "components/variations/synthetic_trial_registry.h"
 #include "components/variations/variations_associated_data.h"
 #include "components/version_info/version_info.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/network_service_instance.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
+#include "base/metrics/histogram_functions.h"
+#include "chrome/browser/android/metrics/uma_session_stats.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
-#else
-#include "chrome/browser/ui/browser_list.h"
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "base/win/registry.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/install_static/install_util.h"
 #include "components/crash/core/app/crash_export_thunks.h"
 #include "components/crash/core/app/crashpad.h"
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/settings/stats_reporting_controller.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#include "components/metrics/structured/recorder.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace metrics {
-
 namespace internal {
+
 // Metrics reporting feature. This feature, along with user consent, controls if
 // recording and reporting are enabled. If the feature is enabled, but no
 // consent is given, then there will be no recording or reporting.
-const base::Feature kMetricsReportingFeature{"MetricsReporting",
-                                             base::FEATURE_ENABLED_BY_DEFAULT};
+BASE_FEATURE(kMetricsReportingFeature,
+             "MetricsReporting",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_ANDROID)
+// Same as |kMetricsReportingFeature|, but this feature is associated with a
+// different trial, which has different sampling rates. This is due to a bug
+// in which the old sampling rate was not being applied correctly. In order for
+// the fix to not affect the overall sampling rate, this new feature was
+// created. See crbug.com/40218371.
+BASE_FEATURE(kPostFREFixMetricsReportingFeature,
+             "PostFREFixMetricsReporting",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_ANDROID)
+
+// Name of the variations param that defines the sampling rate.
+const char kRateParamName[] = "sampling_rate_per_mille";
 
 }  // namespace internal
 }  // namespace metrics
 
 namespace {
 
-// Name of the variations param that defines the sampling rate.
-const char kRateParamName[] = "sampling_rate_per_mille";
-
 // Posts |GoogleUpdateSettings::StoreMetricsClientInfo| on blocking pool thread
 // because it needs access to IO and cannot work from UI thread.
 void PostStoreMetricsClientInfo(const metrics::ClientInfo& client_info) {
-  base::ThreadPool::PostTask(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-      base::BindOnce(&GoogleUpdateSettings::StoreMetricsClientInfo,
-                     client_info));
+  // This must happen on the same sequence as the tasks to enable/disable
+  // metrics reporting. Otherwise, this may run while disabling metrics
+  // reporting if the user quickly enables and disables metrics reporting.
+  GoogleUpdateSettings::CollectStatsConsentTaskRunner()->PostTask(
+      FROM_HERE, base::BindOnce(&GoogleUpdateSettings::StoreMetricsClientInfo,
+                                client_info));
 }
 
-// Appends a group to the sampling controlling |trial|. The group will be
-// associated with a variation param for reporting sampling |rate| in per mille.
-void AppendSamplingTrialGroup(const std::string& group_name,
-                              int rate,
-                              base::FieldTrial* trial) {
-  std::map<std::string, std::string> params = {
-      {kRateParamName, base::NumberToString(rate)}};
-  variations::AssociateVariationParams(trial->trial_name(), group_name, params);
-  trial->AppendGroup(group_name, rate);
+#if BUILDFLAG(IS_ANDROID)
+// Returns true if we should use the new sampling trial and feature to determine
+// sampling. See the comment on |kUsePostFREFixSamplingTrial| for more details.
+bool ShouldUsePostFREFixSamplingTrial(PrefService* local_state) {
+  return local_state->GetBoolean(metrics::prefs::kUsePostFREFixSamplingTrial);
 }
+
+bool ShouldUsePostFREFixSamplingTrial() {
+  // We check for g_browser_process and local_state() because some unit tests
+  // may reach this point without creating a test browser process and/or local
+  // state.
+  // TODO(crbug.com/40837610): Fix the unit tests so that we do not need to
+  // check for g_browser_process and local_state().
+  return g_browser_process && g_browser_process->local_state() &&
+         ShouldUsePostFREFixSamplingTrial(g_browser_process->local_state());
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 // Implementation of IsClientInSample() that takes a PrefService param.
 bool IsClientInSampleImpl(PrefService* local_state) {
-  // Test the MetricsReporting feature for all users to ensure that the trial
-  // is reported.
+  // Test the MetricsReporting or PostFREFixMetricsReporting feature (depending
+  // on the |kUsePostFREFixSamplingTrial| pref and platform) for all users to
+  // ensure that the trial is reported. See the comment on
+  // |kUsePostFREFixSamplingTrial| for more details on why there are two
+  // different features.
+#if BUILDFLAG(IS_ANDROID)
+  if (ShouldUsePostFREFixSamplingTrial(local_state)) {
+    return base::FeatureList::IsEnabled(
+        metrics::internal::kPostFREFixMetricsReportingFeature);
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
   return base::FeatureList::IsEnabled(
       metrics::internal::kMetricsReportingFeature);
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 // Callback to update the metrics reporting state when the Chrome OS metrics
 // reporting setting changes.
-void OnCrosMetricsReportingSettingChange() {
+void OnCrosMetricsReportingSettingChange(
+    metrics::ChangeMetricsReportingStateCalledFrom called_from) {
   bool enable_metrics = ash::StatsReportingController::Get()->IsEnabled();
-  ChangeMetricsReportingState(enable_metrics);
+  metrics::ChangeMetricsReportingState(enable_metrics, called_from);
 }
 #endif
 
 // Returns the name of a key under HKEY_CURRENT_USER that can be used to store
 // backups of metrics data. Unused except on Windows.
 std::wstring GetRegistryBackupKey() {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   return install_static::GetRegistryPath().append(L"\\StabilityMetrics");
 #else
   return std::wstring();
@@ -120,13 +159,17 @@ std::wstring GetRegistryBackupKey() {
 
 }  // namespace
 
-
 class ChromeMetricsServicesManagerClient::ChromeEnabledStateProvider
     : public metrics::EnabledStateProvider {
  public:
   explicit ChromeEnabledStateProvider(PrefService* local_state)
       : local_state_(local_state) {}
-  ~ChromeEnabledStateProvider() override {}
+
+  ChromeEnabledStateProvider(const ChromeEnabledStateProvider&) = delete;
+  ChromeEnabledStateProvider& operator=(const ChromeEnabledStateProvider&) =
+      delete;
+
+  ~ChromeEnabledStateProvider() override = default;
 
   bool IsConsentGiven() const override {
     return ChromeMetricsServiceAccessor::IsMetricsAndCrashReportingEnabled(
@@ -139,9 +182,7 @@ class ChromeMetricsServicesManagerClient::ChromeEnabledStateProvider
   }
 
  private:
-  PrefService* const local_state_;
-
-  DISALLOW_COPY_AND_ASSIGN(ChromeEnabledStateProvider);
+  const raw_ptr<PrefService> local_state_;
 };
 
 ChromeMetricsServicesManagerClient::ChromeMetricsServicesManagerClient(
@@ -149,87 +190,104 @@ ChromeMetricsServicesManagerClient::ChromeMetricsServicesManagerClient(
     : enabled_state_provider_(
           std::make_unique<ChromeEnabledStateProvider>(local_state)),
       local_state_(local_state) {
-  DCHECK(local_state);
+  CHECK(local_state, base::NotFatalUntil::M161);
 }
 
-ChromeMetricsServicesManagerClient::~ChromeMetricsServicesManagerClient() {}
+ChromeMetricsServicesManagerClient::~ChromeMetricsServicesManagerClient() =
+    default;
 
-// static
-void ChromeMetricsServicesManagerClient::CreateFallbackSamplingTrial(
-    version_info::Channel channel,
-    base::FeatureList* feature_list) {
-  // The trial name must be kept in sync with the server config controlling
-  // sampling. If they don't match, then clients will be shuffled into different
-  // groups when the server config takes over from the fallback trial.
-  static const char kTrialName[] = "MetricsAndCrashSampling";
-  scoped_refptr<base::FieldTrial> trial(
-      base::FieldTrialList::FactoryGetFieldTrial(
-          kTrialName, 1000, "Default", base::FieldTrial::ONE_TIME_RANDOMIZED,
-          nullptr));
-
-  // On all channels except stable, we sample out at a minimal rate to ensure
-  // the code paths are exercised in the wild before hitting stable.
-  int sampled_in_rate = 990;
-  int sampled_out_rate = 10;
-  if (channel == version_info::Channel::STABLE) {
-    sampled_in_rate = 100;
-    sampled_out_rate = 900;
-  }
-
-  // Like the trial name, the order that these two groups are added to the trial
-  // must be kept in sync with the order that they appear in the server config.
-  // For future sanity purposes, the desired order is:
-  // OutOfReportingSample, InReportingSample
-
-  static const char kSampledOutGroup[] = "OutOfReportingSample";
-  AppendSamplingTrialGroup(kSampledOutGroup, sampled_out_rate, trial.get());
-
-  static const char kInSampleGroup[] = "InReportingSample";
-  AppendSamplingTrialGroup(kInSampleGroup, sampled_in_rate, trial.get());
-
-  // Setup the feature. This must be done after all groups are added since
-  // GetGroupNameWithoutActivation() will finalize the group choice.
-  const std::string& group_name = trial->GetGroupNameWithoutActivation();
-  feature_list->RegisterFieldTrialOverride(
-      metrics::internal::kMetricsReportingFeature.name,
-      group_name == kSampledOutGroup
-          ? base::FeatureList::OVERRIDE_DISABLE_FEATURE
-          : base::FeatureList::OVERRIDE_ENABLE_FEATURE,
-      trial.get());
+metrics::MetricsStateManager*
+ChromeMetricsServicesManagerClient::GetMetricsStateManagerForTesting() {
+  return GetMetricsStateManager();
 }
 
 // static
-bool ChromeMetricsServicesManagerClient::IsClientInSample() {
+bool ChromeMetricsServicesManagerClient::IsClientInSampleForMetrics() {
   return IsClientInSampleImpl(g_browser_process->local_state());
 }
 
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
+// static
+bool ChromeMetricsServicesManagerClient::IsClientInSampleForCrashes() {
+#if BUILDFLAG(IS_ANDROID)
+  // On Android, there are two field trials that, together, drive metrics and
+  // crash reporting. The determination of which trial to use is based on
+  // whether the client went through the FRE before or after the fix to
+  // crbug.com/40218371 was deployed.
+  //
+  // The PostFREFixSamplingTrial controls crash and metrics sampling for clients
+  // which went through the FRE after the FRE fix was deployed. These clients
+  // use the PostFREFixMetricsReortingFeature and its "disable_crashes" feature
+  // parameter to control whether the client is in-sample for crash reporting.
+  if (ShouldUsePostFREFixSamplingTrial(g_browser_process->local_state())) {
+    // If reporting isn't enabled at all, then we can return early.
+    if (!base::FeatureList::IsEnabled(
+            metrics::internal::kPostFREFixMetricsReportingFeature)) {
+      return false;
+    }
+    // Otherwise, send crashes if crash reporting is NOT disabled. By default
+    // crash reporting is not disabled.
+    const bool crashes_are_disabled = base::GetFieldTrialParamByFeatureAsBool(
+        metrics::internal::kPostFREFixMetricsReportingFeature,
+        "disable_crashes", false);
+    return !crashes_are_disabled;
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
+
+  // If this is a Windows client, or if this is an Android client that went
+  // through the FRE before the FRE fix was deployed, then this client uses
+  // the MetricsReportingFeature and its "disable_crashes" parameter to control
+  // whether the client is in-sample for crash reporting.
+
+  // If reporting isn't enabled at all, then we can return early.
+  if (!base::FeatureList::IsEnabled(
+          metrics::internal::kMetricsReportingFeature)) {
+    return false;
+  }
+
+  const bool crashes_are_disabled = base::GetFieldTrialParamByFeatureAsBool(
+      metrics::internal::kMetricsReportingFeature, "disable_crashes", false);
+  return !crashes_are_disabled;
+}
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
+
 // static
 bool ChromeMetricsServicesManagerClient::GetSamplingRatePerMille(int* rate) {
-  std::string rate_str = variations::GetVariationParamValueByFeature(
-      metrics::internal::kMetricsReportingFeature, kRateParamName);
-  if (rate_str.empty())
+#if BUILDFLAG(IS_ANDROID)
+  const base::Feature& feature =
+      ShouldUsePostFREFixSamplingTrial()
+          ? metrics::internal::kPostFREFixMetricsReportingFeature
+          : metrics::internal::kMetricsReportingFeature;
+#else
+  const base::Feature& feature = metrics::internal::kMetricsReportingFeature;
+#endif  // BUILDFLAG(IS_ANDROID)
+  std::string rate_str = base::GetFieldTrialParamValueByFeature(
+      feature, metrics::internal::kRateParamName);
+  if (rate_str.empty()) {
     return false;
+  }
 
-  if (!base::StringToInt(rate_str, rate) || *rate > 1000)
+  if (!base::StringToInt(rate_str, rate) || *rate > 1000) {
     return false;
+  }
 
   return true;
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 void ChromeMetricsServicesManagerClient::OnCrosSettingsCreated() {
+  // Listen for changes to metrics reporting state.
   reporting_setting_subscription_ =
       ash::StatsReportingController::Get()->AddObserver(
-          base::BindRepeating(&OnCrosMetricsReportingSettingChange));
+          base::BindRepeating(&OnCrosMetricsReportingSettingChange,
+                              metrics::ChangeMetricsReportingStateCalledFrom::
+                                  kCrosMetricsSettingsChange));
   // Invoke the callback once initially to set the metrics reporting state.
-  OnCrosMetricsReportingSettingChange();
+  OnCrosMetricsReportingSettingChange(
+      metrics::ChangeMetricsReportingStateCalledFrom::
+          kCrosMetricsSettingsCreated);
 }
 #endif
-
-const metrics::EnabledStateProvider&
-ChromeMetricsServicesManagerClient::GetEnabledStateProviderForTesting() {
-  return *enabled_state_provider_;
-}
 
 std::unique_ptr<variations::VariationsService>
 ChromeMetricsServicesManagerClient::CreateVariationsService() {
@@ -237,22 +295,44 @@ ChromeMetricsServicesManagerClient::CreateVariationsService() {
   return variations::VariationsService::Create(
       std::make_unique<ChromeVariationsServiceClient>(), local_state_,
       GetMetricsStateManager(), switches::kDisableBackgroundNetworking,
-      chrome_variations::CreateUIStringOverrider(),
       base::BindOnce(&content::GetNetworkConnectionTracker));
 }
 
 std::unique_ptr<metrics::MetricsServiceClient>
-ChromeMetricsServicesManagerClient::CreateMetricsServiceClient() {
+ChromeMetricsServicesManagerClient::CreateMetricsServiceClient(
+    variations::SyntheticTrialRegistry* synthetic_trial_registry) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  return ChromeMetricsServiceClient::Create(GetMetricsStateManager());
+  return ChromeMetricsServiceClient::Create(GetMetricsStateManager(),
+                                            synthetic_trial_registry);
 }
 
 metrics::MetricsStateManager*
 ChromeMetricsServicesManagerClient::GetMetricsStateManager() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   if (!metrics_state_manager_) {
+    base::FilePath user_data_dir;
+    base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir);
+
+    metrics::StartupVisibility startup_visibility;
+#if BUILDFLAG(IS_ANDROID)
+    startup_visibility = UmaSessionStats::HasVisibleActivity()
+                             ? metrics::StartupVisibility::kForeground
+                             : metrics::StartupVisibility::kBackground;
+    base::UmaHistogramEnumeration("UMA.StartupVisibility", startup_visibility);
+#else
+    startup_visibility = metrics::StartupVisibility::kForeground;
+#endif  // BUILDFLAG(IS_ANDROID)
+
     metrics_state_manager_ = metrics::MetricsStateManager::Create(
         local_state_, enabled_state_provider_.get(), GetRegistryBackupKey(),
+        user_data_dir, startup_visibility,
+        {
+            .default_entropy_provider_type =
+                metrics::EntropyProviderType::kDefault,
+            .force_benchmarking_mode =
+                base::CommandLine::ForCurrentProcess()->HasSwitch(
+                    switches::kEnableGpuBenchmarking),
+        },
         base::BindRepeating(&PostStoreMetricsClientInfo),
         base::BindRepeating(&GoogleUpdateSettings::LoadMetricsClientInfo));
   }
@@ -265,48 +345,61 @@ ChromeMetricsServicesManagerClient::GetURLLoaderFactory() {
       ->GetSharedURLLoaderFactory();
 }
 
-bool ChromeMetricsServicesManagerClient::IsMetricsReportingEnabled() {
-  return enabled_state_provider_->IsReportingEnabled();
-}
-
-bool ChromeMetricsServicesManagerClient::IsMetricsConsentGiven() {
-  return enabled_state_provider_->IsConsentGiven();
+const metrics::EnabledStateProvider&
+ChromeMetricsServicesManagerClient::GetEnabledStateProvider() {
+  return *enabled_state_provider_;
 }
 
 bool ChromeMetricsServicesManagerClient::IsOffTheRecordSessionActive() {
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // This differs from TabModelList::IsOffTheRecordSessionActive in that it
   // does not ignore TabModels that have no open tabs, because it may be checked
   // before tabs get added to the TabModel. This means it may be more
   // conservative in case unused TabModels are not cleaned up, but it seems to
   // work correctly.
-  // TODO(crbug/741888): Check if TabModelList's version can be updated safely.
-  // TODO(crbug/1023759): This function should return true for Incognito CCTs.
+  // TODO(crbug.com/40107157): This function should return true for Incognito
+  // CCTs.
   for (const TabModel* model : TabModelList::models()) {
-    if (model->IsOffTheRecord())
+    if (model->IsOffTheRecord()) {
       return true;
+    }
   }
 
   return false;
 #else
-  // Depending directly on BrowserList, since that is the implementation
-  // that we get correct notifications for.
-  return BrowserList::IsOffTheRecordBrowserActive();
+  return ::IsOffTheRecordSessionActive();
 #endif
 }
 
-#if defined(OS_WIN)
-void ChromeMetricsServicesManagerClient::UpdateRunningServices(
-    bool may_record,
-    bool may_upload) {
-  // First, set the registry value so that Crashpad will have the sampling state
-  // now and for subsequent runs.
-  install_static::SetCollectStatsInSample(IsClientInSample());
-
-  // Next, get Crashpad to pick up the sampling state for this session.
-  // Crashpad will use the kRegUsageStatsInSample registry value to apply
-  // sampling correctly, but may_record already reflects the sampling state.
-  // This isn't a problem though, since they will be consistent.
-  SetUploadConsent_ExportThunk(may_record && may_upload);
+void ChromeMetricsServicesManagerClient::OnFieldTrialsInitialized() {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+#if BUILDFLAG(IS_WIN)
+  // Set the registry value so that Crashpad will have the sampling state now
+  // and for subsequent runs. Note that Crashpad uses *both* the registry value
+  // and the value sent from SetUploadConsent() below.
+  // We use IsClientInSampleForCrashes() which checks the feature for whether
+  // crash reports should be sent.
+  install_static::SetCollectStatsInSample(IsClientInSampleForCrashes());
+#endif  // BUILDFLAG(IS_WIN)
 }
-#endif  // defined(OS_WIN)
+
+#if BUILDFLAG(IS_WIN)
+void ChromeMetricsServicesManagerClient::UpdateRunningServices(
+    bool may_record_and_upload) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  // Crashpad only tracks consent-to-upload, so tell it this if metrics services
+  // are both recording and uploading. The "MetricsReportingEnabled" enterprise
+  // policy takes precedence over any value provided here. Furthermore, the
+  // "disable_crashes" param of the "MetricsReporting" feature will suppress
+  // crash reporting for this client when set; see IsClientInSampleForCrashes.
+  if (base::FeatureList::IsEnabled(
+          metrics_services_manager::kOffloadUpdateRunningServicesWin)) {
+    GoogleUpdateSettings::CollectStatsConsentTaskRunner()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&SetUploadConsent_ExportThunk, may_record_and_upload));
+    return;
+  }
+
+  SetUploadConsent_ExportThunk(may_record_and_upload);
+}
+#endif  // BUILDFLAG(IS_WIN)

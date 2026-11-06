@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "media/base/audio_parameters.h"
 #include "media/base/audio_renderer_sink.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -24,10 +24,13 @@ class MockAudioRendererSink : public SwitchableAudioRendererSink {
                         OutputDeviceStatus device_status,
                         const AudioParameters& device_output_params);
 
+  MockAudioRendererSink(const MockAudioRendererSink&) = delete;
+  MockAudioRendererSink& operator=(const MockAudioRendererSink&) = delete;
+
   MOCK_METHOD0(Start, void());
   MOCK_METHOD0(Stop, void());
   MOCK_METHOD0(Flush, void());
-  MOCK_METHOD0(Pause, void());
+  MOCK_METHOD1(Pause, void(PauseReason reason));
   MOCK_METHOD0(Play, void());
   MOCK_METHOD1(SetVolume, bool(double volume));
   MOCK_METHOD0(CurrentThreadIsRenderingThread, bool());
@@ -47,10 +50,8 @@ class MockAudioRendererSink : public SwitchableAudioRendererSink {
   ~MockAudioRendererSink() override;
 
  private:
-  RenderCallback* callback_;
+  raw_ptr<RenderCallback, AcrossTasksDanglingUntriaged> callback_;
   OutputDeviceInfo output_device_info_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockAudioRendererSink);
 };
 
 }  // namespace media

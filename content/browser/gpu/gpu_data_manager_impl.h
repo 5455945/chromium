@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,16 +9,16 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "base/no_destructor.h"
 #include "base/process/kill.h"
 #include "base/synchronization/lock.h"
 #include "base/thread_annotations.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "content/common/content_export.h"
 #include "content/public/browser/gpu_data_manager.h"
 #include "content/public/common/three_d_api_types.h"
 #include "gpu/config/device_perf_info.h"
@@ -27,10 +27,17 @@
 #include "gpu/config/gpu_feature_info.h"
 #include "gpu/config/gpu_info.h"
 #include "gpu/config/gpu_mode.h"
+#include "media/base/supported_video_decoder_config.h"
+#include "media/video/video_encode_accelerator.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "third_party/blink/public/mojom/gpu/gpu.mojom.h"
 #include "ui/display/display_observer.h"
 #include "ui/gfx/gpu_extra_info.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "base/win/windows_types.h"
+#include "ui/gfx/mojom/dxgi_info.mojom.h"
+#endif
 
 class GURL;
 
@@ -46,23 +53,23 @@ class CONTENT_EXPORT GpuDataManagerImpl : public GpuDataManager,
                                           public display::DisplayObserver {
  public:
   enum GpuInfoRequest {
-    kGpuInfoRequestDxDiag = 1 << 0,
-    kGpuInfoRequestDx12 = 1 << 1,
-    kGpuInfoRequestVulkan = 1 << 2,
-    kGpuInfoRequestDawnInfo = 1 << 3,
-    kGpuInfoRequestDx12Vulkan = kGpuInfoRequestVulkan | kGpuInfoRequestDx12,
-    kGpuInfoRequestAll = kGpuInfoRequestDxDiag | kGpuInfoRequestDx12 |
-                         kGpuInfoRequestVulkan | kGpuInfoRequestDawnInfo,
+    kGpuInfoRequestDirectX = 1 << 0,
+    kGpuInfoRequestDawnInfo = 1 << 1,
+    kGpuInfoRequestVideo = 1 << 2,
+    kGpuInfoRequestAll =
+        kGpuInfoRequestDirectX | kGpuInfoRequestDawnInfo | kGpuInfoRequestVideo,
   };
 
   // Getter for the singleton. This will return NULL on failure.
   static GpuDataManagerImpl* GetInstance();
 
+  GpuDataManagerImpl(const GpuDataManagerImpl&) = delete;
+  GpuDataManagerImpl& operator=(const GpuDataManagerImpl&) = delete;
+
   // This returns true after the first call of GetInstance().
   static bool Initialized();
 
   // GpuDataManager implementation.
-  void BlocklistWebGLForTesting() override;
   gpu::GPUInfo GetGPUInfo() override;
   gpu::GpuFeatureStatus GetFeatureStatus(gpu::GpuFeatureType feature) override;
   bool GpuAccessAllowed(std::string* reason) override;
@@ -78,8 +85,12 @@ class CONTENT_EXPORT GpuDataManagerImpl : public GpuDataManager,
   void RemoveObserver(GpuDataManagerObserver* observer) override;
   void DisableHardwareAcceleration() override;
   bool HardwareAccelerationEnabled() override;
+  bool IsGpuRasterizationForUIEnabled() override;
   void AppendGpuCommandLine(base::CommandLine* command_line,
                             GpuProcessKind kind) override;
+  void BlocklistWebGLForTesting() override;
+  void SetSkiaGraphiteEnabledForTesting(bool enabled) override;
+  void SetInitializedForTesting(bool initialized) override;
 
   // Start a timer that occasionally reports UMA metrics. This is explicitly
   // started because unit tests may create and use a GpuDataManager but they do
@@ -88,42 +99,49 @@ class CONTENT_EXPORT GpuDataManagerImpl : public GpuDataManager,
   void StartUmaTimer();
 
   // Requests complete GPU info if it has not already been requested
-  void RequestDxdiagDx12VulkanGpuInfoIfNeeded(
-      GpuDataManagerImpl::GpuInfoRequest request,
-      bool delayed);
+  void RequestGpuInfoIfNeeded(GpuDataManagerImpl::GpuInfoRequest request,
+                              bool delayed);
 
   bool IsDx12VulkanVersionAvailable() const;
   bool IsGpuFeatureInfoAvailable() const;
 
   void UpdateGpuInfo(
       const gpu::GPUInfo& gpu_info,
-      const absl::optional<gpu::GPUInfo>& gpu_info_for_hardware_gpu);
-#if defined(OS_WIN)
-  void UpdateDxDiagNode(const gpu::DxDiagNode& dx_diagnostics);
-  void UpdateDx12Info(uint32_t d3d12_feature_level);
-  void UpdateVulkanInfo(uint32_t vulkan_version);
+      const std::optional<gpu::GPUInfo>& gpu_info_for_hardware_gpu);
+#if BUILDFLAG(IS_WIN)
+  void UpdateDirectXInfo(uint32_t d3d12_feature_level,
+                         uint32_t directml_feature_level);
   void UpdateDevicePerfInfo(const gpu::DevicePerfInfo& device_perf_info);
   void UpdateOverlayInfo(const gpu::OverlayInfo& overlay_info);
-  void UpdateHDRStatus(bool hdr_enabled);
-  void UpdateDxDiagNodeRequestStatus(bool request_continues);
-  void UpdateDx12RequestStatus(bool request_continues);
-  void UpdateVulkanRequestStatus(bool request_continues);
-  bool Dx12Requested() const;
-  bool VulkanRequested() const;
+  void UpdateDXGIInfo(gfx::mojom::DXGIInfoPtr dxgi_info);
+  void UpdateDirectXRequestStatus(bool request_continues);
+  bool DirectXRequested() const;
+  void TerminateInfoCollectionGpuProcess();
+
+  // Information to Get/Set the LUID that the GPU Process should be launched on.
+  // Predominantly used by XR, so that we can ensure the GL context is created
+  // on the GPU that the headset is actually plugged into.
+  void SetUseAdapterLuid(const CHROME_LUID& luid);
+  void ClearUseAdapterLuid();
+  std::optional<CHROME_LUID> GetUseAdapterLuid() const;
+#endif
   // Called from BrowserMainLoop::PostCreateThreads().
   // TODO(content/browser/gpu/OWNERS): This should probably use a
   // BrowserMainParts override instead.
   void PostCreateThreads();
-  void TerminateInfoCollectionGpuProcess();
-#endif
   void UpdateDawnInfo(const std::vector<std::string>& dawn_info_list);
 
   // Update the GPU feature info. This updates the blocklist and enabled status
   // of GPU rasterization. In the future this will be used for more features.
   void UpdateGpuFeatureInfo(const gpu::GpuFeatureInfo& gpu_feature_info,
-                            const absl::optional<gpu::GpuFeatureInfo>&
+                            const std::optional<gpu::GpuFeatureInfo>&
                                 gpu_feature_info_for_hardware_gpu);
   void UpdateGpuExtraInfo(const gfx::GpuExtraInfo& gpu_extra_info);
+  void UpdateMojoMediaVideoDecoderCapabilities(
+      const media::SupportedVideoDecoderConfigs& configs);
+  void UpdateMojoMediaVideoEncoderCapabilities(
+      const media::VideoEncodeAccelerator::SupportedProfiles&
+          supported_profiles);
 
   gpu::GpuFeatureInfo GetGpuFeatureInfo() const;
 
@@ -153,23 +171,22 @@ class CONTENT_EXPORT GpuDataManagerImpl : public GpuDataManager,
                      const std::string& header,
                      const std::string& message);
 
-  void ProcessCrashed(base::TerminationStatus exit_code);
+  void ProcessCrashed();
 
-  // Returns a new copy of the ListValue.
-  std::unique_ptr<base::ListValue> GetLogMessages() const;
-
-  // Called when switching GPUs.
-  void HandleGpuSwitch();
+  // Returns a base::ListValue with the log messages.
+  base::ListValue GetLogMessages() const;
 
   // Maintenance of domains requiring explicit user permission before
-  // using client-facing 3D APIs (WebGL, Pepper 3D), either because
-  // the domain has caused the GPU to reset, or because too many GPU
-  // resets have been observed globally recently, and system stability
-  // might be compromised.
+  // using client-facing 3D APIs (WebGL), either because the domain has caused
+  // the GPU to reset, or because too many GPU resets have been observed
+  // globally recently, and system stability might be compromised. A set of URLs
+  // is passed because in the situation where the GPU process crashes, the
+  // implementation needs to know that these URLs all came from the same crash.
   //
-  // The given URL may be a partial URL (including at least the host)
-  // or a full URL to a page.
-  void BlockDomainFrom3DAPIs(const GURL& url, gpu::DomainGuilt guilt);
+  // In the set, each URL may be a partial URL (including at least the
+  // host) or a full URL to a page.
+  void BlockDomainsFrom3DAPIs(const std::set<GURL>& urls,
+                              gpu::DomainGuilt guilt);
   bool Are3DAPIsBlocked(const GURL& top_origin_url,
                         ThreeDAPIType requester);
   void UnblockDomainFrom3DAPIs(const GURL& url);
@@ -180,11 +197,15 @@ class CONTENT_EXPORT GpuDataManagerImpl : public GpuDataManager,
   // Return mode describing what the GPU process will be launched to run.
   gpu::GpuMode GetGpuMode() const;
 
-  // Called when GPU process initialization failed or the GPU process has
-  // crashed repeatedly. This will try to disable hardware acceleration and then
-  // SwiftShader WebGL. It will also crash the browser process as a last resort
-  // on Android and Chrome OS.
+  // Called when GPU process initialization failed. This will try to disable
+  // hardware acceleration and then SwiftShader WebGL. It will also crash the
+  // browser process as a last resort on Android and Chrome OS.
   void FallBackToNextGpuMode();
+
+  // Called when the GPU process has crashed repeatedly. Will try other gpu
+  // modes (like FallBackToNextGpuMode) but may skip software acceleration based
+  // on features.
+  void FallBackToNextGpuModeDueToCrash();
 
   // Check if there is at least one fallback option available.
   bool CanFallback() const;
@@ -199,9 +220,13 @@ class CONTENT_EXPORT GpuDataManagerImpl : public GpuDataManager,
 
   // DisplayObserver overrides.
   void OnDisplayAdded(const display::Display& new_display) override;
-  void OnDisplayRemoved(const display::Display& old_display) override;
+  void OnDisplaysRemoved(const display::Displays& removed_displays) override;
   void OnDisplayMetricsChanged(const display::Display& display,
                                uint32_t changed_metrics) override;
+
+#if BUILDFLAG(IS_LINUX)
+  bool IsGpuMemoryBufferNV12Supported();
+#endif  // BUILDFLAG(IS_LINUX)
 
   // Binds a new Mojo receiver to handle requests from a renderer.
   static void BindReceiver(
@@ -218,8 +243,6 @@ class CONTENT_EXPORT GpuDataManagerImpl : public GpuDataManager,
   mutable base::Lock lock_;
   std::unique_ptr<GpuDataManagerImplPrivate> private_ GUARDED_BY(lock_)
       PT_GUARDED_BY(lock_);
-
-  DISALLOW_COPY_AND_ASSIGN(GpuDataManagerImpl);
 };
 
 }  // namespace content

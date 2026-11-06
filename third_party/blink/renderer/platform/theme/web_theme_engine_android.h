@@ -1,30 +1,20 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_THEME_WEB_THEME_ENGINE_ANDROID_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_THEME_WEB_THEME_ENGINE_ANDROID_H_
 
-#include "third_party/blink/public/platform/web_theme_engine.h"
+#include "third_party/blink/renderer/platform/theme/web_theme_engine_default.h"
 
 namespace blink {
 
-class WebThemeEngineAndroid : public blink::WebThemeEngine {
+class WebThemeEngineAndroid : public WebThemeEngineDefault {
  public:
-  // WebThemeEngine methods:
   ~WebThemeEngineAndroid() override;
   gfx::Size GetSize(blink::WebThemeEngine::Part) override;
   void GetOverlayScrollbarStyle(
       blink::WebThemeEngine::ScrollbarStyle*) override;
-  void Paint(cc::PaintCanvas* canvas,
-             blink::WebThemeEngine::Part part,
-             blink::WebThemeEngine::State state,
-             const gfx::Rect& rect,
-             const blink::WebThemeEngine::ExtraParams* extra_params,
-             blink::mojom::ColorScheme color_scheme,
-             const absl::optional<SkColor>& accent_color) override;
-  blink::ForcedColors GetForcedColors() const override;
-  void SetForcedColors(const blink::ForcedColors forced_colors) override;
 };
 
 }  // namespace blink

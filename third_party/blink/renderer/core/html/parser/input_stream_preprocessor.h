@@ -28,6 +28,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_PARSER_INPUT_STREAM_PREPROCESSOR_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_PARSER_INPUT_STREAM_PREPROCESSOR_H_
 
+#include "base/check_op.h"
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/renderer/platform/text/segmented_string.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
@@ -35,7 +37,7 @@ namespace blink {
 
 const LChar kEndOfFileMarker = 0;
 
-// https://html.spec.whatwg.org/#parse-error-unexpected-null-character
+// https://html.spec.whatwg.org/C/#parse-error-unexpected-null-character
 const UChar kReplacementCharacter = 0xFFFD;
 
 // http://www.whatwg.org/specs/web-apps/current-work/#preprocessing-the-input-stream
@@ -165,7 +167,7 @@ class InputStreamPreprocessor {
     return source.IsClosed() && source.length() == 1;
   }
 
-  Tokenizer* tokenizer_;
+  raw_ptr<Tokenizer, UnprotectedInRelease | DanglingUntriaged> tokenizer_;
   bool skip_next_new_line_ = false;
 };
 

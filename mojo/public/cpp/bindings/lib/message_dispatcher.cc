@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,7 +18,7 @@ MessageDispatcher::MessageDispatcher(MessageDispatcher&& other) {
 
 MessageDispatcher& MessageDispatcher::operator=(MessageDispatcher&& other) {
   std::swap(sink_, other.sink_);
-  validator_ = std::move(other.validator_);
+  std::swap(validator_, other.validator_);
   filter_ = std::move(other.filter_);
   return *this;
 }
@@ -35,27 +35,30 @@ bool MessageDispatcher::Accept(Message* message) {
 
   DCHECK(sink_);
   if (validator_) {
-    if (!validator_->Accept(message))
+    if (!validator_(message)) {
       return false;
+    }
   }
 
-  if (!filter_)
+  if (!filter_) {
     return sink_->Accept(message);
+  }
 
   base::WeakPtr<MessageDispatcher> weak_self = weak_factory_.GetWeakPtr();
-  if (!filter_->WillDispatch(message))
+  if (!filter_->WillDispatch(message)) {
     return false;
+  }
   bool result = sink_->Accept(message);
-  if (!weak_self)
+  if (!weak_self) {
     return result;
+  }
   filter_->DidDispatchOrReject(message, result);
   return result;
 }
 
-void MessageDispatcher::SetValidator(
-    std::unique_ptr<MessageReceiver> validator) {
+void MessageDispatcher::SetValidator(MessageValidatorFunc validator) {
   DCHECK(!validator_);
-  validator_ = std::move(validator);
+  validator_ = validator;
 }
 
 void MessageDispatcher::SetFilter(std::unique_ptr<MessageFilter> filter) {

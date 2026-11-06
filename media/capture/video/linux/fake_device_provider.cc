@@ -1,9 +1,10 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/capture/video/linux/fake_device_provider.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -28,26 +29,18 @@ void FakeDeviceProvider::GetDeviceIds(
 }
 
 std::string FakeDeviceProvider::GetDeviceModelId(const std::string& device_id) {
-  auto iter =
-      std::find_if(descriptors_.begin(), descriptors_.end(),
-                   [&device_id](const VideoCaptureDeviceDescriptor& val) {
-                     return val.device_id == device_id;
-                   });
-  if (iter == descriptors_.end())
-    CHECK(false) << "Unknown device_id " << device_id;
+  auto iter = std::ranges::find(descriptors_, device_id,
+                                &VideoCaptureDeviceDescriptor::device_id);
+  CHECK(iter != descriptors_.end()) << "Unknown device_id " << device_id;
 
   return iter->model_id;
 }
 
 std::string FakeDeviceProvider::GetDeviceDisplayName(
     const std::string& device_id) {
-  auto iter =
-      std::find_if(descriptors_.begin(), descriptors_.end(),
-                   [&device_id](const VideoCaptureDeviceDescriptor& val) {
-                     return val.device_id == device_id;
-                   });
-  if (iter == descriptors_.end())
-    CHECK(false) << "Unknown device_id " << device_id;
+  auto iter = std::ranges::find(descriptors_, device_id,
+                                &VideoCaptureDeviceDescriptor::device_id);
+  CHECK(iter != descriptors_.end()) << "Unknown device_id " << device_id;
 
   return iter->display_name();
 }

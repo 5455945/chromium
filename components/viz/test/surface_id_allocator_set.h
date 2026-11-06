@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,4 +33,4 @@ class SurfaceIdAllocatorSet {
 
 }  // namespace viz
 
-#endif  //  COMPONENTS_VIZ_TEST_SURFACE_ID_ALLOCATOR_SET_H_
+#endif  // COMPONENTS_VIZ_TEST_SURFACE_ID_ALLOCATOR_SET_H_

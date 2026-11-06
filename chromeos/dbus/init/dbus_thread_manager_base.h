@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <memory>
 
 #include "base/component_export.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 
 namespace base {
 class Thread;
@@ -41,6 +41,7 @@ class COMPONENT_EXPORT(CHROMEOS_DBUS_INIT) DBusThreadManagerBase {
   const DBusThreadManagerBase& operator=(const DBusThreadManagerBase&) = delete;
   virtual ~DBusThreadManagerBase();
 
+ private:
   // Whether to use real or fake dbus clients.
   const bool use_real_clients_;
 

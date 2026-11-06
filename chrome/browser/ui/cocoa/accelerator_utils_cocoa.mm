@@ -1,25 +1,23 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-#include "chrome/browser/ui/accelerator_utils.h"
 
 #import <Cocoa/Cocoa.h>
 
 #include "chrome/browser/global_keyboard_shortcuts_mac.h"
+#include "chrome/browser/ui/accelerator_utils.h"
 #include "chrome/browser/ui/cocoa/accelerators_cocoa.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "ui/base/accelerators/accelerator.h"
 #import "ui/base/accelerators/platform_accelerator_cocoa.h"
 #import "ui/events/keycodes/keyboard_code_conversion_mac.h"
 
-namespace chrome {
-
 bool IsChromeAccelerator(const ui::Accelerator& accelerator) {
-  NSUInteger modifiers = (accelerator.IsCtrlDown() ? NSControlKeyMask : 0) |
-                         (accelerator.IsCmdDown() ? NSCommandKeyMask : 0) |
-                         (accelerator.IsAltDown() ? NSAlternateKeyMask : 0) |
-                         (accelerator.IsShiftDown() ? NSShiftKeyMask : 0);
+  NSUInteger modifiers =
+      (accelerator.IsCtrlDown() ? NSEventModifierFlagControl : 0) |
+      (accelerator.IsCmdDown() ? NSEventModifierFlagCommand : 0) |
+      (accelerator.IsAltDown() ? NSEventModifierFlagOption : 0) |
+      (accelerator.IsShiftDown() ? NSEventModifierFlagShift : 0);
 
   // The |accelerator| passed in contains a Windows key code but no platform
   // accelerator info. The Accelerator list is the opposite: It has accelerators
@@ -31,14 +29,15 @@ bool IsChromeAccelerator(const ui::Accelerator& accelerator) {
   unichar character;
   int mac_keycode = ui::MacKeyCodeForWindowsKeyCode(
       accelerator.key_code(), modifiers, &shifted_character, &character);
-  if (mac_keycode == -1)
+  if (mac_keycode == -1) {
     return false;
+  }
 
   NSString* characters = [NSString stringWithFormat:@"%C", character];
   NSString* charactersIgnoringModifiers =
       [NSString stringWithFormat:@"%C", shifted_character];
 
-  NSEvent* event = [NSEvent keyEventWithType:NSKeyDown
+  NSEvent* event = [NSEvent keyEventWithType:NSEventTypeKeyDown
                                     location:NSZeroPoint
                                modifierFlags:modifiers
                                    timestamp:0
@@ -52,8 +51,7 @@ bool IsChromeAccelerator(const ui::Accelerator& accelerator) {
   return CommandForKeyEvent(event).found();
 }
 
-ui::AcceleratorProvider* AcceleratorProviderForBrowser(Browser* browser) {
+ui::AcceleratorProvider* AcceleratorProviderForBrowser(
+    BrowserWindowInterface* browser) {
   return BrowserView::GetBrowserViewForBrowser(browser);
 }
-
-}  // namespace chrome

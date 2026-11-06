@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,11 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
 #include "components/spellcheck/common/spellcheck.mojom.h"
+#include "components/spellcheck/common/spelling_marker.h"
 
 // A class used to interface between the Java class of the same name and the
 // android SpellCheckHost.  This class receives text to be spellchecked, sends
@@ -21,23 +22,33 @@
 class SpellCheckerSessionBridge {
  public:
   SpellCheckerSessionBridge();
+
+  SpellCheckerSessionBridge(const SpellCheckerSessionBridge&) = delete;
+  SpellCheckerSessionBridge& operator=(const SpellCheckerSessionBridge&) =
+      delete;
+
   ~SpellCheckerSessionBridge();
 
   using RequestTextCheckCallback =
       spellcheck::mojom::SpellCheckHost::RequestTextCheckCallback;
 
-  // Receives text to be checked and sends it to Java to be spellchecked.
-  void RequestTextCheck(const std::u16string& text,
-                        RequestTextCheckCallback callback);
+  // Receives text to be checked and sends it to Java to be
+  // spellchecked.
+  void RequestTextCheck(
+      const std::u16string& text,
+      const std::vector<spellcheck::SpellingMarker>& spelling_markers,
+      RequestTextCheckCallback callback);
 
   // Receives information from Java side about the typos in a given string
   // of text, processes these and sends them to the renderer.
   void ProcessSpellCheckResults(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jobj,
-      const base::android::JavaParamRef<jintArray>& offset_array,
-      const base::android::JavaParamRef<jintArray>& length_array,
-      const base::android::JavaParamRef<jobjectArray>& suggestions_array);
+      const base::android::JavaRef<jintArray>& offset_array,
+      const base::android::JavaRef<jintArray>& length_array,
+      const base::android::JavaRef<jobjectArray>& suggestions_array,
+      const base::android::JavaRef<jintArray>& spellcheck_result_decorations,
+      const base::android::JavaRef<jbooleanArray>&
+          hide_suggestion_menu_booleans_array);
 
   // Sets the handle to the Java SpellCheckerSessionBridge object to null,
   // marking the Java object for garbage collection.
@@ -46,15 +57,19 @@ class SpellCheckerSessionBridge {
  private:
   class SpellingRequest {
    public:
-    SpellingRequest(const std::u16string& text,
-                    RequestTextCheckCallback callback);
+    SpellingRequest(
+        const std::u16string& text,
+        const std::vector<spellcheck::SpellingMarker>& spelling_markers,
+        RequestTextCheckCallback callback);
+
+    SpellingRequest(const SpellingRequest&) = delete;
+    SpellingRequest& operator=(const SpellingRequest&) = delete;
+
     ~SpellingRequest();
 
     std::u16string text_;
+    std::vector<spellcheck::SpellingMarker> spelling_markers_;
     RequestTextCheckCallback callback_;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(SpellingRequest);
   };
 
   std::unique_ptr<SpellingRequest> active_request_;
@@ -62,9 +77,21 @@ class SpellCheckerSessionBridge {
 
   base::android::ScopedJavaGlobalRef<jobject> java_object_;
   bool java_object_initialization_failed_;
-  bool active_session_;
-
-  DISALLOW_COPY_AND_ASSIGN(SpellCheckerSessionBridge);
 };
+
+base::android::ScopedJavaLocalRef<jobject> ToJavaSpellingMarker(
+    JNIEnv* env,
+    const spellcheck::SpellingMarker& spelling_marker);
+
+namespace jni_zero {
+
+template <>
+inline ScopedJavaLocalRef<jobject> ToJniType<spellcheck::SpellingMarker>(
+    JNIEnv* env,
+    const spellcheck::SpellingMarker& input) {
+  return ToJavaSpellingMarker(env, input);
+}
+
+}  // namespace jni_zero
 
 #endif  // COMPONENTS_SPELLCHECK_BROWSER_SPELLCHECKER_SESSION_BRIDGE_ANDROID_H_

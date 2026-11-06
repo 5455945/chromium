@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,7 +21,8 @@ scoped_refptr<PasswordProtectionRequestContent> CreateDummyRequest(
           PasswordType::PASSWORD_TYPE_UNKNOWN,
           std::vector<password_manager::MatchingReusedCredential>(),
           LoginReputationClientRequest::UNFAMILIAR_LOGIN_PAGE, true,
-          password_protection_service.get(), 0);
+          password_protection_service.get(), 0,
+          /*otp_phishing_verdict_callback=*/std::nullopt);
   request->set_request_outcome(RequestOutcome::UNKNOWN);
   return request;
 }

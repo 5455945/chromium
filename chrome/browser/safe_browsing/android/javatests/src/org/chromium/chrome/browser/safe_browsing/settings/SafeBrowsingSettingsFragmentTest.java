@@ -1,50 +1,59 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.safe_browsing.settings;
 
+import static androidx.test.espresso.Espresso.onIdle;
 import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.action.ViewActions.click;
 import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
+import static androidx.test.espresso.matcher.RootMatchers.isDialog;
 import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
+import androidx.preference.Preference;
 import androidx.test.filters.SmallTest;
 
+import org.junit.After;
 import org.junit.Assert;
-import org.junit.Before;
+import org.junit.Assume;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
+import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.build.BuildConfig;
 import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncher;
+import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncherFactory;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
-import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingBridge;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingState;
-import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
+import org.chromium.chrome.browser.settings.SettingsInTab;
+import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+import org.chromium.chrome.browser.settings.SettingsTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.components.browser_ui.settings.SettingsLauncher;
-import org.chromium.components.browser_ui.settings.TextMessagePreference;
+import org.chromium.components.browser_ui.settings.SettingsNavigation;
 import org.chromium.components.browser_ui.widget.RadioButtonWithDescription;
 import org.chromium.components.browser_ui.widget.RadioButtonWithDescriptionAndAuxButton;
 import org.chromium.components.policy.test.annotations.Policies;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
 
-/**
- * Tests for {@link SafeBrowsingSettingsFragment}.
- */
+/** Tests for {@link SafeBrowsingSettingsFragment}. */
 @RunWith(ChromeJUnit4ClassRunner.class)
-// clang-format off
+@Batch(Batch.PER_CLASS)
 public class SafeBrowsingSettingsFragmentTest {
-    // clang-format on
     private static final String ASSERT_SAFE_BROWSING_STATE_RADIO_BUTTON_GROUP =
             "Incorrect Safe Browsing state in the radio button group.";
     private static final String ASSERT_RADIO_BUTTON_CHECKED =
@@ -52,128 +61,185 @@ public class SafeBrowsingSettingsFragmentTest {
     private static final String ASSERT_SAFE_BROWSING_STATE_NATIVE =
             "Incorrect Safe Browsing state from native.";
 
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+
     @Rule
-    public SettingsActivityTestRule<SafeBrowsingSettingsFragment> mTestRule =
-            new SettingsActivityTestRule<>(SafeBrowsingSettingsFragment.class);
+    public SettingsTestRule<SafeBrowsingSettingsFragment> mTestRule =
+            new SettingsTestRule<>(SafeBrowsingSettingsFragment.class);
 
-    @Mock
-    private SettingsLauncher mSettingsLauncher;
+    @Mock private SettingsNavigation mSettingsNavigation;
 
-    @Mock
-    private HelpAndFeedbackLauncher mHelpAndFeedbackLauncher;
+    @Mock private HelpAndFeedbackLauncher mHelpAndFeedbackLauncher;
 
     private SafeBrowsingSettingsFragment mSafeBrowsingSettingsFragment;
     private RadioButtonGroupSafeBrowsingPreference mSafeBrowsingPreference;
-    private TextMessagePreference mManagedTextPreference;
+    private Preference mManagedDisclaimerText;
 
-    @Before
-    public void setUp() {
-        MockitoAnnotations.initMocks(this);
+    @After
+    public void tearDown() {
+        if (ProfileManager.isInitialized()) {
+            setSafeBrowsingState(SafeBrowsingState.STANDARD_PROTECTION);
+        }
     }
 
-    private void launchSettingsActivity() {
+    private void startSettings() {
         mTestRule.startSettingsActivity();
         mSafeBrowsingSettingsFragment = mTestRule.getFragment();
-        mSafeBrowsingPreference = mSafeBrowsingSettingsFragment.findPreference(
-                SafeBrowsingSettingsFragment.PREF_SAFE_BROWSING);
-        mManagedTextPreference = mSafeBrowsingSettingsFragment.findPreference(
-                SafeBrowsingSettingsFragment.PREF_TEXT_MANAGED);
+        mSafeBrowsingPreference =
+                mSafeBrowsingSettingsFragment.findPreference(
+                        SafeBrowsingSettingsFragment.PREF_SAFE_BROWSING);
+        mManagedDisclaimerText =
+                mSafeBrowsingSettingsFragment.findPreference(
+                        SafeBrowsingSettingsFragment.PREF_MANAGED_DISCLAIMER_TEXT);
         Assert.assertNotNull(
                 "Safe Browsing preference should not be null.", mSafeBrowsingPreference);
-        Assert.assertNotNull("Text managed preference should not be null.", mManagedTextPreference);
+        Assert.assertNotNull(
+                "Managed disclaimer text preference should not be null.", mManagedDisclaimerText);
+    }
+
+    private void setSafeBrowsingState(@SafeBrowsingState int state) {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    new SafeBrowsingBridge(ProfileManager.getLastUsedRegularProfile())
+                            .setSafeBrowsingState(state);
+                });
+    }
+
+    @SafeBrowsingState
+    private int getSafeBrowsingState() {
+        return ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    return new SafeBrowsingBridge(ProfileManager.getLastUsedRegularProfile())
+                            .getSafeBrowsingState();
+                });
+    }
+
+    private boolean isSafeBrowsingManaged() {
+        return ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    return new SafeBrowsingBridge(ProfileManager.getLastUsedRegularProfile())
+                            .isSafeBrowsingManaged();
+                });
     }
 
     @Test
     @SmallTest
     @Feature({"SafeBrowsing"})
     public void testOnStartup() {
-        launchSettingsActivity();
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            @SafeBrowsingState
-            int currentState = SafeBrowsingBridge.getSafeBrowsingState();
-            boolean enhanced_protection_checked =
-                    currentState == SafeBrowsingState.ENHANCED_PROTECTION;
-            boolean standard_protection_checked =
-                    currentState == SafeBrowsingState.STANDARD_PROTECTION;
-            boolean no_protection_checked = currentState == SafeBrowsingState.NO_SAFE_BROWSING;
-            Assert.assertEquals(ASSERT_RADIO_BUTTON_CHECKED, enhanced_protection_checked,
-                    getEnhancedProtectionButton().isChecked());
-            Assert.assertEquals(ASSERT_RADIO_BUTTON_CHECKED, standard_protection_checked,
-                    getStandardProtectionButton().isChecked());
-            Assert.assertEquals(ASSERT_RADIO_BUTTON_CHECKED, no_protection_checked,
-                    getNoProtectionButton().isChecked());
-            Assert.assertFalse(mManagedTextPreference.isVisible());
-        });
+        startSettings();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    @SafeBrowsingState int currentState = getSafeBrowsingState();
+                    boolean enhancedProtectionChecked =
+                            currentState == SafeBrowsingState.ENHANCED_PROTECTION;
+                    boolean standardProtectionChecked =
+                            currentState == SafeBrowsingState.STANDARD_PROTECTION;
+                    boolean noProtectionChecked =
+                            currentState == SafeBrowsingState.NO_SAFE_BROWSING;
+                    Assert.assertEquals(
+                            ASSERT_RADIO_BUTTON_CHECKED,
+                            enhancedProtectionChecked,
+                            getEnhancedProtectionButton().isChecked());
+                    Assert.assertEquals(
+                            ASSERT_RADIO_BUTTON_CHECKED,
+                            standardProtectionChecked,
+                            getStandardProtectionButton().isChecked());
+                    Assert.assertEquals(
+                            ASSERT_RADIO_BUTTON_CHECKED,
+                            noProtectionChecked,
+                            getNoProtectionButton().isChecked());
+                    Assert.assertFalse(mManagedDisclaimerText.isVisible());
+                });
     }
 
     @Test
     @SmallTest
     @Feature({"SafeBrowsing"})
     public void testCheckRadioButtons() {
-        launchSettingsActivity();
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            Assert.assertFalse(mManagedTextPreference.isVisible());
-            // Click the Enhanced Protection button.
-            getEnhancedProtectionButton().onClick(null);
-            Assert.assertEquals(ASSERT_SAFE_BROWSING_STATE_RADIO_BUTTON_GROUP,
-                    SafeBrowsingState.ENHANCED_PROTECTION, getSafeBrowsingState());
-            Assert.assertTrue(
-                    ASSERT_RADIO_BUTTON_CHECKED, getEnhancedProtectionButton().isChecked());
-            Assert.assertFalse(
-                    ASSERT_RADIO_BUTTON_CHECKED, getStandardProtectionButton().isChecked());
-            Assert.assertFalse(ASSERT_RADIO_BUTTON_CHECKED, getNoProtectionButton().isChecked());
-            Assert.assertEquals(ASSERT_SAFE_BROWSING_STATE_NATIVE,
-                    SafeBrowsingState.ENHANCED_PROTECTION,
-                    SafeBrowsingBridge.getSafeBrowsingState());
+        startSettings();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    Assert.assertFalse(mManagedDisclaimerText.isVisible());
+                    // Click the Enhanced Protection button.
+                    getEnhancedProtectionButton().onClick(null);
+                    Assert.assertEquals(
+                            ASSERT_SAFE_BROWSING_STATE_RADIO_BUTTON_GROUP,
+                            SafeBrowsingState.ENHANCED_PROTECTION,
+                            getSafeBrowsingUiState());
+                    Assert.assertTrue(
+                            ASSERT_RADIO_BUTTON_CHECKED, getEnhancedProtectionButton().isChecked());
+                    Assert.assertFalse(
+                            ASSERT_RADIO_BUTTON_CHECKED, getStandardProtectionButton().isChecked());
+                    Assert.assertFalse(
+                            ASSERT_RADIO_BUTTON_CHECKED, getNoProtectionButton().isChecked());
+                    Assert.assertEquals(
+                            ASSERT_SAFE_BROWSING_STATE_NATIVE,
+                            SafeBrowsingState.ENHANCED_PROTECTION,
+                            getSafeBrowsingState());
 
-            // Click the Standard Protection button.
-            getStandardProtectionButton().onClick(null);
-            Assert.assertEquals(ASSERT_SAFE_BROWSING_STATE_RADIO_BUTTON_GROUP,
-                    SafeBrowsingState.STANDARD_PROTECTION, getSafeBrowsingState());
-            Assert.assertFalse(
-                    ASSERT_RADIO_BUTTON_CHECKED, getEnhancedProtectionButton().isChecked());
-            Assert.assertTrue(
-                    ASSERT_RADIO_BUTTON_CHECKED, getStandardProtectionButton().isChecked());
-            Assert.assertFalse(ASSERT_RADIO_BUTTON_CHECKED, getNoProtectionButton().isChecked());
-            Assert.assertEquals(ASSERT_SAFE_BROWSING_STATE_NATIVE,
-                    SafeBrowsingState.STANDARD_PROTECTION,
-                    SafeBrowsingBridge.getSafeBrowsingState());
-        });
+                    // Click the Standard Protection button.
+                    getStandardProtectionButton().onClick(null);
+                    Assert.assertEquals(
+                            ASSERT_SAFE_BROWSING_STATE_RADIO_BUTTON_GROUP,
+                            SafeBrowsingState.STANDARD_PROTECTION,
+                            getSafeBrowsingUiState());
+                    Assert.assertFalse(
+                            ASSERT_RADIO_BUTTON_CHECKED, getEnhancedProtectionButton().isChecked());
+                    Assert.assertTrue(
+                            ASSERT_RADIO_BUTTON_CHECKED, getStandardProtectionButton().isChecked());
+                    Assert.assertFalse(
+                            ASSERT_RADIO_BUTTON_CHECKED, getNoProtectionButton().isChecked());
+                    Assert.assertEquals(
+                            ASSERT_SAFE_BROWSING_STATE_NATIVE,
+                            SafeBrowsingState.STANDARD_PROTECTION,
+                            getSafeBrowsingState());
+                });
     }
 
     @Test
     @SmallTest
     @Feature({"SafeBrowsing"})
     public void testCheckNoProtectionRadioButtonsCancel() {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
-            SafeBrowsingBridge.setSafeBrowsingState(SafeBrowsingState.ENHANCED_PROTECTION);
-        });
-        launchSettingsActivity();
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            getNoProtectionButton().onClick(null);
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
+                    setSafeBrowsingState(SafeBrowsingState.ENHANCED_PROTECTION);
+                });
+        startSettings();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    getNoProtectionButton().onClick(null);
 
-            // Checked button hasn't changed yet, because confirmation is pending.
-            Assert.assertTrue(
-                    ASSERT_RADIO_BUTTON_CHECKED, getEnhancedProtectionButton().isChecked());
-            Assert.assertFalse(ASSERT_RADIO_BUTTON_CHECKED, getNoProtectionButton().isChecked());
-        });
+                    // Checked button hasn't changed yet, because confirmation is pending.
+                    Assert.assertTrue(
+                            ASSERT_RADIO_BUTTON_CHECKED, getEnhancedProtectionButton().isChecked());
+                    Assert.assertFalse(
+                            ASSERT_RADIO_BUTTON_CHECKED, getNoProtectionButton().isChecked());
+                });
 
         // The dialog is displayed.
         onView(withText(R.string.safe_browsing_no_protection_confirmation_dialog_title))
+                .inRoot(isDialog())
                 .check(matches(isDisplayed()));
+
+        // Wait for the UI thread to become idle.
+        onIdle();
+
         // Don't confirm.
         onView(withText(R.string.cancel)).perform(click());
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            // It should stay in enhanced protection mode.
-            Assert.assertTrue(
-                    ASSERT_RADIO_BUTTON_CHECKED, getEnhancedProtectionButton().isChecked());
-            Assert.assertFalse(ASSERT_RADIO_BUTTON_CHECKED, getNoProtectionButton().isChecked());
-            Assert.assertEquals(ASSERT_SAFE_BROWSING_STATE_NATIVE,
-                    SafeBrowsingState.ENHANCED_PROTECTION,
-                    SafeBrowsingBridge.getSafeBrowsingState());
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    // It should stay in enhanced protection mode.
+                    Assert.assertTrue(
+                            ASSERT_RADIO_BUTTON_CHECKED, getEnhancedProtectionButton().isChecked());
+                    Assert.assertFalse(
+                            ASSERT_RADIO_BUTTON_CHECKED, getNoProtectionButton().isChecked());
+                    Assert.assertEquals(
+                            ASSERT_SAFE_BROWSING_STATE_NATIVE,
+                            SafeBrowsingState.ENHANCED_PROTECTION,
+                            getSafeBrowsingState());
+                });
 
         // The confirmation dialog should be gone.
         onView(withText(R.string.safe_browsing_no_protection_confirmation_dialog_title))
@@ -184,34 +250,42 @@ public class SafeBrowsingSettingsFragmentTest {
     @SmallTest
     @Feature({"SafeBrowsing"})
     public void testCheckNoProtectionRadioButtonsConfirm() {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
-            SafeBrowsingBridge.setSafeBrowsingState(SafeBrowsingState.ENHANCED_PROTECTION);
-        });
-        launchSettingsActivity();
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            getNoProtectionButton().onClick(null);
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
+                    setSafeBrowsingState(SafeBrowsingState.ENHANCED_PROTECTION);
+                });
+        startSettings();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    getNoProtectionButton().onClick(null);
 
-            // Checked button is not changed yet, because confirmation is pending.
-            Assert.assertTrue(
-                    ASSERT_RADIO_BUTTON_CHECKED, getEnhancedProtectionButton().isChecked());
-            Assert.assertFalse(ASSERT_RADIO_BUTTON_CHECKED, getNoProtectionButton().isChecked());
-        });
+                    // Checked button is not changed yet, because confirmation is pending.
+                    Assert.assertTrue(
+                            ASSERT_RADIO_BUTTON_CHECKED, getEnhancedProtectionButton().isChecked());
+                    Assert.assertFalse(
+                            ASSERT_RADIO_BUTTON_CHECKED, getNoProtectionButton().isChecked());
+                });
 
         // The dialog is displayed.
         onView(withText(R.string.safe_browsing_no_protection_confirmation_dialog_title))
+                .inRoot(isDialog())
                 .check(matches(isDisplayed()));
         // Confirm.
         onView(withText(R.string.safe_browsing_no_protection_confirmation_dialog_confirm))
                 .perform(click());
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            Assert.assertFalse(
-                    ASSERT_RADIO_BUTTON_CHECKED, getEnhancedProtectionButton().isChecked());
-            Assert.assertTrue(ASSERT_RADIO_BUTTON_CHECKED, getNoProtectionButton().isChecked());
-            Assert.assertEquals(ASSERT_SAFE_BROWSING_STATE_NATIVE,
-                    SafeBrowsingState.NO_SAFE_BROWSING, SafeBrowsingBridge.getSafeBrowsingState());
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    Assert.assertFalse(
+                            ASSERT_RADIO_BUTTON_CHECKED, getEnhancedProtectionButton().isChecked());
+                    Assert.assertTrue(
+                            ASSERT_RADIO_BUTTON_CHECKED, getNoProtectionButton().isChecked());
+                    Assert.assertEquals(
+                            ASSERT_SAFE_BROWSING_STATE_NATIVE,
+                            SafeBrowsingState.NO_SAFE_BROWSING,
+                            getSafeBrowsingState());
+                });
 
         // The confirmation dialog should be gone.
         onView(withText(R.string.safe_browsing_no_protection_confirmation_dialog_title))
@@ -222,12 +296,16 @@ public class SafeBrowsingSettingsFragmentTest {
     @SmallTest
     @Feature({"SafeBrowsing"})
     public void testCheckNoProtectionConfirmationIfAlreadyInNoProtectionMode() {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
-            SafeBrowsingBridge.setSafeBrowsingState(SafeBrowsingState.NO_SAFE_BROWSING);
-        });
-        launchSettingsActivity();
-        TestThreadUtils.runOnUiThreadBlocking(() -> { getNoProtectionButton().onClick(null); });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
+                    setSafeBrowsingState(SafeBrowsingState.NO_SAFE_BROWSING);
+                });
+        startSettings();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    getNoProtectionButton().onClick(null);
+                });
 
         // Since it is already in no protection mode, the dialog shouldn't be shown.
         onView(withText(R.string.safe_browsing_no_protection_confirmation_dialog_title))
@@ -238,114 +316,228 @@ public class SafeBrowsingSettingsFragmentTest {
     @SmallTest
     @Feature({"SafeBrowsing"})
     public void testEnhancedProtectionAuxButtonClicked() {
-        launchSettingsActivity();
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mSafeBrowsingSettingsFragment.setSettingsLauncher(mSettingsLauncher);
-            getEnhancedProtectionButton().getAuxButtonForTests().performClick();
-            Mockito.verify(mSettingsLauncher)
-                    .launchSettingsActivity(mSafeBrowsingSettingsFragment.getContext(),
-                            EnhancedProtectionSettingsFragment.class);
-        });
+        startSettings();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    SettingsNavigationFactory.setInstanceForTesting(mSettingsNavigation);
+                    getEnhancedProtectionButton().getAuxButtonForTests().performClick();
+                    Mockito.verify(mSettingsNavigation)
+                            .startSettings(
+                                    mSafeBrowsingSettingsFragment.getActivity(),
+                                    EnhancedProtectionSettingsFragment.class,
+                                    null,
+                                    true);
+                });
     }
 
     @Test
     @SmallTest
     @Feature({"SafeBrowsing"})
     public void testStandardProtectionAuxButtonClicked() {
-        launchSettingsActivity();
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mSafeBrowsingSettingsFragment.setSettingsLauncher(mSettingsLauncher);
-            getStandardProtectionButton().getAuxButtonForTests().performClick();
-            Mockito.verify(mSettingsLauncher)
-                    .launchSettingsActivity(mSafeBrowsingSettingsFragment.getContext(),
-                            StandardProtectionSettingsFragment.class);
-        });
+        startSettings();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    SettingsNavigationFactory.setInstanceForTesting(mSettingsNavigation);
+                    getStandardProtectionButton().getAuxButtonForTests().performClick();
+                    Mockito.verify(mSettingsNavigation)
+                            .startSettings(
+                                    mSafeBrowsingSettingsFragment.getActivity(),
+                                    StandardProtectionSettingsFragment.class,
+                                    null,
+                                    true);
+                });
     }
 
     @Test
     @SmallTest
     @Feature({"SafeBrowsing"})
-    @Policies.Add({ @Policies.Item(key = "SafeBrowsingEnabled", string = "true") })
+    @Policies.Add({@Policies.Item(key = "SafeBrowsingEnabled", string = "true")})
     public void testSafeBrowsingManaged() {
-        TestThreadUtils.runOnUiThreadBlocking(
-                () -> { ChromeBrowserInitializer.getInstance().handleSynchronousStartup(); });
-        launchSettingsActivity();
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            Assert.assertTrue(SafeBrowsingBridge.isSafeBrowsingManaged());
-            Assert.assertTrue(mManagedTextPreference.isVisible());
-            Assert.assertFalse(getEnhancedProtectionButton().isEnabled());
-            Assert.assertFalse(getStandardProtectionButton().isEnabled());
-            Assert.assertFalse(getNoProtectionButton().isEnabled());
-            Assert.assertEquals(SafeBrowsingState.STANDARD_PROTECTION, getSafeBrowsingState());
-            // To disclose information, aux buttons should be enabled under managed mode.
-            Assert.assertTrue(getEnhancedProtectionButton().getAuxButtonForTests().isEnabled());
-            Assert.assertTrue(getStandardProtectionButton().getAuxButtonForTests().isEnabled());
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
+                });
+        startSettings();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    Assert.assertTrue(isSafeBrowsingManaged());
+                    Assert.assertTrue(mManagedDisclaimerText.isVisible());
+                    Assert.assertFalse(getEnhancedProtectionButton().isEnabled());
+                    Assert.assertFalse(getStandardProtectionButton().isEnabled());
+                    Assert.assertFalse(getNoProtectionButton().isEnabled());
+                    Assert.assertEquals(
+                            SafeBrowsingState.STANDARD_PROTECTION, getSafeBrowsingUiState());
+                    // To disclose information, aux buttons should be enabled under managed mode.
+                    Assert.assertTrue(
+                            getEnhancedProtectionButton().getAuxButtonForTests().isEnabled());
+                    Assert.assertTrue(
+                            getStandardProtectionButton().getAuxButtonForTests().isEnabled());
+                });
     }
 
     @Test
     @SmallTest
     @Feature({"SafeBrowsing"})
-    @Policies.Add({ @Policies.Item(key = "SafeBrowsingProtectionLevel", string = "2") })
+    @Policies.Add({@Policies.Item(key = "SafeBrowsingProtectionLevel", string = "2")})
     public void testSafeBrowsingProtectionLevelManagedEnhanced() {
-        TestThreadUtils.runOnUiThreadBlocking(
-                () -> { ChromeBrowserInitializer.getInstance().handleSynchronousStartup(); });
-        launchSettingsActivity();
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            Assert.assertTrue(SafeBrowsingBridge.isSafeBrowsingManaged());
-            Assert.assertTrue(mManagedTextPreference.isVisible());
-            Assert.assertFalse(getEnhancedProtectionButton().isEnabled());
-            Assert.assertFalse(getStandardProtectionButton().isEnabled());
-            Assert.assertFalse(getNoProtectionButton().isEnabled());
-            Assert.assertEquals(SafeBrowsingState.ENHANCED_PROTECTION, getSafeBrowsingState());
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
+                });
+        startSettings();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    Assert.assertTrue(isSafeBrowsingManaged());
+                    Assert.assertTrue(mManagedDisclaimerText.isVisible());
+                    Assert.assertFalse(getEnhancedProtectionButton().isEnabled());
+                    Assert.assertFalse(getStandardProtectionButton().isEnabled());
+                    Assert.assertFalse(getNoProtectionButton().isEnabled());
+                    Assert.assertEquals(
+                            SafeBrowsingState.ENHANCED_PROTECTION, getSafeBrowsingUiState());
+                });
     }
 
     @Test
     @SmallTest
     @Feature({"SafeBrowsing"})
-    @Policies.Add({ @Policies.Item(key = "SafeBrowsingProtectionLevel", string = "1") })
+    @Policies.Add({@Policies.Item(key = "SafeBrowsingProtectionLevel", string = "1")})
     public void testSafeBrowsingProtectionLevelManagedStandard() {
-        TestThreadUtils.runOnUiThreadBlocking(
-                () -> { ChromeBrowserInitializer.getInstance().handleSynchronousStartup(); });
-        launchSettingsActivity();
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            Assert.assertTrue(SafeBrowsingBridge.isSafeBrowsingManaged());
-            Assert.assertEquals(SafeBrowsingState.STANDARD_PROTECTION, getSafeBrowsingState());
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
+                });
+        startSettings();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    Assert.assertTrue(isSafeBrowsingManaged());
+                    Assert.assertEquals(
+                            SafeBrowsingState.STANDARD_PROTECTION, getSafeBrowsingUiState());
+                });
     }
 
     @Test
     @SmallTest
     @Feature({"SafeBrowsing"})
-    @Policies.Add({ @Policies.Item(key = "SafeBrowsingProtectionLevel", string = "0") })
+    @Policies.Add({@Policies.Item(key = "SafeBrowsingProtectionLevel", string = "0")})
     public void testSafeBrowsingProtectionLevelManagedDisabled() {
-        TestThreadUtils.runOnUiThreadBlocking(
-                () -> { ChromeBrowserInitializer.getInstance().handleSynchronousStartup(); });
-        launchSettingsActivity();
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            Assert.assertTrue(SafeBrowsingBridge.isSafeBrowsingManaged());
-            Assert.assertEquals(SafeBrowsingState.NO_SAFE_BROWSING, getSafeBrowsingState());
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
+                });
+        startSettings();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    Assert.assertTrue(isSafeBrowsingManaged());
+                    Assert.assertEquals(
+                            SafeBrowsingState.NO_SAFE_BROWSING, getSafeBrowsingUiState());
+                });
     }
 
     @Test
     @SmallTest
     @Feature({"SafeBrowsing"})
     public void testHelpButtonClicked() {
-        launchSettingsActivity();
-        mSafeBrowsingSettingsFragment.setHelpAndFeedbackLauncher(mHelpAndFeedbackLauncher);
+        // Settings in a tab doesn't have a help button or menu.
+        Assume.assumeTrue(!SettingsInTab.shouldOpenSettingsInTab());
+
+        startSettings();
+        HelpAndFeedbackLauncherFactory.setInstanceForTesting(mHelpAndFeedbackLauncher);
         onView(withId(R.id.menu_id_targeted_help)).perform(click());
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            Mockito.verify(mHelpAndFeedbackLauncher)
-                    .show(mSafeBrowsingSettingsFragment.getActivity(),
-                            mSafeBrowsingSettingsFragment.getString(
-                                    R.string.help_context_safe_browsing),
-                            Profile.getLastUsedRegularProfile(), null);
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    Mockito.verify(mHelpAndFeedbackLauncher)
+                            .show(
+                                    mSafeBrowsingSettingsFragment.getActivity(),
+                                    mSafeBrowsingSettingsFragment.getString(
+                                            R.string.help_context_safe_browsing),
+                                    null);
+                });
     }
 
-    private @SafeBrowsingState int getSafeBrowsingState() {
+    @Test
+    @SmallTest
+    @Feature({"SafeBrowsing"})
+    @DisableFeatures({ChromeFeatureList.HASH_PREFIX_REAL_TIME_LOOKUPS})
+    public void testStandardProtectionDescriptionWithoutProxy() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
+                });
+        startSettings();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    String standardProtectionDescription =
+                            mSafeBrowsingSettingsFragment
+                                    .getContext()
+                                    .getString(R.string.safe_browsing_standard_protection_summary);
+                    Assert.assertEquals(
+                            standardProtectionDescription,
+                            mSafeBrowsingPreference
+                                    .getStandardProtectionButtonForTesting()
+                                    .getDescriptionText());
+                });
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"SafeBrowsing"})
+    @EnableFeatures({ChromeFeatureList.HASH_PREFIX_REAL_TIME_LOOKUPS})
+    public void testStandardProtectionDescriptionWithProxy() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
+                });
+        startSettings();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    String standardProtectionDescription =
+                            mSafeBrowsingSettingsFragment
+                                    .getContext()
+                                    .getString(
+                                            R.string
+                                                    .safe_browsing_standard_protection_summary_proxy);
+                    if (!BuildConfig.IS_CHROME_BRANDED) {
+                        // HPRT is disabled on Chromium build.
+                        standardProtectionDescription =
+                                mSafeBrowsingSettingsFragment
+                                        .getContext()
+                                        .getString(
+                                                R.string.safe_browsing_standard_protection_summary);
+                    }
+                    Assert.assertEquals(
+                            standardProtectionDescription,
+                            mSafeBrowsingPreference
+                                    .getStandardProtectionButtonForTesting()
+                                    .getDescriptionText());
+                });
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"SafeBrowsing"})
+    public void testEnhancedProtectionDescriptionWithAiUpdate() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
+                });
+        startSettings();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    String enhancedProtectionDescription =
+                            mSafeBrowsingSettingsFragment
+                                    .getContext()
+                                    .getString(
+                                            R.string
+                                                    .safe_browsing_enhanced_protection_summary_updated);
+                    Assert.assertEquals(
+                            enhancedProtectionDescription,
+                            mSafeBrowsingPreference
+                                    .getEnhancedProtectionButtonForTesting()
+                                    .getDescriptionText());
+                });
+    }
+
+    private @SafeBrowsingState int getSafeBrowsingUiState() {
         return mSafeBrowsingPreference.getSafeBrowsingStateForTesting();
     }
 

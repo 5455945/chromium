@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,13 @@
 
 #include <memory>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "media/base/android/android_util.h"
+#include "base/functional/callback.h"
 #include "media/base/media_export.h"
+#include "third_party/jni_zero/jni_zero.h"
 
 namespace media {
+
+class CdmContextRef;
 
 // A class that provides MediaCrypto from MediaDrm to support decrypting and
 // decoding of encrypted streams, typically by MediaCodec-based decoders.
@@ -23,6 +24,10 @@ namespace media {
 class MEDIA_EXPORT MediaCryptoContext {
  public:
   MediaCryptoContext() = default;
+
+  MediaCryptoContext(const MediaCryptoContext&) = delete;
+  MediaCryptoContext& operator=(const MediaCryptoContext&) = delete;
+
   virtual ~MediaCryptoContext() = default;
 
   // Notification called when MediaCrypto object is ready.
@@ -33,14 +38,14 @@ class MEDIA_EXPORT MediaCryptoContext {
   // |requires_secure_video_codec| - true if secure video decoder is required.
   //                                 Should be ignored if |media_crypto|
   //                                 contains null MediaCrypto object.
-  using MediaCryptoReadyCB =
-      base::OnceCallback<void(JavaObjectPtr media_crypto,
-                              bool requires_secure_video_codec)>;
+  using MediaCryptoReadyCB = base::OnceCallback<void(
+      jni_zero::ScopedJavaGlobalRef<jobject> media_crypto,
+      bool requires_secure_video_codec)>;
   virtual void SetMediaCryptoReadyCB(
       MediaCryptoReadyCB media_crypto_ready_cb) = 0;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(MediaCryptoContext);
+  // Returns a CdmContextRef that keeps the backing CDM alive while held.
+  virtual std::unique_ptr<CdmContextRef> GetCdmContextRef() = 0;
 };
 
 }  // namespace media

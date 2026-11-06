@@ -1,15 +1,15 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_PUBLIC_BROWSER_WEB_UI_MESSAGE_HANDLER_H_
 #define CONTENT_PUBLIC_BROWSER_WEB_UI_MESSAGE_HANDLER_H_
 
-#include <string>
-#include <vector>
+#include <ostream>
+#include <string_view>
 
 #include "base/check.h"
-#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
 #include "content/common/content_export.h"
@@ -19,15 +19,10 @@ class WebUIBrowserTest;
 class MojoWebUIBrowserTest;
 class CertificateHandlerTest;
 
-namespace base {
-class ListValue;
-}
-
 namespace content {
 
 class TestWebUI;
 class WebUI;
-class WebUIImpl;
 
 // Messages sent from the DOM are forwarded via the WebUI to handler
 // classes. These objects are owned by WebUI and destroyed when the
@@ -47,10 +42,6 @@ class CONTENT_EXPORT WebUIMessageHandler {
   bool IsJavascriptAllowed();
 
  protected:
-  FRIEND_TEST_ALL_PREFIXES(WebUIMessageHandlerTest, ExtractIntegerValue);
-  FRIEND_TEST_ALL_PREFIXES(WebUIMessageHandlerTest, ExtractDoubleValue);
-  FRIEND_TEST_ALL_PREFIXES(WebUIMessageHandlerTest, ExtractStringValue);
-
   // This method must be called once the handler's corresponding JavaScript
   // component is initialized. In practice, it should be called from a WebUI
   // message handler similar to: 'initializeFooPage' or 'getInitialState'.
@@ -64,20 +55,8 @@ class CONTENT_EXPORT WebUIMessageHandler {
   // posted task or asynchronous operation.
   void AllowJavascript();
 
-  // Helper methods:
-
-  // Extract an integer value from a list Value.
-  static bool ExtractIntegerValue(const base::ListValue* value, int* out_int);
-
-  // Extract a floating point (double) value from a list Value.
-  static bool ExtractDoubleValue(const base::ListValue* value,
-                                 double* out_value);
-
-  // Extract a string value from a list Value.
-  static std::u16string ExtractStringValue(const base::ListValue* value);
-
   // This is where subclasses specify which messages they'd like to handle and
-  // perform any additional initialization.. At this point web_ui() will return
+  // perform any additional initialization. At this point web_ui() will return
   // the associated WebUI object.
   virtual void RegisterMessages() = 0;
 
@@ -97,20 +76,19 @@ class CONTENT_EXPORT WebUIMessageHandler {
   // Helper method for responding to Javascript requests initiated with
   // cr.sendWithPromise() (defined in cr.js) for the case where the returned
   // promise should be resolved (request succeeded).
-  void ResolveJavascriptCallback(const base::Value& callback_id,
-                                 const base::Value& response);
+  void ResolveJavascriptCallback(const base::ValueView callback_id,
+                                 const base::ValueView response);
 
   // Helper method for responding to Javascript requests initiated with
   // cr.sendWithPromise() (defined in cr.js), for the case where the returned
   // promise should be rejected (request failed).
-  void RejectJavascriptCallback(const base::Value& callback_id,
-                                const base::Value& response);
+  void RejectJavascriptCallback(const base::ValueView callback_id,
+                                const base::ValueView response);
 
   // Helper method for notifying Javascript listeners added with
   // cr.addWebUIListener() (defined in cr.js).
   template <typename... Values>
-  void FireWebUIListener(const std::string& event_name,
-                         const Values&... values) {
+  void FireWebUIListener(std::string_view event_name, const Values&... values) {
     // cr.webUIListenerCallback is a global JS function exposed from cr.js.
     CallJavascriptFunction("cr.webUIListenerCallback", base::Value(event_name),
                            values...);
@@ -123,7 +101,7 @@ class CONTENT_EXPORT WebUIMessageHandler {
   // All function names in WebUI must consist of only ASCII characters.
   // These functions will crash if JavaScript is not currently allowed.
   template <typename... Values>
-  void CallJavascriptFunction(const std::string& function_name,
+  void CallJavascriptFunction(std::string_view function_name,
                               const Values&... values) {
     CHECK(IsJavascriptAllowed()) << "Cannot CallJavascriptFunction before "
                                     "explicitly allowing JavaScript.";
@@ -152,8 +130,7 @@ class CONTENT_EXPORT WebUIMessageHandler {
 
   // True if the page is for JavaScript calls from this handler.
   bool javascript_allowed_ = false;
-
-  WebUI* web_ui_ = nullptr;
+  raw_ptr<WebUI, DanglingUntriaged> web_ui_ = nullptr;
 };
 
 }  // namespace content

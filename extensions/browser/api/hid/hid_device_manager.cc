@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,37 +6,82 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <functional>
+#include <iterator>
 #include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/lazy_instance.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/no_destructor.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/device_service.h"
 #include "extensions/browser/api/device_permissions_manager.h"
+#include "extensions/browser/event_router_factory.h"
+#include "extensions/common/event_args.h"
+#include "extensions/common/mojom/context_type.mojom.h"
+#include "extensions/common/mojom/event_dispatcher.mojom-forward.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "extensions/common/permissions/usb_device_permission.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/device/public/cpp/hid/hid_device_filter.h"
-#include "services/device/public/cpp/hid/hid_usage_and_page.h"
+#include "services/device/public/cpp/hid/hid_report_type.h"
+#include "services/device/public/cpp/hid/hid_report_utils.h"
 #include "services/device/public/mojom/hid.mojom.h"
 
 namespace hid = extensions::api::hid;
 
-using device::HidDeviceFilter;
-
 namespace extensions {
 
 namespace {
+
+using ::device::HidDeviceFilter;
+using ::device::HidReportType;
+using ::device::IsAlwaysProtected;
+
+// Return true if all reports in `device` with `report_id` are protected.
+// Protected report IDs are not exposed in the API.
+bool IsReportIdProtected(const device::mojom::HidDeviceInfo& device,
+                         uint8_t report_id) {
+  // `report_id` is not protected if there is any report with `report_id` that
+  // is not protected.
+  constexpr HidReportType report_types[] = {
+      HidReportType::kInput, HidReportType::kOutput, HidReportType::kFeature};
+  bool found_matching_report = false;
+  for (const auto& report_type : report_types) {
+    auto* collection =
+        device::FindCollectionWithReport(device, report_id, report_type);
+    if (collection) {
+      found_matching_report = true;
+      if (!IsAlwaysProtected(*collection->usage, report_type)) {
+        return false;
+      }
+    }
+  }
+  if (!found_matching_report) {
+    // No reports with `report_id` were found in any collection. This indicates
+    // an error in the device's report descriptor, but the device may still be
+    // usable. Consider the report protected if `device` has any collection with
+    // a protected usage.
+    return std::ranges::any_of(device.collections, [](const auto& collection) {
+      return IsAlwaysProtected(*collection->usage, HidReportType::kInput) ||
+             IsAlwaysProtected(*collection->usage, HidReportType::kOutput) ||
+             IsAlwaysProtected(*collection->usage, HidReportType::kFeature);
+    });
+  }
+
+  // All reports matching `report_id` are protected.
+  return true;
+}
 
 void PopulateHidDeviceInfo(hid::HidDeviceInfo* output,
                            const device::mojom::HidDeviceInfo& input) {
@@ -49,18 +94,24 @@ void PopulateHidDeviceInfo(hid::HidDeviceInfo* output,
   output->max_feature_report_size = input.max_feature_report_size;
 
   for (const auto& collection : input.collections) {
-    // Don't expose sensitive data.
-    if (device::IsAlwaysProtected(*collection->usage)) {
+    // Omit a collection if all its reports are protected.
+    if (!device::CollectionHasUnprotectedReports(*collection)) {
       continue;
     }
+
+    // Omit IDs only used by protected reports.
+    std::vector<int> filtered_report_ids;
+    std::ranges::copy_if(collection->report_ids,
+                         std::back_inserter(filtered_report_ids),
+                         [&input](int report_id) {
+                           return !IsReportIdProtected(input, report_id);
+                         });
 
     hid::HidCollectionInfo api_collection;
     api_collection.usage_page = collection->usage->usage_page;
     api_collection.usage = collection->usage->usage;
 
-    api_collection.report_ids.insert(api_collection.report_ids.begin(),
-                                     collection->report_ids.begin(),
-                                     collection->report_ids.end());
+    api_collection.report_ids = std::move(filtered_report_ids);
 
     output->collections.push_back(std::move(api_collection));
   }
@@ -72,13 +123,16 @@ void PopulateHidDeviceInfo(hid::HidDeviceInfo* output,
   }
 }
 
-bool WillDispatchDeviceEvent(base::WeakPtr<HidDeviceManager> device_manager,
-                             const device::mojom::HidDeviceInfo& device_info,
-                             content::BrowserContext* browser_context,
-                             Feature::Context target_context,
-                             const Extension* extension,
-                             Event* event,
-                             const base::DictionaryValue* listener_filter) {
+bool WillDispatchDeviceEvent(
+    base::WeakPtr<HidDeviceManager> device_manager,
+    const device::mojom::HidDeviceInfo& device_info,
+    content::BrowserContext* browser_context,
+    mojom::ContextType target_context,
+    const Extension* extension,
+    const base::DictValue* listener_filter,
+    std::optional<base::ListValue>& event_args_out,
+    mojom::EventFilteringInfoPtr& event_filtering_info_out,
+    bool* dispatch_separate_event_out) {
   if (device_manager && extension) {
     return device_manager->HasPermission(extension, device_info, false);
   }
@@ -100,7 +154,7 @@ struct HidDeviceManager::GetApiDevicesParams {
       : extension(extension), filters(filters), callback(std::move(callback)) {}
   ~GetApiDevicesParams() {}
 
-  const Extension* extension;
+  raw_ptr<const Extension> extension;
   std::vector<HidDeviceFilter> filters;
   GetApiDevicesCallback callback;
 };
@@ -126,6 +180,12 @@ HidDeviceManager::GetFactoryInstance() {
   return &factory.Get();
 }
 
+template <>
+void BrowserContextKeyedAPIFactory<
+    HidDeviceManager>::DeclareFactoryDependencies() {
+  DependsOn(EventRouterFactory::GetInstance());
+}
+
 void HidDeviceManager::GetApiDevices(
     const Extension* extension,
     const std::vector<HidDeviceFilter>& filters,
@@ -134,30 +194,13 @@ void HidDeviceManager::GetApiDevices(
   LazyInitialize();
 
   if (enumeration_ready_) {
-    std::unique_ptr<base::ListValue> devices =
-        CreateApiDeviceList(extension, filters);
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::ListValue devices = CreateApiDeviceList(extension, filters);
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback), std::move(devices)));
   } else {
     pending_enumerations_.push_back(std::make_unique<GetApiDevicesParams>(
         extension, filters, std::move(callback)));
   }
-}
-
-std::unique_ptr<base::ListValue> HidDeviceManager::GetApiDevicesFromList(
-    std::vector<device::mojom::HidDeviceInfoPtr> devices) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  std::unique_ptr<base::ListValue> device_list(new base::ListValue());
-  for (const auto& device : devices) {
-    const auto device_entry = resource_ids_.find(device->guid);
-    DCHECK(device_entry != resource_ids_.end());
-
-    hid::HidDeviceInfo device_info;
-    device_info.device_id = device_entry->second;
-    PopulateHidDeviceInfo(&device_info, *device);
-    device_list->Append(device_info.ToValue());
-  }
-  return device_list;
 }
 
 const device::mojom::HidDeviceInfo* HidDeviceManager::GetDeviceInfo(
@@ -180,6 +223,7 @@ void HidDeviceManager::Connect(const std::string& device_guid,
   hid_manager_->Connect(device_guid, /*connection_client=*/mojo::NullRemote(),
                         /*watcher=*/mojo::NullRemote(),
                         /*allow_protected_reports=*/true,
+                        /*allow_fido_reports=*/true,
                         mojo::WrapCallbackWithDefaultInvokeIfNotRun(
                             std::move(callback), mojo::NullRemote()));
 }
@@ -236,7 +280,7 @@ void HidDeviceManager::DeviceAdded(device::mojom::HidDeviceInfoPtr device) {
   DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK_LT(next_resource_id_, std::numeric_limits<int>::max());
   int new_id = next_resource_id_++;
-  DCHECK(!base::Contains(resource_ids_, device->guid));
+  DCHECK(!resource_ids_.contains(device->guid));
   resource_ids_[device->guid] = new_id;
   devices_[new_id] = std::move(device);
 
@@ -248,9 +292,10 @@ void HidDeviceManager::DeviceAdded(device::mojom::HidDeviceInfoPtr device) {
     PopulateHidDeviceInfo(&api_device_info, *devices_[new_id]);
 
     if (api_device_info.collections.size() > 0) {
-      auto args(hid::OnDeviceAdded::Create(api_device_info));
+      auto event_args = base::MakeRefCounted<EventArgs>(
+          hid::OnDeviceAdded::Create(api_device_info));
       DispatchEvent(events::HID_ON_DEVICE_ADDED, hid::OnDeviceAdded::kEventName,
-                    std::move(args), *devices_[new_id]);
+                    std::move(event_args), *devices_[new_id]);
     }
   }
 }
@@ -258,18 +303,20 @@ void HidDeviceManager::DeviceAdded(device::mojom::HidDeviceInfoPtr device) {
 void HidDeviceManager::DeviceRemoved(device::mojom::HidDeviceInfoPtr device) {
   DCHECK(thread_checker_.CalledOnValidThread());
   const auto& resource_entry = resource_ids_.find(device->guid);
-  DCHECK(resource_entry != resource_ids_.end());
+  CHECK(resource_entry != resource_ids_.end());
   int resource_id = resource_entry->second;
   const auto& device_entry = devices_.find(resource_id);
-  DCHECK(device_entry != devices_.end());
+  CHECK(device_entry != devices_.end());
   resource_ids_.erase(resource_entry);
   devices_.erase(device_entry);
 
   if (event_router_) {
     DCHECK(enumeration_ready_);
-    auto args(hid::OnDeviceRemoved::Create(resource_id));
+    auto event_args = base::MakeRefCounted<EventArgs>(
+        hid::OnDeviceRemoved::Create(resource_id));
     DispatchEvent(events::HID_ON_DEVICE_REMOVED,
-                  hid::OnDeviceRemoved::kEventName, std::move(args), *device);
+                  hid::OnDeviceRemoved::kEventName, std::move(event_args),
+                  *device);
   }
 
   // Remove permission entry for ephemeral hid device.
@@ -284,9 +331,9 @@ void HidDeviceManager::DeviceChanged(device::mojom::HidDeviceInfoPtr device) {
   // Find |device| in |devices_|.
   DCHECK(thread_checker_.CalledOnValidThread());
   const auto& resource_entry = resource_ids_.find(device->guid);
-  DCHECK(resource_entry != resource_ids_.end());
+  CHECK(resource_entry != resource_ids_.end());
   int resource_id = resource_entry->second;
-  DCHECK(base::Contains(devices_, resource_id));
+  DCHECK(devices_.contains(resource_id));
 
   // Update the device information.
   devices_[resource_id] = std::move(device);
@@ -306,10 +353,11 @@ void HidDeviceManager::LazyInitialize() {
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
     auto receiver = hid_manager_.BindNewPipeAndPassReceiver();
     const auto& binder = GetHidManagerBinderOverride();
-    if (binder)
+    if (binder) {
       binder.Run(std::move(receiver));
-    else
+    } else {
       content::GetDeviceService().BindHidManager(std::move(receiver));
+    }
   }
   // Enumerate HID devices and set client.
   std::vector<device::mojom::HidDeviceInfoPtr> empty_devices;
@@ -329,10 +377,10 @@ void HidDeviceManager::OverrideHidManagerBinderForTesting(
   GetHidManagerBinderOverride() = std::move(binder);
 }
 
-std::unique_ptr<base::ListValue> HidDeviceManager::CreateApiDeviceList(
+base::ListValue HidDeviceManager::CreateApiDeviceList(
     const Extension* extension,
     const std::vector<HidDeviceFilter>& filters) {
-  std::unique_ptr<base::ListValue> api_devices(new base::ListValue());
+  base::ListValue api_devices;
   for (const ResourceIdToDeviceInfoMap::value_type& map_entry : devices_) {
     int resource_id = map_entry.first;
     auto& device_info = map_entry.second;
@@ -352,7 +400,7 @@ std::unique_ptr<base::ListValue> HidDeviceManager::CreateApiDeviceList(
 
     // Expose devices with which user can communicate.
     if (api_device_info.collections.size() > 0) {
-      api_devices->Append(api_device_info.ToValue());
+      api_devices.Append(api_device_info.ToValue());
     }
   }
 
@@ -370,9 +418,9 @@ void HidDeviceManager::OnEnumerationComplete(
   enumeration_ready_ = true;
 
   for (const auto& params : pending_enumerations_) {
-    std::unique_ptr<base::ListValue> devices =
+    base::ListValue devices_list =
         CreateApiDeviceList(params->extension, params->filters);
-    std::move(params->callback).Run(std::move(devices));
+    std::move(params->callback).Run(std::move(devices_list));
   }
   pending_enumerations_.clear();
 }
@@ -380,10 +428,10 @@ void HidDeviceManager::OnEnumerationComplete(
 void HidDeviceManager::DispatchEvent(
     events::HistogramValue histogram_value,
     const std::string& event_name,
-    std::vector<base::Value> event_args,
+    scoped_refptr<const EventArgs> event_args,
     const device::mojom::HidDeviceInfo& device_info) {
-  std::unique_ptr<Event> event(
-      new Event(histogram_value, event_name, std::move(event_args)));
+  auto event = std::make_unique<Event>(histogram_value, event_name,
+                                       std::move(event_args));
   // The |event->will_dispatch_callback| will be called synchronously, it is
   // safe to pass |device_info| by reference.
   event->will_dispatch_callback =

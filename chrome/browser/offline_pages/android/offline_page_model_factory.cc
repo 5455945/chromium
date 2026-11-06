@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,14 @@
 #include <utility>
 #include <vector>
 
-#include "base/android/build_info.h"
 #include "base/android/path_utils.h"
 #include "base/files/file_path.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "base/path_service.h"
-#include "base/sequenced_task_runner.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/default_clock.h"
 #include "chrome/browser/download/download_prefs.h"
-#include "chrome/browser/offline_pages/android/cct_origin_observer.h"
 #include "chrome/browser/offline_pages/android/offline_page_archive_publisher_impl.h"
 #include "chrome/browser/offline_pages/download_archive_manager.h"
 #include "chrome/browser/profiles/profile.h"
@@ -35,7 +32,8 @@ OfflinePageModelFactory::OfflinePageModelFactory()
 
 // static
 OfflinePageModelFactory* OfflinePageModelFactory::GetInstance() {
-  return base::Singleton<OfflinePageModelFactory>::get();
+  static base::NoDestructor<OfflinePageModelFactory> instance;
+  return instance.get();
 }
 
 // static
@@ -85,8 +83,6 @@ std::unique_ptr<KeyedService> OfflinePageModelFactory::BuildServiceInstanceFor(
       std::make_unique<OfflinePageModelTaskified>(
           std::move(metadata_store), std::move(archive_manager),
           std::move(publisher), background_task_runner);
-
-  CctOriginObserver::AttachToOfflinePageModel(model.get());
 
   return model;
 }

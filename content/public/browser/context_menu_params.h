@@ -1,17 +1,19 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_PUBLIC_BROWSER_CONTEXT_MENU_PARAMS_H_
 #define CONTENT_PUBLIC_BROWSER_CONTEXT_MENU_PARAMS_H_
 
+#include <map>
+
 #include "content/common/content_export.h"
+#include "content/public/browser/global_dom_node_id.h"
 #include "third_party/blink/public/common/context_menu_data/untrustworthy_context_menu_params.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace content {
-
-class RenderFrameHostImpl;
 
 // FIXME(beng): This would be more useful in the future and more efficient
 //              if the parameters here weren't so literally mapped to what
@@ -34,11 +36,28 @@ struct CONTENT_EXPORT ContextMenuParams
   // on.
   GURL page_url;
 
-  // This is the URL of the subframe that the context menu was invoked on.
+  // This is the URL of the frame that the context menu was invoked on. This may
+  // or may not be equal to `page_url`.
   GURL frame_url;
+
+  // The origin of the frame that the context menu was invoked on. This is *not*
+  // the same as Origin::Create(frame_url) for the reasons given in
+  // //docs/security/origin-vs-url.md.
+  url::Origin frame_origin;
+
+  // Whether the context menu was invoked on a subframe.
+  bool is_subframe = false;
 
   // Extra properties for the context menu.
   std::map<std::string, std::string> properties;
+
+  // If the context menu was opened over a form field element or editable its
+  // identifying GlobalDOMNodeId will be in this field.
+  GlobalDOMNodeId form_field_dom_node_id;
+
+  // If the context menu was opened from an element with the `interestfor`
+  // attribute, its identifying GlobalDOMNodeId will be in this field.
+  GlobalDOMNodeId interest_for_dom_node_id;
 
  private:
   // RenderFrameHostImpl is responsible for validating and sanitizing

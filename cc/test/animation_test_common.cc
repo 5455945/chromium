@@ -1,14 +1,14 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "cc/test/animation_test_common.h"
 
 #include <algorithm>
+#include <limits>
 #include <memory>
 #include <utility>
 
-#include "base/memory/ptr_util.h"
 #include "cc/animation/animation.h"
 #include "cc/animation/animation_host.h"
 #include "cc/animation/animation_id_provider.h"
@@ -20,16 +20,26 @@
 #include "cc/layers/layer_impl.h"
 #include "ui/gfx/animation/keyframe/keyframed_animation_curve.h"
 #include "ui/gfx/animation/keyframe/timing_function.h"
+#include "ui/gfx/animation/tween.h"
 
 using gfx::KeyframeModel;
 
 namespace cc {
 
+double ToMilliseconds(std::optional<base::TimeTicks> time_ticks) {
+  if (!time_ticks) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  return (time_ticks.value() - base::TimeTicks()).InMillisecondsF();
+}
+
 int AddOpacityTransition(Animation* target,
                          double duration,
                          float start_opacity,
                          float end_opacity,
-                         bool use_timing_function) {
+                         bool use_timing_function,
+                         int id,
+                         std::optional<int> group_id) {
   std::unique_ptr<gfx::KeyframedFloatAnimationCurve> curve(
       gfx::KeyframedFloatAnimationCurve::Create());
 
@@ -40,13 +50,12 @@ int AddOpacityTransition(Animation* target,
   if (duration > 0.0)
     curve->AddKeyframe(gfx::FloatKeyframe::Create(
         base::TimeDelta(), start_opacity, std::move(func)));
-  curve->AddKeyframe(gfx::FloatKeyframe::Create(
-      base::TimeDelta::FromSecondsD(duration), end_opacity, nullptr));
-
-  int id = AnimationIdProvider::NextKeyframeModelId();
+  curve->AddKeyframe(gfx::FloatKeyframe::Create(base::Seconds(duration),
+                                                end_opacity, nullptr));
 
   std::unique_ptr<KeyframeModel> keyframe_model(KeyframeModel::Create(
-      std::move(curve), id, AnimationIdProvider::NextGroupId(),
+      std::move(curve), id,
+      group_id ? *group_id : AnimationIdProvider::NextGroupId(),
       KeyframeModel::TargetPropertyId(TargetProperty::OPACITY)));
   keyframe_model->set_needs_synchronized_start_time(true);
 
@@ -66,14 +75,40 @@ int AddAnimatedTransform(Animation* target,
         base::TimeDelta(), start_operations, nullptr));
   }
 
-  curve->AddKeyframe(gfx::TransformKeyframe::Create(
-      base::TimeDelta::FromSecondsD(duration), operations, nullptr));
+  curve->AddKeyframe(gfx::TransformKeyframe::Create(base::Seconds(duration),
+                                                    operations, nullptr));
 
   int id = AnimationIdProvider::NextKeyframeModelId();
 
   std::unique_ptr<KeyframeModel> keyframe_model(KeyframeModel::Create(
       std::move(curve), id, AnimationIdProvider::NextGroupId(),
       KeyframeModel::TargetPropertyId(TargetProperty::TRANSFORM)));
+  keyframe_model->set_needs_synchronized_start_time(true);
+  keyframe_model->set_hold_time(base::TimeDelta());
+
+  target->AddKeyframeModel(std::move(keyframe_model));
+  return id;
+}
+
+int AddAnimatedCustomProperty(Animation* target,
+                              double duration,
+                              int start_value,
+                              int end_value) {
+  std::unique_ptr<gfx::KeyframedFloatAnimationCurve> curve(
+      gfx::KeyframedFloatAnimationCurve::Create());
+
+  if (duration > 0.0) {
+    curve->AddKeyframe(
+        gfx::FloatKeyframe::Create(base::TimeDelta(), start_value, nullptr));
+  }
+
+  curve->AddKeyframe(
+      gfx::FloatKeyframe::Create(base::Seconds(duration), end_value, nullptr));
+
+  int id = AnimationIdProvider::NextKeyframeModelId();
+  std::unique_ptr<KeyframeModel> keyframe_model(KeyframeModel::Create(
+      std::move(curve), id, AnimationIdProvider::NextGroupId(),
+      KeyframeModel::TargetPropertyId(TargetProperty::CSS_CUSTOM_PROPERTY)));
   keyframe_model->set_needs_synchronized_start_time(true);
 
   target->AddKeyframeModel(std::move(keyframe_model));
@@ -111,8 +146,8 @@ int AddAnimatedFilter(Animation* target,
 
   FilterOperations filters;
   filters.Append(FilterOperation::CreateBrightnessFilter(end_brightness));
-  curve->AddKeyframe(FilterKeyframe::Create(
-      base::TimeDelta::FromSecondsD(duration), filters, nullptr));
+  curve->AddKeyframe(
+      FilterKeyframe::Create(base::Seconds(duration), filters, nullptr));
 
   int id = AnimationIdProvider::NextKeyframeModelId();
 
@@ -141,8 +176,8 @@ int AddAnimatedBackdropFilter(Animation* target,
 
   FilterOperations filters;
   filters.Append(FilterOperation::CreateInvertFilter(end_invert));
-  curve->AddKeyframe(FilterKeyframe::Create(
-      base::TimeDelta::FromSecondsD(duration), filters, nullptr));
+  curve->AddKeyframe(
+      FilterKeyframe::Create(base::Seconds(duration), filters, nullptr));
 
   int id = AnimationIdProvider::NextKeyframeModelId();
 
@@ -156,12 +191,10 @@ int AddAnimatedBackdropFilter(Animation* target,
 }
 
 FakeFloatAnimationCurve::FakeFloatAnimationCurve()
-    : duration_(base::TimeDelta::FromSecondsD(1.0)) {
-}
+    : duration_(base::Seconds(1.0)) {}
 
 FakeFloatAnimationCurve::FakeFloatAnimationCurve(double duration)
-    : duration_(base::TimeDelta::FromSecondsD(duration)) {
-}
+    : duration_(base::Seconds(duration)) {}
 
 FakeFloatAnimationCurve::~FakeFloatAnimationCurve() = default;
 
@@ -173,13 +206,18 @@ float FakeFloatAnimationCurve::GetValue(base::TimeDelta now) const {
   return 0.0f;
 }
 
+float FakeFloatAnimationCurve::GetTransformedValue(
+    base::TimeDelta now,
+    gfx::TimingFunction::LimitDirection limit_direction) const {
+  return GetValue(now);
+}
+
 std::unique_ptr<gfx::AnimationCurve> FakeFloatAnimationCurve::Clone() const {
-  return base::WrapUnique(new FakeFloatAnimationCurve);
+  return std::make_unique<FakeFloatAnimationCurve>();
 }
 
 FakeTransformTransition::FakeTransformTransition(double duration)
-    : duration_(base::TimeDelta::FromSecondsD(duration)) {
-}
+    : duration_(base::Seconds(duration)) {}
 
 FakeTransformTransition::~FakeTransformTransition() = default;
 
@@ -190,6 +228,11 @@ base::TimeDelta FakeTransformTransition::Duration() const {
 gfx::TransformOperations FakeTransformTransition::GetValue(
     base::TimeDelta time) const {
   return gfx::TransformOperations();
+}
+gfx::TransformOperations FakeTransformTransition::GetTransformedValue(
+    base::TimeDelta time,
+    gfx::TimingFunction::LimitDirection limit_direction) const {
+  return GetValue(time);
 }
 
 bool FakeTransformTransition::PreservesAxisAlignment() const {
@@ -202,12 +245,11 @@ bool FakeTransformTransition::MaximumScale(float* max_scale) const {
 }
 
 std::unique_ptr<gfx::AnimationCurve> FakeTransformTransition::Clone() const {
-  return base::WrapUnique(new FakeTransformTransition(*this));
+  return std::make_unique<FakeTransformTransition>(*this);
 }
 
 FakeFloatTransition::FakeFloatTransition(double duration, float from, float to)
-    : duration_(base::TimeDelta::FromSecondsD(duration)), from_(from), to_(to) {
-}
+    : duration_(base::Seconds(duration)), from_(from), to_(to) {}
 
 FakeFloatTransition::~FakeFloatTransition() = default;
 
@@ -220,13 +262,37 @@ float FakeFloatTransition::GetValue(base::TimeDelta time) const {
   return (1.0 - progress) * from_ + progress * to_;
 }
 
+float FakeFloatTransition::GetTransformedValue(
+    base::TimeDelta time,
+    gfx::TimingFunction::LimitDirection limit_direction) const {
+  return GetValue(time);
+}
+
 std::unique_ptr<gfx::AnimationCurve> FakeFloatTransition::Clone() const {
-  return base::WrapUnique(new FakeFloatTransition(*this));
+  return std::make_unique<FakeFloatTransition>(*this);
+}
+
+TestColorCurve::TestColorCurve(SkColor4f from, SkColor4f to)
+    : from_(from), to_(to) {}
+
+TestColorCurve::~TestColorCurve() = default;
+
+void TestColorCurve::Sample(float progress, SkColor4f* value) const {
+  samples_.fetch_add(1, std::memory_order_relaxed);
+  *value = gfx::Tween::ColorValueBetween(progress, from_, to_);
+}
+
+void TestColorCurve::AddRef() const {
+  base::RefCountedThreadSafe<TestColorCurve>::AddRef();
+}
+
+void TestColorCurve::Release() const {
+  base::RefCountedThreadSafe<TestColorCurve>::Release();
 }
 
 int AddScrollOffsetAnimationToAnimation(Animation* animation,
-                                        gfx::ScrollOffset initial_value,
-                                        gfx::ScrollOffset target_value) {
+                                        gfx::PointF initial_value,
+                                        gfx::PointF target_value) {
   std::unique_ptr<ScrollOffsetAnimationCurve> curve(
       ScrollOffsetAnimationCurveFactory::CreateEaseInOutAnimationForTesting(
           target_value));
@@ -242,6 +308,13 @@ int AddScrollOffsetAnimationToAnimation(Animation* animation,
   animation->AddKeyframeModel(std::move(keyframe_model));
 
   return id;
+}
+
+int AddAnimatedCustomPropertyToAnimation(Animation* animation,
+                                         double duration,
+                                         int start_value,
+                                         int end_value) {
+  return AddAnimatedCustomProperty(animation, duration, start_value, end_value);
 }
 
 int AddAnimatedTransformToAnimation(Animation* animation,
@@ -263,9 +336,12 @@ int AddOpacityTransitionToAnimation(Animation* animation,
                                     double duration,
                                     float start_opacity,
                                     float end_opacity,
-                                    bool use_timing_function) {
-  return AddOpacityTransition(animation, duration, start_opacity, end_opacity,
-                              use_timing_function);
+                                    bool use_timing_function,
+                                    std::optional<int> id,
+                                    std::optional<int> group_id) {
+  return AddOpacityTransition(
+      animation, duration, start_opacity, end_opacity, use_timing_function,
+      id ? *id : AnimationIdProvider::NextKeyframeModelId(), group_id);
 }
 
 int AddAnimatedFilterToAnimation(Animation* animation,
@@ -297,8 +373,8 @@ int AddOpacityStepsToAnimation(Animation* animation,
   if (duration > 0.0)
     curve->AddKeyframe(gfx::FloatKeyframe::Create(
         base::TimeDelta(), start_opacity, std::move(func)));
-  curve->AddKeyframe(gfx::FloatKeyframe::Create(
-      base::TimeDelta::FromSecondsD(duration), end_opacity, nullptr));
+  curve->AddKeyframe(gfx::FloatKeyframe::Create(base::Seconds(duration),
+                                                end_opacity, nullptr));
 
   int id = AnimationIdProvider::NextKeyframeModelId();
 
@@ -327,8 +403,9 @@ void AddKeyframeModelToElementWithExistingKeyframeEffect(
     ElementId element_id,
     scoped_refptr<AnimationTimeline> timeline,
     std::unique_ptr<KeyframeModel> keyframe_model) {
-  scoped_refptr<ElementAnimations> element_animations =
-      timeline->animation_host()->GetElementAnimationsForElementId(element_id);
+  scoped_refptr<const ElementAnimations> element_animations =
+      timeline->animation_host()->GetElementAnimationsForElementIdForTesting(
+          element_id);
   DCHECK(element_animations);
   KeyframeEffect* keyframe_effect =
       element_animations->FirstKeyframeEffectForTesting();
@@ -340,8 +417,9 @@ void RemoveKeyframeModelFromElementWithExistingKeyframeEffect(
     ElementId element_id,
     scoped_refptr<AnimationTimeline> timeline,
     int keyframe_model_id) {
-  scoped_refptr<ElementAnimations> element_animations =
-      timeline->animation_host()->GetElementAnimationsForElementId(element_id);
+  scoped_refptr<const ElementAnimations> element_animations =
+      timeline->animation_host()->GetElementAnimationsForElementIdForTesting(
+          element_id);
   DCHECK(element_animations);
   KeyframeEffect* keyframe_effect =
       element_animations->FirstKeyframeEffectForTesting();
@@ -353,8 +431,9 @@ KeyframeModel* GetKeyframeModelFromElementWithExistingKeyframeEffect(
     ElementId element_id,
     scoped_refptr<AnimationTimeline> timeline,
     int keyframe_model_id) {
-  scoped_refptr<ElementAnimations> element_animations =
-      timeline->animation_host()->GetElementAnimationsForElementId(element_id);
+  scoped_refptr<const ElementAnimations> element_animations =
+      timeline->animation_host()->GetElementAnimationsForElementIdForTesting(
+          element_id);
   DCHECK(element_animations);
   KeyframeEffect* keyframe_effect =
       element_animations->FirstKeyframeEffectForTesting();
@@ -423,6 +502,28 @@ int AddOpacityTransitionToElementWithAnimation(
   return AddOpacityTransitionToAnimation(animation.get(), duration,
                                          start_opacity, end_opacity,
                                          use_timing_function);
+}
+
+scoped_refptr<Animation> CancelAndReplaceAnimation(Animation& animation) {
+  int id = animation.id();
+  AnimationTimeline* timeline = animation.animation_timeline();
+  ElementId element_id = animation.element_id();
+
+  // Cancel the main thread side animation.
+  for (auto& keyframe_model : animation.keyframe_effect()->keyframe_models()) {
+    animation.RemoveKeyframeModel(keyframe_model->id());
+  }
+  animation.set_animation_delegate(nullptr);
+  if (timeline) {
+    timeline->DetachAnimation(&animation);
+  }
+
+  auto replacing_animation = Animation::Create(id);
+  replacing_animation->set_is_replacement();
+
+  timeline->AttachAnimation(replacing_animation);
+  replacing_animation->AttachElement(element_id);
+  return replacing_animation;
 }
 
 }  // namespace cc

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,17 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "ash/constants/ash_features.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/ash/drive/drive_integration_service.h"
 #include "chrome/browser/ash/drive/file_system_util.h"
+#include "components/drive/file_errors.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
@@ -22,15 +28,16 @@
 #include "storage/browser/file_system/native_file_util.h"
 #include "storage/common/file_system/file_system_util.h"
 
-namespace drive {
-namespace internal {
+namespace drive::internal {
 namespace {
-
-constexpr char kTrashDirectoryName[] = ".Trash";
 
 class DriveFsFileUtil : public storage::LocalFileUtil {
  public:
   DriveFsFileUtil() = default;
+
+  DriveFsFileUtil(const DriveFsFileUtil&) = delete;
+  DriveFsFileUtil& operator=(const DriveFsFileUtil&) = delete;
+
   ~DriveFsFileUtil() override = default;
 
  protected:
@@ -38,37 +45,35 @@ class DriveFsFileUtil : public storage::LocalFileUtil {
     // DriveFS is a trusted filesystem, allow symlinks.
     return false;
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DriveFsFileUtil);
 };
 
-class CopyOperation {
+class CopyOperation : public base::RefCountedThreadSafe<CopyOperation> {
  public:
   CopyOperation(
-      Profile* profile,
+      Profile* const profile,
       std::unique_ptr<storage::FileSystemOperationContext> context,
-      const storage::FileSystemURL& src_url,
-      const storage::FileSystemURL& dest_url,
-      storage::AsyncFileUtil::CopyOrMoveOption option,
+      storage::FileSystemURL src_url,
+      storage::FileSystemURL dest_url,
+      storage::AsyncFileUtil::CopyOrMoveOptionSet options,
       storage::AsyncFileUtil::CopyFileProgressCallback progress_callback,
       storage::AsyncFileUtil::StatusCallback callback,
       scoped_refptr<base::SequencedTaskRunner> origin_task_runner,
       base::WeakPtr<DriveFsAsyncFileUtil> async_file_util)
       : profile_(profile),
         context_(std::move(context)),
-        src_url_(src_url),
-        dest_url_(dest_url),
-        option_(option),
+        src_url_(std::move(src_url)),
+        dest_url_(std::move(dest_url)),
+        options_(std::move(options)),
         progress_callback_(std::move(progress_callback)),
         callback_(std::move(callback)),
         origin_task_runner_(std::move(origin_task_runner)),
         async_file_util_(std::move(async_file_util)) {
-    DCHECK(origin_task_runner_->RunsTasksInCurrentSequence());
+    CHECK(origin_task_runner_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M161);
   }
 
   void Start() {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
     auto* drive_integration_service =
         drive::util::GetIntegrationServiceByProfile(profile_);
@@ -82,20 +87,21 @@ class CopyOperation {
       origin_task_runner_->PostTask(
           FROM_HERE, base::BindOnce(std::move(callback_),
                                     base::File::FILE_ERROR_INVALID_OPERATION));
-      origin_task_runner_->DeleteSoon(FROM_HERE, this);
       return;
     }
     drive_integration_service->GetDriveFsInterface()->CopyFile(
         source_path, destination_path,
         mojo::WrapCallbackWithDefaultInvokeIfNotRun(
-            base::BindOnce(&CopyOperation::CopyComplete,
-                           base::Unretained(this)),
+            base::BindOnce(&CopyOperation::CopyComplete, this),
             drive::FILE_ERROR_ABORT));
   }
 
  private:
+  friend class base::RefCountedThreadSafe<CopyOperation>;
+  ~CopyOperation() = default;
+
   void CopyComplete(drive::FileError error) {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
     switch (error) {
       case drive::FILE_ERROR_NOT_FOUND:
@@ -103,102 +109,144 @@ class CopyOperation {
         origin_task_runner_->PostTask(
             FROM_HERE,
             base::BindOnce(&CopyOperation::FallbackToNativeCopyOnOriginThread,
-                           base::Unretained(this)));
+                           this));
         break;
 
       default:
         origin_task_runner_->PostTask(
             FROM_HERE, base::BindOnce(std::move(callback_),
                                       FileErrorToBaseFileError(error)));
-        origin_task_runner_->DeleteSoon(FROM_HERE, this);
     }
   }
 
   void FallbackToNativeCopyOnOriginThread() {
-    DCHECK(origin_task_runner_->RunsTasksInCurrentSequence());
+    CHECK(origin_task_runner_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M161);
 
     if (!async_file_util_) {
       std::move(callback_).Run(base::File::FILE_ERROR_ABORT);
       return;
     }
     async_file_util_->AsyncFileUtilAdapter::CopyFileLocal(
-        std::move(context_), src_url_, dest_url_, option_,
+        std::move(context_), src_url_, dest_url_, options_,
         std::move(progress_callback_), std::move(callback_));
-    delete this;
   }
 
-  Profile* const profile_;
+  const raw_ptr<Profile> profile_;
   std::unique_ptr<storage::FileSystemOperationContext> context_;
   const storage::FileSystemURL src_url_;
   const storage::FileSystemURL dest_url_;
-  const storage::AsyncFileUtil::CopyOrMoveOption option_;
+  const storage::AsyncFileUtil::CopyOrMoveOptionSet options_;
   storage::AsyncFileUtil::CopyFileProgressCallback progress_callback_;
   storage::AsyncFileUtil::StatusCallback callback_;
-  scoped_refptr<base::SequencedTaskRunner> origin_task_runner_;
-  base::WeakPtr<DriveFsAsyncFileUtil> async_file_util_;
-
-  DISALLOW_COPY_AND_ASSIGN(CopyOperation);
+  const scoped_refptr<base::SequencedTaskRunner> origin_task_runner_;
+  const base::WeakPtr<DriveFsAsyncFileUtil> async_file_util_;
 };
 
-// Recursively deletes a folder by moving it into the .Trash folder within the
-// DriveFS mount point.
-class DeleteOperation {
+// Recursively deletes a folder locally. The folder will still be available in
+// Drive cloud Trash.
+class DeleteOperation : public base::RefCountedThreadSafe<DeleteOperation> {
  public:
-  DeleteOperation(Profile* profile,
-                  const base::FilePath& path,
+  using PinningManager = drivefs::pinning::PinningManager;
+  using Id = PinningManager::Id;
+
+  DeleteOperation(Profile* const profile,
+                  base::FilePath path,
                   storage::AsyncFileUtil::StatusCallback callback,
                   scoped_refptr<base::SequencedTaskRunner> origin_task_runner,
                   scoped_refptr<base::SequencedTaskRunner> blocking_task_runner)
       : profile_(profile),
-        path_(path),
+        path_(std::move(path)),
         callback_(std::move(callback)),
         origin_task_runner_(std::move(origin_task_runner)),
         blocking_task_runner_(std::move(blocking_task_runner)) {
-    DCHECK(origin_task_runner_->RunsTasksInCurrentSequence());
+    CHECK(origin_task_runner_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M161);
   }
 
   void Start() {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
-    auto* drive_integration_service =
-        drive::util::GetIntegrationServiceByProfile(profile_);
+    CHECK(!drive_, base::NotFatalUntil::M161);
+    drive_ = drive::util::GetIntegrationServiceByProfile(profile_);
     base::FilePath relative_path;
-    if (!drive_integration_service ||
-        !drive_integration_service->GetMountPointPath().IsParent(path_)) {
+    if (!drive_ || !drive_->GetMountPointPath().IsParent(path_)) {
       origin_task_runner_->PostTask(
           FROM_HERE,
           base::BindOnce(std::move(callback_), base::File::FILE_ERROR_FAILED));
-      origin_task_runner_->DeleteSoon(FROM_HERE, this);
       return;
     }
 
-    path_in_trash_ = drive_integration_service->GetMountPointPath()
-                         .Append(kTrashDirectoryName)
-                         .Append(path_.BaseName());
+    if (drive_->GetPinningManager() &&
+        drive_->GetRelativeDrivePath(path_, &drive_path_)) {
+      // TODO(b/266168982): In the case this is a folder, only the folder will
+      // get unpinned leaving all the children pinned. When the new method is
+      // exposed (or parameter on the existing method) update the
+      // implementation here.
+      drive_->GetDriveFsInterface()->GetMetadata(
+          drive_path_, base::BindOnce(&DeleteOperation::OnGotMetadata, this));
+      return;
+    }
 
     blocking_task_runner_->PostTask(
-        FROM_HERE,
-        base::BindOnce(&DeleteOperation::MoveToTrash, base::Unretained(this)));
+        FROM_HERE, base::BindOnce(&DeleteOperation::Delete, this));
   }
 
-  void MoveToTrash() {
-    base::File::Error error = base::Move(path_, path_in_trash_)
-                                  ? base::File::FILE_OK
-                                  : base::File::FILE_ERROR_FAILED;
-    origin_task_runner_->PostTask(FROM_HERE,
-                                  base::BindOnce(std::move(callback_), error));
-    origin_task_runner_->DeleteSoon(FROM_HERE, this);
+ private:
+  friend class base::RefCountedThreadSafe<DeleteOperation>;
+  ~DeleteOperation() = default;
+
+  void OnGotMetadata(const drive::FileError error,
+                     const drivefs::mojom::FileMetadataPtr metadata) {
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
+
+    if (error != drive::FILE_ERROR_OK) {
+      LOG(ERROR) << "Cannot get metadata of '" << drive_path_ << "': " << error;
+    } else {
+      CHECK(metadata, base::NotFatalUntil::M161);
+      id_ = Id(metadata->stable_id);
+    }
+
+    blocking_task_runner_->PostTask(
+        FROM_HERE, base::BindOnce(&DeleteOperation::Delete, this));
   }
 
-  Profile* const profile_;
+  void Delete() {
+    VLOG(1) << "Deleting '" << path_ << "'...";
+    const bool deleted = base::DeletePathRecursively(path_);
+
+    if (deleted) {
+      VLOG(1) << "Deleted '" << path_ << "'";
+      content::GetUIThreadTaskRunner({})->PostTask(
+          FROM_HERE, base::BindOnce(&DeleteOperation::OnDeleted, this));
+    } else {
+      LOG(ERROR) << "Cannot delete '" << path_ << "'";
+    }
+
+    origin_task_runner_->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback_),
+                                  deleted ? base::File::FILE_OK
+                                          : base::File::FILE_ERROR_FAILED));
+  }
+
+  void OnDeleted() {
+    CHECK(drive_, base::NotFatalUntil::M161);
+    if (PinningManager* const pinning_manager = drive_->GetPinningManager()) {
+      // TODO(b/267225898) Local delete events are currently not sent via
+      // DriveFS, so for now we notify the `PinningManager` for local deletes.
+      pinning_manager->NotifyDelete(id_, drive_path_);
+    }
+  }
+
+  const raw_ptr<Profile> profile_;
   const base::FilePath path_;
+  base::FilePath drive_path_;
+  Id id_ = Id::kNone;
   storage::AsyncFileUtil::StatusCallback callback_;
-  scoped_refptr<base::SequencedTaskRunner> origin_task_runner_;
-  scoped_refptr<base::SequencedTaskRunner> blocking_task_runner_;
+  const scoped_refptr<base::SequencedTaskRunner> origin_task_runner_;
+  const scoped_refptr<base::SequencedTaskRunner> blocking_task_runner_;
 
-  base::FilePath path_in_trash_;
-
-  DISALLOW_COPY_AND_ASSIGN(DeleteOperation);
+  raw_ptr<drive::DriveIntegrationService> drive_ = nullptr;
 };
 
 }  // namespace
@@ -213,18 +261,18 @@ void DriveFsAsyncFileUtil::CopyFileLocal(
     std::unique_ptr<storage::FileSystemOperationContext> context,
     const storage::FileSystemURL& src_url,
     const storage::FileSystemURL& dest_url,
-    CopyOrMoveOption option,
+    CopyOrMoveOptionSet options,
     CopyFileProgressCallback progress_callback,
     StatusCallback callback) {
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,
-      base::BindOnce(
-          &CopyOperation::Start,
-          base::Unretained(new CopyOperation(
-              profile_, std::move(context), src_url, dest_url, option,
-              std::move(progress_callback), std::move(callback),
-              base::SequencedTaskRunnerHandle::Get(),
-              weak_factory_.GetWeakPtr()))));
+      base::BindOnce(&CopyOperation::Start,
+                     base::MakeRefCounted<CopyOperation>(
+                         profile_, std::move(context), src_url, dest_url,
+                         std::move(options), std::move(progress_callback),
+                         std::move(callback),
+                         base::SequencedTaskRunner::GetCurrentDefault(),
+                         weak_factory_.GetWeakPtr())));
 }
 
 void DriveFsAsyncFileUtil::DeleteRecursively(
@@ -232,12 +280,12 @@ void DriveFsAsyncFileUtil::DeleteRecursively(
     const storage::FileSystemURL& url,
     StatusCallback callback) {
   content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE, base::BindOnce(&DeleteOperation::Start,
-                                base::Unretained(new DeleteOperation(
-                                    profile_, url.path(), std::move(callback),
-                                    base::SequencedTaskRunnerHandle::Get(),
-                                    context->task_runner()))));
+      FROM_HERE,
+      base::BindOnce(&DeleteOperation::Start,
+                     base::MakeRefCounted<DeleteOperation>(
+                         profile_, url.path(), std::move(callback),
+                         base::SequencedTaskRunner::GetCurrentDefault(),
+                         context->task_runner())));
 }
 
-}  // namespace internal
-}  // namespace drive
+}  // namespace drive::internal

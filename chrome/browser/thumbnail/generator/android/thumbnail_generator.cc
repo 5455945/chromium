@@ -1,25 +1,30 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/thumbnail/generator/android/thumbnail_generator.h"
 
 #include <memory>
+#include <string>
 
 #include "base/android/jni_string.h"
-#include "base/bind.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/functional/bind.h"
+#include "base/strings/string_util.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/threading/thread_restrictions.h"
 #include "chrome/browser/thumbnail/generator/android/thumbnail_media_parser.h"
-#include "chrome/browser/thumbnail/generator/jni_headers/ThumbnailGenerator_jni.h"
 #include "chrome/browser/thumbnail/generator/thumbnail_util.h"
 #include "content/public/browser/browser_thread.h"
+#include "third_party/jni_zero/jni_zero.h"
 #include "ui/gfx/android/java_bitmap.h"
+
+// Must come after headers that provide symbols used by @JniType.
+#include "chrome/browser/thumbnail/generator/jni_headers/ThumbnailGenerator_jni.h"
 
 class SkBitmap;
 
-using base::android::JavaParamRef;
-using base::android::ScopedJavaGlobalRef;
+using jni_zero::JavaRef;
+using jni_zero::ScopedJavaGlobalRef;
 
 namespace {
 
@@ -28,39 +33,33 @@ void ForwardJavaCallback(const ScopedJavaGlobalRef<jobject>& java_delegate,
                          int icon_size,
                          const ScopedJavaGlobalRef<jobject>& callback,
                          SkBitmap thumbnail) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M163);
   JNIEnv* env = base::android::AttachCurrentThread();
-  Java_ThumbnailGenerator_onThumbnailRetrieved(
-      env, java_delegate, content_id, icon_size,
-      thumbnail.drawsNothing() ? nullptr : gfx::ConvertToJavaBitmap(thumbnail),
-      callback);
+  Java_ThumbnailGenerator_onThumbnailRetrieved(env, java_delegate, content_id,
+                                               icon_size, thumbnail, callback);
 }
 
 void OnThumbnailScaled(base::OnceCallback<void(SkBitmap)> java_callback,
                        SkBitmap scaled_thumbnail) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M163);
   std::move(java_callback).Run(std::move(scaled_thumbnail));
 }
 
 }  // namespace
 
-ThumbnailGenerator::ThumbnailGenerator(const JavaParamRef<jobject>& jobj)
+ThumbnailGenerator::ThumbnailGenerator(const JavaRef<jobject>& jobj)
     : java_delegate_(jobj) {
-  DCHECK(!jobj.is_null());
+  CHECK(!jobj.is_null(), base::NotFatalUntil::M163);
 }
 
-ThumbnailGenerator::~ThumbnailGenerator() = default;
-
-void ThumbnailGenerator::Destroy(JNIEnv* env,
-                                 const JavaParamRef<jobject>& jobj) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  delete this;
+ThumbnailGenerator::~ThumbnailGenerator() {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M163);
 }
 
 void ThumbnailGenerator::OnImageThumbnailRetrieved(
     base::OnceCallback<void(SkBitmap)> java_callback,
     const SkBitmap& thumbnail) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M163);
 
   // Send the bitmap back to Java-land.
   std::move(java_callback).Run(std::move(thumbnail));
@@ -73,7 +72,7 @@ void ThumbnailGenerator::OnVideoThumbnailRetrieved(
     bool success,
     chrome::mojom::MediaMetadataPtr media_metadata,
     SkBitmap thumbnail) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M163);
 
   // Scale the bitmap before sending back to Java.
   ScaleDownBitmap(icon_size, std::move(thumbnail),
@@ -85,27 +84,18 @@ void ThumbnailGenerator::OnVideoThumbnailRetrieved(
   // That's why |parser|'s destruction is postponed till the current task
   // is completed and the call stack doesn't have frames referencing memory
   // owned by |parser|
-  base::SequencedTaskRunnerHandle::Get()->DeleteSoon(FROM_HERE,
-                                                     std::move(parser));
+  base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE,
+                                                             std::move(parser));
 }
 
-void ThumbnailGenerator::RetrieveThumbnail(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& jobj,
-    const JavaParamRef<jstring>& jcontent_id,
-    const JavaParamRef<jstring>& jfile_path,
-    const JavaParamRef<jstring>& jmime_type,
-    jint icon_size,
-    const JavaParamRef<jobject>& callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+void ThumbnailGenerator::RetrieveThumbnail(const JavaRef<jstring>& jcontent_id,
+                                           const std::string& file_path_str,
+                                           const std::string& mime_type,
+                                           int32_t icon_size,
+                                           const JavaRef<jobject>& callback) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M163);
 
-  base::FilePath file_path = base::FilePath::FromUTF8Unsafe(
-      base::android::ConvertJavaStringToUTF8(env, jfile_path));
-
-  std::string mime_type =
-      jmime_type.is_null()
-          ? ""
-          : base::android::ConvertJavaStringToUTF8(env, jmime_type);
+  base::FilePath file_path = base::FilePath::FromUTF8Unsafe(file_path_str);
 
   // Bind everything passed back to Java.
   auto java_callback =
@@ -138,7 +128,9 @@ void ThumbnailGenerator::RetrieveThumbnail(
 }
 
 // static
-static jlong JNI_ThumbnailGenerator_Init(JNIEnv* env,
-                                         const JavaParamRef<jobject>& jobj) {
-  return reinterpret_cast<intptr_t>(new ThumbnailGenerator(jobj));
+static jni_zero::JniUniquePtr<ThumbnailGenerator> JNI_ThumbnailGenerator_Init(
+    const JavaRef<jobject>& jobj) {
+  return jni_zero::MakeUnique<ThumbnailGenerator>(jobj);
 }
+
+DEFINE_JNI(ThumbnailGenerator)

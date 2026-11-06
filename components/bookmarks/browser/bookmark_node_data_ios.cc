@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,18 +9,20 @@
 namespace bookmarks {
 
 // static
-bool BookmarkNodeData::ClipboardContainsBookmarks() {
-  NOTREACHED();
-  return false;
-}
-
-void BookmarkNodeData::WriteToClipboard() {
+void BookmarkNodeData::ClipboardContainsBookmarks(
+    base::OnceCallback<void(bool)> callback) {
   NOTREACHED();
 }
 
-bool BookmarkNodeData::ReadFromClipboard(ui::ClipboardBuffer buffer) {
+void BookmarkNodeData::WriteToClipboard(bool is_off_the_record) {
   NOTREACHED();
-  return false;
+}
+
+// static
+void BookmarkNodeData::ReadFromClipboard(
+    ui::ClipboardBuffer buffer,
+    base::OnceCallback<void(std::unique_ptr<BookmarkNodeData>)> callback) {
+  NOTREACHED();
 }
 
 }  // namespace bookmarks

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,8 +18,8 @@ struct COMPONENT_EXPORT(MOJO_BASE_TRAITS)
                base::android::ApplicationState> {
   static mojo_base::mojom::ApplicationState ToMojom(
       base::android::ApplicationState input);
-  static bool FromMojom(mojo_base::mojom::ApplicationState input,
-                        base::android::ApplicationState* output);
+  static base::android::ApplicationState FromMojom(
+      mojo_base::mojom::ApplicationState input);
 };
 
 }  // namespace mojo

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -37,6 +37,10 @@ void WindowOcclusionTrackerTestApi::Unpause() {
 
 bool WindowOcclusionTrackerTestApi::IsPaused() const {
   return tracker_->num_pause_occlusion_tracking_;
+}
+
+void WindowOcclusionTrackerTestApi::Lock(Window* window, bool lock) {
+  tracker_->Lock(window, lock);
 }
 
 }  // namespace test

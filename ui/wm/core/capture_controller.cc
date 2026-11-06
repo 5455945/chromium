@@ -1,14 +1,15 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/wm/core/capture_controller.h"
 
+#include "base/memory/raw_ptr.h"
+#include "base/observer_list.h"
 #include "ui/aura/client/capture_client_observer.h"
 #include "ui/aura/env.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_event_dispatcher.h"
-#include "ui/aura/window_tracker.h"
 #include "ui/aura/window_tree_host.h"
 
 namespace wm {
@@ -21,17 +22,17 @@ CaptureController* CaptureController::instance_ = nullptr;
 
 CaptureController::CaptureController()
     : capture_window_(nullptr), capture_delegate_(nullptr) {
-  DCHECK(!instance_);
+  CHECK(!instance_, base::NotFatalUntil::M163);
   instance_ = this;
 }
 
 CaptureController::~CaptureController() {
-  DCHECK_EQ(instance_, this);
+  CHECK_EQ(instance_, this, base::NotFatalUntil::M163);
   instance_ = nullptr;
 }
 
 void CaptureController::Attach(aura::Window* root) {
-  DCHECK_EQ(0u, delegates_.count(root));
+  CHECK_EQ(0u, delegates_.count(root), base::NotFatalUntil::M163);
   delegates_[root] = root->GetHost()->dispatcher();
   aura::client::SetCaptureClient(root, this);
 }
@@ -41,47 +42,76 @@ void CaptureController::Detach(aura::Window* root) {
   aura::client::SetCaptureClient(root, nullptr);
 }
 
+void CaptureController::PrepareForShutdown() {
+  CHECK(!destroying_, base::NotFatalUntil::M163);
+  SetCapture(nullptr);
+  destroying_ = true;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // CaptureController, aura::client::CaptureClient implementation:
 
 void CaptureController::SetCapture(aura::Window* new_capture_window) {
-  if (capture_window_ == new_capture_window)
+  if (destroying_) {
     return;
+  }
+
+  if (capture_window_.get() == new_capture_window) {
+    return;
+  }
 
   // Make sure window has a root window.
-  DCHECK(!new_capture_window || new_capture_window->GetRootWindow());
-  DCHECK(!capture_window_ || capture_window_->GetRootWindow());
+  CHECK(!new_capture_window || new_capture_window->GetRootWindow(),
+        base::NotFatalUntil::M163);
+  CHECK(!capture_window_ || capture_window_->GetRootWindow(),
+        base::NotFatalUntil::M163);
 
-  aura::Window* old_capture_window = capture_window_;
+  aura::Window* old_capture_window = capture_window_.get();
   aura::client::CaptureDelegate* old_capture_delegate = capture_delegate_;
 
   // Copy the map in case it's modified out from under us.
-  std::map<aura::Window*, aura::client::CaptureDelegate*> delegates =
-      delegates_;
+  std::map<aura::Window*,
+           raw_ptr<aura::client::CaptureDelegate, CtnExperimental>>
+      delegates = delegates_;
+
+  base::WeakPtr<aura::Window> new_capture_window_weak =
+      new_capture_window ? new_capture_window->GetWeakPtrAsWindow() : nullptr;
+  base::WeakPtr<aura::Window> old_capture_window_weak =
+      old_capture_window ? old_capture_window->GetWeakPtrAsWindow() : nullptr;
 
   // If we're starting a new capture, cancel all touches that aren't
   // targeted to the capturing window.
   if (new_capture_window) {
+    aura::Env::GetInstance()->gesture_recognizer()->CancelActiveTouchesExcept(
+        new_capture_window);
     // Cancelling touches might cause |new_capture_window| to get deleted.
     // Track |new_capture_window| and check if it still exists before
     // committing |capture_window_|.
-    aura::WindowTracker tracker;
-    tracker.Add(new_capture_window);
-    aura::Env::GetInstance()->gesture_recognizer()->CancelActiveTouchesExcept(
-        new_capture_window);
-    if (!tracker.Contains(new_capture_window))
+    if (!new_capture_window_weak) {
       new_capture_window = nullptr;
+    }
+    if (old_capture_window && !old_capture_window_weak) {
+      old_capture_window = nullptr;
+    }
   }
 
-  capture_window_ = new_capture_window;
+  capture_window_ = new_capture_window_weak;
   aura::Window* capture_root_window =
       capture_window_ ? capture_window_->GetRootWindow() : nullptr;
   capture_delegate_ = delegates_.find(capture_root_window) == delegates_.end()
                           ? nullptr
-                          : delegates_[capture_root_window];
+                          : delegates_[capture_root_window].get();
 
-  for (const auto& it : delegates)
+  // With more than one delegate (e.g. multiple displays), an earlier
+  // UpdateCapture() call could cancel an existing capture and destroy
+  // |old_capture_window|, causing a later UpdateCapture() call to access
+  // a dangling pointer, so detect and handle it.
+  for (const auto& it : delegates) {
     it.second->UpdateCapture(old_capture_window, new_capture_window);
+    if (old_capture_window && !old_capture_window_weak) {
+      old_capture_window = nullptr;
+    }
+  }
 
   if (capture_delegate_ != old_capture_delegate) {
     if (old_capture_delegate)
@@ -90,22 +120,23 @@ void CaptureController::SetCapture(aura::Window* new_capture_window) {
       capture_delegate_->SetNativeCapture();
   }
 
-  for (aura::client::CaptureClientObserver& observer : observers_)
-    observer.OnCaptureChanged(old_capture_window, capture_window_);
+  observers_.Notify(&aura::client::CaptureClientObserver::OnCaptureChanged,
+                    old_capture_window, capture_window_.get());
 }
 
 void CaptureController::ReleaseCapture(aura::Window* window) {
-  if (capture_window_ != window)
+  if (capture_window_.get() != window) {
     return;
+  }
   SetCapture(nullptr);
 }
 
 aura::Window* CaptureController::GetCaptureWindow() {
-  return capture_window_;
+  return capture_window_.get();
 }
 
 aura::Window* CaptureController::GetGlobalCaptureWindow() {
-  return capture_window_;
+  return capture_window_.get();
 }
 
 void CaptureController::AddObserver(
@@ -132,7 +163,7 @@ ScopedCaptureClient::~ScopedCaptureClient() {
 }
 
 void ScopedCaptureClient::OnWindowDestroyed(aura::Window* window) {
-  DCHECK_EQ(window, root_window_);
+  CHECK_EQ(window, root_window_, base::NotFatalUntil::M163);
   Shutdown();
 }
 

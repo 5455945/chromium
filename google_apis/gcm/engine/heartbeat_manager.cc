@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,14 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/power_monitor/power_monitor.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "google_apis/gcm/protocol/mcs.pb.h"
 #include "net/base/network_change_notifier.h"
 
@@ -27,18 +26,16 @@ const int kCellHeartbeatDefaultMs = 1000 * 60 * 28;  // 28 minutes.
 const int kWifiHeartbeatDefaultMs = 1000 * 60 * 15;  // 15 minutes.
 // The default heartbeat ack interval.
 const int kHeartbeatAckDefaultMs = 1000 * 60 * 1;  // 1 minute.
-// Minimum allowed client default heartbeat interval.
-const int kMinClientHeartbeatIntervalMs = 1000 * 30;  // 30 seconds.
 // Minimum time spent sleeping before we force a new heartbeat.
 const int kMinSuspendTimeMs = 1000 * 10; // 10 seconds.
 
-#if defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX)
 // The period at which to check if the heartbeat time has passed. Used to
 // protect against platforms where the timer is delayed by the system being
 // suspended.  Only needed on linux because the other OSes provide a standard
 // way to be notified of system suspend and resume events.
 const int kHeartbeatMissedCheckMs = 1000 * 60 * 5;  // 5 minutes.
-#endif  // defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#endif                                              // BUILDFLAG(IS_LINUX)
 
 }  // namespace
 
@@ -48,7 +45,6 @@ HeartbeatManager::HeartbeatManager(
     : waiting_for_ack_(false),
       heartbeat_interval_ms_(0),
       server_interval_ms_(0),
-      client_interval_ms_(0),
       io_task_runner_(std::move(io_task_runner)),
       heartbeat_timer_(new base::RetainingOneShotTimer()) {
   DCHECK(io_task_runner_);
@@ -62,7 +58,7 @@ HeartbeatManager::HeartbeatManager(
 
 HeartbeatManager::~HeartbeatManager() {
   // Stop listening for system suspend and resume events.
-  base::PowerMonitor::RemovePowerSuspendObserver(this);
+  base::PowerMonitor::GetInstance()->RemovePowerSuspendObserver(this);
 }
 
 void HeartbeatManager::Start(
@@ -74,7 +70,7 @@ void HeartbeatManager::Start(
   trigger_reconnect_callback_ = trigger_reconnect_callback;
 
   // Listen for system suspend and resume events.
-  base::PowerMonitor::AddPowerSuspendObserver(this);
+  base::PowerMonitor::GetInstance()->AddPowerSuspendObserver(this);
 
   // Calculated the heartbeat interval just before we start the timer.
   UpdateHeartbeatInterval();
@@ -90,7 +86,7 @@ void HeartbeatManager::Stop() {
   heartbeat_timer_->Stop();
   waiting_for_ack_ = false;
 
-  base::PowerMonitor::RemovePowerSuspendObserver(this);
+  base::PowerMonitor::GetInstance()->RemovePowerSuspendObserver(this);
 }
 
 void HeartbeatManager::OnHeartbeatAcked() {
@@ -125,20 +121,6 @@ base::TimeTicks HeartbeatManager::GetNextHeartbeatTime() const {
     return base::TimeTicks();
 }
 
-void HeartbeatManager::UpdateHeartbeatTimer(
-    std::unique_ptr<base::RetainingOneShotTimer> timer) {
-  bool was_running = heartbeat_timer_->IsRunning();
-  base::TimeDelta remaining_delay =
-      heartbeat_timer_->desired_run_time() - base::TimeTicks::Now();
-  base::RepeatingClosure timer_task = heartbeat_timer_->user_task();
-
-  heartbeat_timer_->Stop();
-  heartbeat_timer_ = std::move(timer);
-
-  if (was_running)
-    heartbeat_timer_->Start(FROM_HERE, remaining_delay, timer_task);
-}
-
 void HeartbeatManager::OnSuspend() {
   // The system is going to sleep. Record the time, so on resume we know how
   // much time the machine was suspended.
@@ -150,13 +132,12 @@ void HeartbeatManager::OnResume() {
   // MCS was silently lost during that time, even if a heartbeat is not yet
   // due. Force a heartbeat to detect if the connection is still good.
   base::TimeDelta elapsed = base::Time::Now() - suspend_time_;
-  UMA_HISTOGRAM_LONG_TIMES("GCM.SuspendTime", elapsed);
 
   // Make sure a minimum amount of time has passed before forcing a heartbeat to
   // avoid any tight loop scenarios.
   // If the |send_heartbeat_callback_| is null, it means the heartbeat manager
   // hasn't been started, so do nothing.
-  if (elapsed > base::TimeDelta::FromMilliseconds(kMinSuspendTimeMs) &&
+  if (elapsed > base::Milliseconds(kMinSuspendTimeMs) &&
       !send_heartbeat_callback_.is_null())
     OnHeartbeatTriggered();
 }
@@ -186,13 +167,13 @@ void HeartbeatManager::RestartTimer() {
   }
 
   heartbeat_expected_time_ =
-      base::Time::Now() + base::TimeDelta::FromMilliseconds(interval_ms);
+      base::Time::Now() + base::Milliseconds(interval_ms);
   heartbeat_timer_->Start(
-      FROM_HERE, base::TimeDelta::FromMilliseconds(interval_ms),
+      FROM_HERE, base::Milliseconds(interval_ms),
       base::BindRepeating(&HeartbeatManager::OnHeartbeatTriggered,
                           weak_ptr_factory_.GetWeakPtr()));
 
-#if defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX)
   // Windows, Mac, Android, iOS, and Chrome OS all provide a way to be notified
   // when the system is suspending or resuming.  The only one that does not is
   // Linux so we need to poll to check for missed heartbeats.
@@ -200,8 +181,8 @@ void HeartbeatManager::RestartTimer() {
       FROM_HERE,
       base::BindOnce(&HeartbeatManager::CheckForMissedHeartbeat,
                      weak_ptr_factory_.GetWeakPtr()),
-      base::TimeDelta::FromMilliseconds(kHeartbeatMissedCheckMs));
-#endif  // defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+      base::Milliseconds(kHeartbeatMissedCheckMs));
+#endif  // BUILDFLAG(IS_LINUX)
 }
 
 void HeartbeatManager::CheckForMissedHeartbeat() {
@@ -211,34 +192,24 @@ void HeartbeatManager::CheckForMissedHeartbeat() {
 
   // If the heartbeat has been missed, manually trigger it.
   if (base::Time::Now() > heartbeat_expected_time_) {
-    UMA_HISTOGRAM_LONG_TIMES("GCM.HeartbeatMissedDelta",
-                             base::Time::Now() - heartbeat_expected_time_);
     OnHeartbeatTriggered();
     return;
   }
 
-#if defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX)
   // Otherwise check again later.
   io_task_runner_->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&HeartbeatManager::CheckForMissedHeartbeat,
                      weak_ptr_factory_.GetWeakPtr()),
-      base::TimeDelta::FromMilliseconds(kHeartbeatMissedCheckMs));
-#endif  // defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+      base::Milliseconds(kHeartbeatMissedCheckMs));
+#endif  // BUILDFLAG(IS_LINUX)
 }
 
 void HeartbeatManager::UpdateHeartbeatInterval() {
-  // Server interval takes precedence over client interval, even if the latter
-  // is less.
   if (server_interval_ms_ != 0) {
     // If a server interval is set, it overrides any local one.
     heartbeat_interval_ms_ = server_interval_ms_;
-  } else if (HasClientHeartbeatInterval() &&
-             (client_interval_ms_ < heartbeat_interval_ms_ ||
-              heartbeat_interval_ms_ == 0)) {
-    // Client interval might have been adjusted up, which should only take
-    // effect during a reconnection.
-    heartbeat_interval_ms_ = client_interval_ms_;
   } else if (heartbeat_interval_ms_ == 0) {
     // If interval is still 0, recalculate it based on network type.
     heartbeat_interval_ms_ = GetDefaultHeartbeatInterval();
@@ -256,45 +227,6 @@ int HeartbeatManager::GetDefaultHeartbeatInterval() {
     heartbeat_interval_ms = kWifiHeartbeatDefaultMs;
   }
   return heartbeat_interval_ms;
-}
-
-int HeartbeatManager::GetMaxClientHeartbeatIntervalMs() {
-  return GetDefaultHeartbeatInterval();
-}
-
-int HeartbeatManager::GetMinClientHeartbeatIntervalMs() {
-  // Returning a constant. This should be adjusted for connection type, like the
-  // default/max interval.
-  return kMinClientHeartbeatIntervalMs;
-}
-
-void HeartbeatManager::SetClientHeartbeatIntervalMs(int interval_ms) {
-  if ((interval_ms != 0 && !IsValidClientHeartbeatInterval(interval_ms)) ||
-      interval_ms == client_interval_ms_) {
-    return;
-  }
-
-  client_interval_ms_ = interval_ms;
-  // Only reset connection if the new heartbeat interval is shorter. If it is
-  // longer, the connection will reset itself at some point and interval will be
-  // fixed.
-  if (client_interval_ms_ > 0 && client_interval_ms_ < heartbeat_interval_ms_) {
-    ResetConnection(ConnectionFactory::NEW_HEARTBEAT_INTERVAL);
-  }
-}
-
-int HeartbeatManager::GetClientHeartbeatIntervalMs() {
-  return client_interval_ms_;
-}
-
-bool HeartbeatManager::HasClientHeartbeatInterval() {
-  return client_interval_ms_ != 0;
-}
-
-bool HeartbeatManager::IsValidClientHeartbeatInterval(int interval) {
-  int max_heartbeat_interval = GetDefaultHeartbeatInterval();
-  return kMinClientHeartbeatIntervalMs <= interval &&
-      interval <= max_heartbeat_interval;
 }
 
 void HeartbeatManager::ResetConnection(

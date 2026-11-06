@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,22 @@
 #define CONTENT_BROWSER_RENDERER_HOST_RENDER_WIDGET_HOST_VIEW_EVENT_HANDLER_H_
 
 #include <memory>
+#include <optional>
 
 #include "base/containers/flat_set.h"
-#include "base/macros.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "build/build_config.h"
+#include "components/input/native_web_keyboard_event.h"
 #include "content/browser/renderer_host/input/mouse_wheel_phase_handler.h"
 #include "content/common/content_export.h"
-#include "content/public/browser/native_web_keyboard_event.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/input/pointer_lock_result.mojom.h"
 #include "ui/aura/scoped_enable_unadjusted_mouse_events.h"
 #include "ui/aura/scoped_keyboard_hook.h"
 #include "ui/events/event_handler.h"
 #include "ui/events/gestures/motion_event_aura.h"
+#include "ui/gfx/geometry/point.h"
 #include "ui/latency/latency_info.h"
 
 namespace aura {
@@ -31,7 +35,7 @@ class WebTouchEvent;
 }  // namespace blink
 
 namespace ui {
-enum class DomCode;
+enum class DomCode : uint32_t;
 class TextInputClient;
 class TouchSelectionController;
 }
@@ -43,7 +47,6 @@ class OverscrollController;
 class RenderWidgetHostImpl;
 class RenderWidgetHostViewBase;
 class TouchSelectionControllerClientAura;
-class HitTestDebugKeyEventObserver;
 
 // Provides an implementation of ui::EventHandler for use with
 // RenderWidgetHostViewBase. A delegate is required in order to provide platform
@@ -64,6 +67,9 @@ class CONTENT_EXPORT RenderWidgetHostViewEventHandler
    public:
     Delegate();
 
+    Delegate(const Delegate&) = delete;
+    Delegate& operator=(const Delegate&) = delete;
+
     // Converts |rect| from window coordinate to screen coordinate.
     virtual gfx::Rect ConvertRectToScreen(const gfx::Rect& rect) const = 0;
     // Call keybindings handler against the event and send matched edit commands
@@ -71,7 +77,7 @@ class CONTENT_EXPORT RenderWidgetHostViewEventHandler
     // whether ui::KeyEvent::SetHandled() should be called on the underlying
     // ui::KeyEvent.
     virtual void ForwardKeyboardEventWithLatencyInfo(
-        const NativeWebKeyboardEvent& event,
+        const input::NativeWebKeyboardEvent& event,
         const ui::LatencyInfo& latency,
         bool* update_event) = 0;
     // Returns whether the widget needs to grab mouse capture to work properly.
@@ -99,14 +105,17 @@ class CONTENT_EXPORT RenderWidgetHostViewEventHandler
         selection_controller_client_;
     std::unique_ptr<ui::TouchSelectionController> selection_controller_;
     std::unique_ptr<OverscrollController> overscroll_controller_;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(Delegate);
   };
 
   RenderWidgetHostViewEventHandler(RenderWidgetHostImpl* host,
                                    RenderWidgetHostViewBase* host_view,
                                    Delegate* delegate);
+
+  RenderWidgetHostViewEventHandler(const RenderWidgetHostViewEventHandler&) =
+      delete;
+  RenderWidgetHostViewEventHandler& operator=(
+      const RenderWidgetHostViewEventHandler&) = delete;
+
   ~RenderWidgetHostViewEventHandler() override;
 
   // Set child popup's host view, and event handler, in order to redirect input.
@@ -116,15 +125,17 @@ class CONTENT_EXPORT RenderWidgetHostViewEventHandler
   // fullscreen.
   void TrackHost(aura::Window* reference_window);
 
+  void ResetHost();
+
   MouseWheelPhaseHandler& mouse_wheel_phase_handler() {
     return mouse_wheel_phase_handler_;
   }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // Sets the ContextMenuParams when a context menu is triggered. Required for
   // subsequent event processing.
   void SetContextMenuParams(const ContextMenuParams& params);
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
   bool accept_return_character() { return accept_return_character_; }
   bool mouse_locked() { return mouse_locked_; }
@@ -138,15 +149,15 @@ class CONTENT_EXPORT RenderWidgetHostViewEventHandler
   }
   void set_window(aura::Window* window) { window_ = window; }
 
-  // Lock/Unlock processing of future mouse events.
-  blink::mojom::PointerLockResult LockMouse(bool request_unadjusted_movement);
+  // Lock/Unlock processing of future mouse pointer events.
+  blink::mojom::PointerLockResult LockPointer(bool request_unadjusted_movement);
   // Change the current lock to have the given unadjusted_movement.
-  blink::mojom::PointerLockResult ChangeMouseLock(
+  blink::mojom::PointerLockResult ChangePointerLock(
       bool request_unadjusted_movement);
-  void UnlockMouse();
+  void UnlockPointer();
 
   // Start/Stop processing of future system keyboard events.
-  bool LockKeyboard(absl::optional<base::flat_set<ui::DomCode>> codes);
+  bool LockKeyboard(std::optional<base::flat_set<ui::DomCode>> codes);
   void UnlockKeyboard();
   bool IsKeyboardLocked() const;
 
@@ -207,6 +218,9 @@ class CONTENT_EXPORT RenderWidgetHostViewEventHandler
   // handled if it should not be further processed.
   void HandleGestureForTouchSelection(ui::GestureEvent* event);
 
+  // Performs gesture ack handling needed for swipe-to-move-cursor gestures.
+  void HandleSwipeToMoveCursorGestureAck(const blink::WebGestureEvent& event);
+
   // Handles mouse event handling while the mouse is locked via LockMouse.
   void HandleMouseEventWhileLocked(ui::MouseEvent* event);
 
@@ -262,16 +276,16 @@ class CONTENT_EXPORT RenderWidgetHostViewEventHandler
   // locked.
   bool mouse_locked_ = false;
 
+  // Screen-DIP position captured before emulated pointer lock moves the cursor.
+  // Unset when native pointer lock or the legacy restoration path is used.
+  std::optional<gfx::Point> pointer_lock_restore_position_;
+
   // Use to track whether pointer lock is in the unadjusted movement mode and
   // mousemoves are using unadjusted movement value (without mouse
   // accelerations) from OS, i.e. WM_INPUT on Windows. Deactivates raw input
   // mode when destroyed.
   std::unique_ptr<aura::ScopedEnableUnadjustedMouseEvents>
       mouse_locked_unadjusted_movement_;
-
-  // Whether pinch-to-zoom should be enabled and pinch events forwarded to the
-  // renderer.
-  const bool pinch_zoom_enabled_;
 
   // This flag when set ensures that we send over a notification to blink that
   // the current view has focus.
@@ -290,28 +304,31 @@ class CONTENT_EXPORT RenderWidgetHostViewEventHandler
   // of the window when it reaches the window borders to avoid it going outside.
   // This value is used to differentiate between these synthetic mouse move
   // events vs. normal mouse move events.
-  absl::optional<gfx::Point> synthetic_move_position_;
+  std::optional<gfx::Point> synthetic_move_position_;
 
-  bool enable_consolidated_movement_;
+  // Whether a swipe-to-move-cursor gesture is activated.
+  bool swipe_to_move_cursor_activated_ = false;
 
   // Stores the current state of the active pointers targeting this
   // object.
   ui::MotionEventAura pointer_state_;
 
   // The following are not owned. They should outlive |this|
-  RenderWidgetHostImpl* const host_;
+  raw_ptr<RenderWidgetHostImpl> host_;
   // Should create |this| and own it.
-  RenderWidgetHostViewBase* const host_view_;
+  const raw_ptr<RenderWidgetHostViewBase> host_view_;
   // Optional, used to redirect events to a popup and associated handler.
-  RenderWidgetHostViewBase* popup_child_host_view_ = nullptr;
-  ui::EventHandler* popup_child_event_handler_ = nullptr;
-  Delegate* const delegate_;
-  aura::Window* window_ = nullptr;
+  raw_ptr<RenderWidgetHostViewBase> popup_child_host_view_ = nullptr;
+  raw_ptr<ui::EventHandler> popup_child_event_handler_ = nullptr;
+  const raw_ptr<Delegate> delegate_;
+  raw_ptr<aura::Window> window_ = nullptr;
   MouseWheelPhaseHandler mouse_wheel_phase_handler_;
 
-  std::unique_ptr<HitTestDebugKeyEventObserver> debug_observer_;
+  // Used to identify pointing device that can fire fling events.
+  base::flat_set<int> fling_capable_device_ids_;
 
-  DISALLOW_COPY_AND_ASSIGN(RenderWidgetHostViewEventHandler);
+  base::WeakPtrFactory<RenderWidgetHostViewEventHandler> weak_ptr_factory_{
+      this};
 };
 
 }  // namespace content

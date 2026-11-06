@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,21 @@
 #define CHROME_BROWSER_VR_ELEMENTS_ENVIRONMENT_GRID_H_
 
 #include "chrome/browser/vr/elements/rect.h"
-#include "chrome/browser/vr/renderers/base_quad_renderer.h"
+#include "chrome/browser/vr/model/camera_model.h"
 #include "third_party/skia/include/core/SkColor.h"
 
 namespace vr {
+
+class UiElementRenderer;
 
 // Draws a quad with a radial gradient and grid lines.
 class Grid : public Rect {
  public:
   Grid();
+
+  Grid(const Grid&) = delete;
+  Grid& operator=(const Grid&) = delete;
+
   ~Grid() override;
 
   void Render(UiElementRenderer* renderer,
@@ -32,32 +38,9 @@ class Grid : public Rect {
     gridline_count_ = gridline_count;
   }
 
-  class Renderer : public BaseQuadRenderer {
-   public:
-    Renderer();
-    ~Renderer() override;
-
-    void Draw(const gfx::Transform& model_view_proj_matrix,
-              SkColor grid_color,
-              int gridline_count,
-              float opacity);
-
-    static void CreateBuffers();
-
-   private:
-    GLuint model_view_proj_matrix_handle_;
-    GLuint grid_color_handle_;
-    GLuint opacity_handle_;
-    GLuint lines_count_handle_;
-
-    DISALLOW_COPY_AND_ASSIGN(Renderer);
-  };
-
  private:
   SkColor grid_color_ = SK_ColorWHITE;
   int gridline_count_ = 1;
-
-  DISALLOW_COPY_AND_ASSIGN(Grid);
 };
 
 }  // namespace vr

@@ -20,20 +20,21 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_POINTER_EVENTS_HIT_RULES_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_POINTER_EVENTS_HIT_RULES_H_
 
-#include "third_party/blink/renderer/core/layout/hit_test_request.h"
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
+
+class HitTestRequest;
 
 class PointerEventsHitRules {
   STACK_ALLOCATED();
 
  public:
   enum EHitTesting {
-    SVG_IMAGE_HITTESTING,
-    SVG_GEOMETRY_HITTESTING,
-    SVG_TEXT_HITTESTING
+    kSvgImageHitTesting,
+    kSvgGeometryHitTesting,
+    kSvgTextHitTesting
   };
 
   PointerEventsHitRules(EHitTesting, const HitTestRequest&, EPointerEvents);

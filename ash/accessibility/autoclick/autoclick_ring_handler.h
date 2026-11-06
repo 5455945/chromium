@@ -1,11 +1,12 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_ACCESSIBILITY_AUTOCLICK_AUTOCLICK_RING_HANDLER_H_
 #define ASH_ACCESSIBILITY_AUTOCLICK_AUTOCLICK_RING_HANDLER_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "ui/gfx/animation/linear_animation.h"
 #include "ui/gfx/geometry/point.h"
@@ -19,6 +20,10 @@ namespace ash {
 class AutoclickRingHandler : public gfx::LinearAnimation {
  public:
   AutoclickRingHandler();
+
+  AutoclickRingHandler(const AutoclickRingHandler&) = delete;
+  AutoclickRingHandler& operator=(const AutoclickRingHandler&) = delete;
+
   ~AutoclickRingHandler() override;
 
   void StartGesture(base::TimeDelta duration,
@@ -37,8 +42,8 @@ class AutoclickRingHandler : public gfx::LinearAnimation {
   const int kAutoclickRingInnerRadius = 20;
 
   enum class AnimationType {
-    NONE,
-    GROW_ANIMATION,
+    kNone,
+    kGrowAnimation,
   };
 
   void StartAnimation(base::TimeDelta duration);
@@ -48,16 +53,14 @@ class AutoclickRingHandler : public gfx::LinearAnimation {
   void AnimateToState(double state) override;
   void AnimationStopped() override;
 
-  AutoclickRingView* view_ = nullptr;
-  views::Widget* ring_widget_ = nullptr;
+  raw_ptr<AutoclickRingView> view_ = nullptr;
+  raw_ptr<views::Widget> ring_widget_ = nullptr;
   // Location of the simulated mouse event from auto click in screen
   // coordinates.
   gfx::Point tap_down_location_;
-  AnimationType current_animation_type_ = AnimationType::NONE;
+  AnimationType current_animation_type_ = AnimationType::kNone;
   base::TimeDelta animation_duration_;
   int radius_ = kAutoclickRingInnerRadius;
-
-  DISALLOW_COPY_AND_ASSIGN(AutoclickRingHandler);
 };
 
 }  // namespace ash

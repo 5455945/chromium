@@ -1,111 +1,255 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/chrome/app/application_delegate/metrics_mediator.h"
 
-#include <sys/sysctl.h>
+#import <mach/mach.h>
+#import <sys/sysctl.h>
 
-#include "base/bind.h"
-#include "base/metrics/histogram_functions.h"
-#include "base/metrics/user_metrics_action.h"
-#include "base/strings/sys_string_conversions.h"
-#include "base/task/post_task.h"
-#include "base/task/thread_pool.h"
-#include "build/branding_buildflags.h"
-#include "components/crash/core/common/crash_keys.h"
-#include "components/metrics/metrics_pref_names.h"
-#include "components/metrics/metrics_service.h"
-#include "components/prefs/pref_service.h"
+#import <optional>
+#import <set>
+#import <vector>
+
+#import "base/check.h"
+#import "base/functional/bind.h"
+#import "base/ios/device_util.h"
+#import "base/ios/ios_util.h"
+#import "base/metrics/histogram_functions.h"
+#import "base/metrics/histogram_macros.h"
+#import "base/metrics/user_metrics_action.h"
+#import "base/notreached.h"
+#import "base/strings/strcat.h"
+#import "base/strings/sys_string_conversions.h"
+#import "base/task/thread_pool.h"
+#import "base/time/time.h"
+#import "base/timer/elapsed_timer.h"
+#import "build/branding_buildflags.h"
+#import "components/crash/core/common/crash_keys.h"
+#import "components/metrics/metrics_pref_names.h"
+#import "components/metrics/metrics_reporting_choice_service.h"
+#import "components/metrics/metrics_service.h"
+#import "components/metrics/metrics_switches.h"
+#import "components/password_manager/core/common/browser_assisted_login_type.h"
+#import "components/prefs/pref_service.h"
 #import "components/previous_session_info/previous_session_info.h"
-#include "components/ukm/ios/features.h"
-#include "components/ukm/ios/ukm_reporting_ios_util.h"
+#import "components/signin/public/identity_manager/tribool.h"
+#import "components/ukm/ios/ukm_reporting_ios_util.h"
+#import "crypto/apple/keychain_util.h"
+#import "ios/chrome/app/application_delegate/app_state.h"
 #import "ios/chrome/app/application_delegate/metric_kit_subscriber.h"
 #import "ios/chrome/app/application_delegate/startup_information.h"
-#include "ios/chrome/browser/application_context.h"
-#include "ios/chrome/browser/chrome_url_constants.h"
-#include "ios/chrome/browser/crash_report/crash_helper.h"
-#include "ios/chrome/browser/main/browser.h"
-#include "ios/chrome/browser/metrics/first_user_action_recorder.h"
-#import "ios/chrome/browser/net/connection_type_observer_bridge.h"
-#include "ios/chrome/browser/pref_names.h"
-#include "ios/chrome/browser/system_flags.h"
-#import "ios/chrome/browser/ui/default_promo/default_browser_utils.h"
-#import "ios/chrome/browser/ui/main/browser_interface_provider.h"
-#import "ios/chrome/browser/ui/main/connection_information.h"
-#import "ios/chrome/browser/ui/main/scene_state.h"
-#import "ios/chrome/browser/ui/ntp/ntp_util.h"
-#import "ios/chrome/browser/web_state_list/web_state_list.h"
-#include "ios/chrome/browser/widget_kit/features.h"
-#include "ios/chrome/common/app_group/app_group_metrics.h"
-#include "ios/chrome/common/app_group/app_group_metrics_mainapp.h"
-#include "ios/public/provider/chrome/browser/chrome_browser_provider.h"
-#include "ios/public/provider/chrome/browser/distribution/app_distribution_provider.h"
-#include "ios/web/public/thread/web_task_traits.h"
-#include "ios/web/public/thread/web_thread.h"
+#import "ios/chrome/app/profile/profile_state.h"
+#import "ios/chrome/app/startup/ios_enable_sandbox_dump_buildflags.h"
+#import "ios/chrome/browser/crash_report/model/crash_helper.h"
+#import "ios/chrome/browser/crash_report/model/features.h"
+#import "ios/chrome/browser/default_browser/model/default_browser_interest_signals.h"
+#import "ios/chrome/browser/metrics/model/first_user_action_recorder.h"
+#import "ios/chrome/browser/metrics/model/startup_metrics.h"
+#import "ios/chrome/browser/safe_mode/ui_bundled/safe_mode_coordinator.h"
+#import "ios/chrome/browser/shared/coordinator/scene/connection_information.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
+#import "ios/chrome/browser/shared/model/application_context/application_context.h"
+#import "ios/chrome/browser/shared/model/browser/browser.h"
+#import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
+#import "ios/chrome/browser/shared/model/prefs/pref_names.h"
+#import "ios/chrome/browser/shared/model/profile/profile_ios.h"
+#import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
+#import "ios/chrome/browser/shared/model/web_state_list/tab_group.h"
+#import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
+#import "ios/chrome/browser/shared/public/features/system_flags.h"
+#import "ios/chrome/browser/signin/model/signin_util.h"
+#import "ios/chrome/browser/tabs/model/inactive_tabs/metrics.h"
+#import "ios/chrome/browser/widget_kit/model/features.h"
+#import "ios/chrome/common/app_group/app_group_constants.h"
+#import "ios/chrome/common/app_group/app_group_metrics.h"
+#import "ios/chrome/common/app_group/app_group_metrics_mainapp.h"
+#import "ios/chrome/common/credential_provider/constants.h"
+#import "ios/components/ui_util/dynamic_type_util.h"
+#import "ios/public/provider/chrome/browser/app_distribution/app_distribution_api.h"
+#import "ios/web/public/thread/web_task_traits.h"
+#import "ios/web/public/thread/web_thread.h"
 #import "ios/web/public/web_state.h"
-#include "url/gurl.h"
+#import "url/gurl.h"
 
 #if BUILDFLAG(ENABLE_WIDGET_KIT_EXTENSION)
-#import "ios/chrome/browser/widget_kit/widget_metrics_util.h"  // nogncheck
+#import "ios/chrome/browser/widget_kit/model/widget_metrics_util.h"  // nogncheck
 #endif
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+@class AppState;
 
 namespace {
+// The key to a NSUserDefaults entry logging the number of times classes are
+// loaded before a scene is attached.
+NSString* const kAppStartupCounterKey = @"LoadTimePreferenceKey";
+
 // The amount of time (in seconds) to wait for the user to start a new task.
 const NSTimeInterval kFirstUserActionTimeout = 30.0;
 
+// Enum representing the existing set of all open tabs age scenarios. Current
+// values should not be renumbered. Please keep in sync with
+// "IOSAllOpenTabsAge" in src/tools/metrics/histograms/enums.xml.
+enum class TabsAgeGroup {
+  kLessThanOneDay = 0,
+  kOneToThreeDays = 1,
+  kThreeToSevenDays = 2,
+  kSevenToFourteenDays = 3,
+  kFourteenToThirtyDays = 4,
+  kMoreThanThirtyDays = 5,
+  kMaxValue = kMoreThanThirtyDays,
+};
+
+#if BUILDFLAG(IOS_ENABLE_SANDBOX_DUMP)
 // Returns time delta since app launch as retrieved from kernel info about
 // the current process.
 base::TimeDelta TimeDeltaSinceAppLaunchFromProcess() {
   struct kinfo_proc info;
   size_t length = sizeof(struct kinfo_proc);
   int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, (int)getpid()};
-  const int kr = sysctl(mib, base::size(mib), &info, &length, nullptr, 0);
+  const int kr = sysctl(mib, std::size(mib), &info, &length, nullptr, 0);
   DCHECK_EQ(KERN_SUCCESS, kr);
 
   const struct timeval time = info.kp_proc.p_starttime;
   const NSTimeInterval time_since_1970 =
       time.tv_sec + (time.tv_usec / (double)USEC_PER_SEC);
   NSDate* date = [NSDate dateWithTimeIntervalSince1970:time_since_1970];
-  return base::TimeDelta::FromSecondsD(-date.timeIntervalSinceNow);
+  return base::Seconds(-date.timeIntervalSinceNow);
 }
 
-// Send histograms reporting the usage of notification center metrics.
-void RecordWidgetUsage() {
+void DumpEnvironment(id<StartupInformation> startup_information) {
+  if (![[NSUserDefaults standardUserDefaults]
+          boolForKey:@"EnableDumpEnvironment"]) {
+    return;
+  }
+  NSArray* paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,
+                                                       NSUserDomainMask, YES);
+  NSError* error = nil;
+  NSString* document_directory = [paths objectAtIndex:0];
+  NSString* environment_directory =
+      [document_directory stringByAppendingPathComponent:@"environment"];
+  if (![[NSFileManager defaultManager]
+          fileExistsAtPath:environment_directory]) {
+    [[NSFileManager defaultManager] createDirectoryAtPath:environment_directory
+                              withIntermediateDirectories:NO
+                                               attributes:nil
+                                                    error:&error];
+    if (error) {
+      return;
+    }
+  }
+  NSDate* now_date = [NSDate date];
+  NSDateFormatter* formatter = [[NSDateFormatter alloc] init];
+  formatter.dateFormat = @"yyyyMMdd-HHmmss";
+  formatter.timeZone = [NSTimeZone timeZoneWithAbbreviation:@"UTC"];
+
+  NSString* file_name = [formatter stringFromDate:now_date];
+
+  NSDictionary* environment = [[NSProcessInfo processInfo] environment];
+  base::LiveTicks now;
+  const base::TimeDelta processStartToNowTime =
+      TimeDeltaSinceAppLaunchFromProcess();
+  const std::optional<base::TimeDelta> mainToNowTime =
+      [startup_information appLaunchTimer].Elapsed(&now);
+  const base::TimeDelta didFinishLaunchingToNowTime =
+      now - [startup_information didFinishLaunchingTime];
+  const base::TimeDelta sceneConnectionToNowTime =
+      now - [startup_information firstSceneConnectionTime];
+
+  NSDictionary* dict = @{
+    @"environment" : environment,
+    @"now" : file_name,
+    @"processStartToNowTime" : @(processStartToNowTime.InMilliseconds()),
+    @"mainToNowTime" : mainToNowTime.has_value()
+        ? (id) @(mainToNowTime->InMilliseconds())
+        : @"Measurement discarded due to system suspension",
+    @"didFinishLaunchingToNowTime" :
+        @(didFinishLaunchingToNowTime.InMilliseconds()),
+    @"sceneConnectionToNowTime" : @(sceneConnectionToNowTime.InMilliseconds()),
+  };
+
+  NSData* data =
+      [NSJSONSerialization dataWithJSONObject:dict
+                                      options:NSJSONWritingPrettyPrinted
+
+                                        error:&error];
+  if (error) {
+    return;
+  }
+
+  NSString* file_path =
+      [environment_directory stringByAppendingPathComponent:file_name];
+  [data writeToFile:file_path atomically:YES];
+}
+#endif  // BUILDFLAG(IOS_ENABLE_SANDBOX_DUMP)
+
+// Returns the associated setting from inactive tab preference value.
+InactiveTabsThresholdSetting InactiveTabsSettingFromPreference(int preference) {
+  switch (preference) {
+    case -1:
+      return InactiveTabsThresholdSetting::kNeverMove;
+    case 0:
+      return InactiveTabsThresholdSetting::kDefaultValue;
+    case 7:
+      return InactiveTabsThresholdSetting::kOneWeek;
+    case 14:
+      return InactiveTabsThresholdSetting::kTwoWeeks;
+    case 21:
+      return InactiveTabsThresholdSetting::kThreeWeeks;
+    default:
+      return InactiveTabsThresholdSetting::kUnknown;
+  }
+}
+
+const char kHistogramPrefixIncludingMismatch[] = "IOS.IncludingMismatch.";
+const char kHistogramPrefix[] = "IOS.";
+
+// Returns the warm start histogram prefix based on whether or not the metrics
+// were collected for the same current app version or a previous version.
+std::string WarmStartHistogramPrefix(bool version_mismatch) {
+  return version_mismatch ? kHistogramPrefixIncludingMismatch
+                          : kHistogramPrefix;
+}
+
+}  // namespace
+
+// A class to log the "load" count in uma.
+@interface AppStartupCounter : NSObject
+@end
+
+@implementation AppStartupCounter
++ (void)load {
+  NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
+  [defaults setInteger:[defaults integerForKey:kAppStartupCounterKey] + 1
+                forKey:kAppStartupCounterKey];
+}
+@end
+
+namespace metrics_mediator {
+NSString* const kAppEnteredBackgroundDateKey = @"kAppEnteredBackgroundDate";
+NSString* const kAppDidFinishLaunchingConsecutiveCallsKey =
+    @"kAppDidFinishLaunchingConsecutiveCallsKey";
+
+void RecordWidgetUsage(base::span<const HistogramNameCountPair> histograms) {
   using base::SysNSStringToUTF8;
 
   // Dictionary containing the respective metric for each NSUserDefault's key.
   NSDictionary<NSString*, NSString*>* keyMetric = @{
-    app_group::
-    kContentExtensionDisplayCount : @"IOS.ContentExtension.DisplayCount",
-    app_group::
-    kSearchExtensionDisplayCount : @"IOS.SearchExtension.DisplayCount",
-    app_group::
-    kCredentialExtensionDisplayCount : @"IOS.CredentialExtension.DisplayCount",
-    app_group::
-    kCredentialExtensionReauthCount : @"IOS.CredentialExtension.ReauthCount",
-    app_group::
-    kCredentialExtensionCopyURLCount : @"IOS.CredentialExtension.CopyURLCount",
-    app_group::kCredentialExtensionCopyUsernameCount :
-        @"IOS.CredentialExtension.CopyUsernameCount",
-    app_group::kCredentialExtensionCopyPasswordCount :
-        @"IOS.CredentialExtension.CopyPasswordCount",
-    app_group::kCredentialExtensionShowPasswordCount :
-        @"IOS.CredentialExtension.ShowPasswordCount",
-    app_group::
-    kCredentialExtensionSearchCount : @"IOS.CredentialExtension.SearchCount",
     app_group::kCredentialExtensionPasswordUseCount :
         @"IOS.CredentialExtension.PasswordUseCount",
+    app_group::kCredentialExtensionPasskeyUseCount :
+        @"IOS.CredentialExtension.PasskeyUseCount",
     app_group::kCredentialExtensionQuickPasswordUseCount :
         @"IOS.CredentialExtension.QuickPasswordUseCount",
+    app_group::kCredentialExtensionQuickPasskeyUseCount :
+        @"IOS.CredentialExtension.QuickPasskeyUseCount",
     app_group::kCredentialExtensionFetchPasswordFailureCount :
         @"IOS.CredentialExtension.FetchPasswordFailure",
     app_group::kCredentialExtensionFetchPasswordNilArgumentCount :
         @"IOS.CredentialExtension.FetchPasswordNilArgument",
+    app_group::kCredentialExtensionKeychainSavePasswordFailureCount :
+        @"IOS.CredentialExtension.KeychainSavePasswordFailureCount",
+    app_group::kCredentialExtensionSaveCredentialFailureCount :
+        @"IOS.CredentialExtension.SaveCredentialFailureCount",
   };
 
   NSUserDefaults* shared_defaults = app_group::GetGroupUserDefaults();
@@ -114,92 +258,294 @@ void RecordWidgetUsage() {
     if (count != 0) {
       base::UmaHistogramCounts1000(SysNSStringToUTF8(keyMetric[key]), count);
       [shared_defaults setInteger:0 forKey:key];
-      if ([key isEqual:app_group::kCredentialExtensionPasswordUseCount] ||
-          [key isEqual:app_group::kCredentialExtensionQuickPasswordUseCount]) {
-        LogLikelyInterestedDefaultBrowserUserActivity(
-            DefaultPromoTypeMadeForIOS);
+    }
+  }
+
+  for (const HistogramNameCountPair& pair : histograms) {
+    int bucket_count = pair.bucket_count;
+    // Check each possible bucket to see if it has any events to emit.
+    for (int bucket = 0; bucket < bucket_count; ++bucket) {
+      NSString* key = app_group::HistogramCountKey(pair.name, bucket);
+      int count = [shared_defaults integerForKey:key];
+      if (count != 0) {
+        [shared_defaults setInteger:0 forKey:key];
+        std::string histogramName = SysNSStringToUTF8(pair.name);
+        for (int emitCount = 0; emitCount < count; ++emitCount) {
+          base::UmaHistogramExactLinear(histogramName, bucket, bucket_count);
+        }
       }
     }
   }
 }
-}  // namespace
+}  // namespace metrics_mediator
 
-namespace metrics_mediator {
-NSString* const kAppEnteredBackgroundDateKey = @"kAppEnteredBackgroundDate";
-}  // namespace metrics_mediator_constants
-
+using metrics_mediator::kAppDidFinishLaunchingConsecutiveCallsKey;
 using metrics_mediator::kAppEnteredBackgroundDateKey;
 
-@interface MetricsMediator ()<CRConnectionTypeObserverBridge> {
-  // Whether or not the crash reports present at startup have been processed to
-  // determine if the last app lifetime ended in an OOM crash.
-  BOOL _hasProcessedCrashReportsPresentAtStartup;
-
-  // Observer for the connection type.  Contains a valid object only if the
-  // metrics setting is set to wifi-only.
-  std::unique_ptr<ConnectionTypeObserverBridge> _connectionTypeObserverBridge;
-}
-
-// Starts or stops metrics recording and/or uploading.
-- (void)setMetricsEnabled:(BOOL)enabled withUploading:(BOOL)allowUploading;
+@interface MetricsMediator ()
+// Starts or stops metrics recording.
+- (void)setMetricsEnabled:(BOOL)enabled;
 // Sets variables needed by the app_group application to collect UMA data.
 // Process the pending logs produced by extensions.
 // Called on start (cold and warm) and UMA settings change to update the
 // collecting settings in extensions.
 - (void)setAppGroupMetricsEnabled:(BOOL)enabled;
-// Processes crash reports present at startup.
-- (void)processCrashReportsPresentAtStartup;
-// Starts or stops crash recording and/or uploading.
-- (void)setBreakpadEnabled:(BOOL)enabled withUploading:(BOOL)allowUploading;
-// Starts or stops watching for wwan events.
-- (void)setWatchWWANEnabled:(BOOL)enabled;
-// Enable/disable transmission of accumulated logs and crash reports (dumps).
-- (void)setReporting:(BOOL)enableReporting;
-// Enable/Disable uploading crash reports.
-- (void)setBreakpadUploadingEnabled:(BOOL)enableUploading;
-// Returns YES if the metrics are enabled and the reporting is wifi-only.
-- (BOOL)isMetricsReportingEnabledWifiOnly;
 // Update metrics prefs on a permission (opt-in/out) change. When opting out,
 // this clears various client ids. When opting in, this resets saving crash
 // prefs, so as not to trigger upload of various stale data.
 // Mirrors the function in metrics_reporting_state.cc.
 - (void)updateMetricsPrefsOnPermissionChange:(BOOL)enabled;
+// Logs the number of active tabs (based on the arm's definition of
+// active/inactive).
++ (void)recordStartupActiveTabCount:(int)tabCount;
+// Logs the number of inactive tabs (based on the arm's definition of
+// active/inactive).
++ (void)recordStartupInactiveTabCount:(int)tabCount;
+// Logs the number of tabs older than 21 days.
++ (void)recordStartupAbsoluteInactiveTabCount:(int)tabCount;
+// Logs the number of pinned tabs at startup.
++ (void)recordStartupPinnedTabCount:(int)tabCount;
 // Logs the number of tabs with UMAHistogramCount100 and allows testing.
-+ (void)recordNumTabAtStartup:(int)numTabs;
++ (void)recordStartupTabCount:(int)tabCount;
+// Logs the number of tab groups with UmaHistogramCounts1M.
++ (void)recordStartupTabGroupCount:(int)tabGroupCount;
+// Logs the number of tabs per group with UMAHistogramCount10000.
++ (void)recordStartupTabsPerGroupCount:(int)tabsPerGroupCount;
 // Logs the number of tabs with UMAHistogramCount100 and allows testing.
-+ (void)recordNumTabAtResume:(int)numTabs;
-// Logs the number of NTP tabs with UMAHistogramCount100 and allows testing.
-+ (void)recordNumNTPTabAtStartup:(int)numTabs;
-// Logs the number of NTP tabs with UMAHistogramCount100 and allows testing.
-+ (void)recordNumNTPTabAtResume:(int)numTabs;
++ (void)recordResumeTabCount:(int)tabCount;
 
+// Logs the number of old (inactive for more than 7 days) tabs with
+// UMAHistogramCount100 and allows testing.
++ (void)recordStartupOldTabCount:(int)tabCount;
+// Logs the number of duplicated tabs with UMAHistogramCount100 and allows
+// testing.
++ (void)recordStartupDuplicatedTabCount:(int)tabCount;
+// Logs the age (time elapsed since creation) of each tab  and allows testing.
++ (void)recordTabsAgeAtStartup:(const std::vector<base::TimeDelta>&)tabsAge;
+// Returns a corresponding TabAgeGroup for provided `timeSinceCreation` time.
++ (TabsAgeGroup)tabsAgeGroupFromTimeSinceCreation:
+    (base::TimeDelta)timeSinceCreation;
+// Logs the number of connected and disconnected scenes.
++ (void)recordConnectedAndDisconnectedSceneCount:(int)connectedScenes;
 @end
 
-@implementation MetricsMediator
+@implementation MetricsMediator {
+  // Whether MetricKit subscriber has been initialized for the current session.
+  BOOL _metricKitSubscriberInitialized;
+}
+
+// Indicates whether credential extension was used while chrome was inactive.
+BOOL _credentialExtensionWasUsed = NO;
 
 #pragma mark - Public methods.
 
-+ (void)logStartupDuration:(id<StartupInformation>)startupInformation
-     connectionInformation:(id<ConnectionInformation>)connectionInformation {
-  if (![startupInformation isColdStart])
++ (void)createStartupTrackingTask {
+  [MetricKitSubscriber createExtendedLaunchTask];
+}
+
+// Logs startup duration metrics (base, temperature variants, and cold start
+// type sub-variants) on cold start.
+//
+// Use Case Analysis:
+// - Direct Foreground Cold Launch: Neither pre-warmed nor launched in the
+//   background (`ActivePrewarm` is unset and `isLaunchedInBackground` is
+//   `false`). The following metrics are recorded:
+//   - `Startup.FirstPaintLatency` under base and `.NotPrewarmed` (measuring
+//     from kernel process creation to initial UI).
+//   - `Startup.ColdStartFromMain` under base and `.NotPrewarmed` (measuring
+//     from `main()` to initial UI).
+//   - `Startup.ColdStartPreMain` under base.
+//   - `Startup.IOSColdStartType.ForegroundLaunchesOnly`
+//   - `Startup.TimeFromMainToDidFinishLaunchingCall`
+//   - `Startup.TimeFromMainToSceneConnection`
+// - ActivePrewarm Launch: The OS pre-warms the process by initializing it and
+//   suspending it before entering `main()` (`ActivePrewarm` is set in the
+//   environment). Because the process may remain suspended before `main()`,
+//   `Startup.ColdStartPreMain` is omitted for pre-warmed launches. When the
+//   user subsequently launches the app, the following metrics are recorded:
+//   - `Startup.FirstPaintLatency` under base and `.ActivePrewarm` (measuring
+//     from the call to `main()` upon user resumption to initial UI).
+//   - `Startup.ColdStartFromMain` under base and `.ActivePrewarm`.
+//   - `Startup.IOSColdStartType.ForegroundLaunchesOnly`
+//   - `Startup.TimeFromMainToDidFinishLaunchingCall`
+//   - `Startup.TimeFromMainToSceneConnection`
+// - Background Launch: When Chrome is launched or woken up in the
+//   background (e.g., background fetch, notification, or background URL
+//   session), `isColdStart` remains `YES` until the first scene renders
+//   because the app never transitioned from foreground to background.
+//   - `Startup.FirstPaintLatency` is recorded under base and
+//     `.LaunchedInBackground` (measuring from the first scene connection to
+//     initial UI).
+//   - The following `main()`-relative metrics are omitted, preventing long
+//     suspension durations (minutes to days) from contaminating the metrics:
+//     - `Startup.ColdStartFromMain`
+//     - `Startup.ColdStartPreMain`
+//     - `Startup.IOSColdStartType.ForegroundLaunchesOnly`
+//     - `Startup.TimeFromMainToDidFinishLaunchingCall`
+//     - `Startup.TimeFromMainToSceneConnection`
+// - Suspicious Launch: When the launch reason is suspicious (e.g. timeout
+//   expired before a launch reason could be determined), the following metrics
+//   are omitted because the timing of user intent cannot be reliably
+//   determined, preventing anomalous launches from contaminating the metrics:
+//   - `Startup.FirstPaintLatency`
+//   - `Startup.ColdStartFromMain`
+//   - `Startup.ColdStartPreMain`
+//   - `Startup.IOSColdStartType.ForegroundLaunchesOnly`
+//   - `Startup.TimeFromMainToDidFinishLaunchingCall`
+//   - `Startup.TimeFromMainToSceneConnection`
+// - System Sleep During Pre-Warming: If the system sleeps while the process is
+//   pre-warming or suspended before entering `main()`, `appLaunchTimer` has not
+//   yet started. When the user subsequently launches the app, `appLaunchTimer`
+//   begins at `main()`, accurately measuring duration from user intent to
+//   initial UI. Because no sleep occurred during the measured interval
+//   (`main()` to first paint), `Startup.FirstPaintLatency` and
+//   `Startup.ColdStartFromMain` are recorded under `.ActivePrewarm` (while
+//   `Startup.ColdStartPreMain` is omitted as usual for pre-warmed launches).
+// - System Sleep After Main, Before UIScene Connection: If the system sleeps
+//   after `main()` but before UIScene connection, `appLaunchTimer` detects the
+//   suspension (`Elapsed()` returns `std::nullopt`). For foreground launches,
+//   `launchReason` is classified as
+//   `IOSLaunchReason::kForegroundWithSystemSuspension`.
+//   Because a sleep occurred during the measured interval,
+//   `Startup.FirstPaintLatency`, `Startup.ColdStartFromMain`, and all other
+//   `main()`-relative metrics are discarded to avoid contaminating metrics.
+//   (For background launches, `Startup.FirstPaintLatency` measures from scene
+//   connection to initial UI, so a sleep occurring before scene connection does
+//   not contaminate that measurement).
+// - System Sleep After UIScene Connection and First Paint: At the time of first
+//   paint, `+logStartupDuration:` has already executed and recorded all cold
+//   start metrics. A subsequent system sleep has no impact on cold startup
+//   metrics. When the app is later backgrounded or suspended, `isColdStart` is
+//   reset to `NO`, ensuring metrics are not re-recorded when resumed.
+// - System Sleep Between UIScene Connection and First Paint: If a sleep occurs
+//   after UIScene connection but before first paint, `appLaunchTimer` detects
+//   the suspension for foreground launches, causing
+//   `Startup.FirstPaintLatency`, `Startup.ColdStartFromMain`, and other
+//   `main()`-relative metrics to be discarded. In the specific case of a
+//   background launches, `Startup.FirstPaintLatency` is still recorded even
+//   when the OS suspends, but the suspension time is excluded from the
+//   measurement (because it is based on `LiveTicks`).
+// - Interrupted Launch Before UI: If the user backgrounds the app before the
+//   first scene finishes connecting and rendering,
+//   `-applicationWillResignActive:` resets `isColdStart` to `NO`, causing this
+//   method to return early without recording metrics.
+// - Warm Start / Resume: When the app is resumed after having previously been
+//   active, `isColdStart` is `NO` because
+//   `-[MainController applicationWillResignActive:]` set it to `NO` when the
+//   app previously lost focus. Since `isColdStart` is never reset to `YES`
+//   during the process lifetime, this method returns early without recording
+//   cold startup metrics.
+// - Pre-Main Duration Unavailable: If `preMainDuration` is std::nullopt, or if
+//   the app was pre-warmed, `Startup.ColdStartPreMain*` metrics are skipped.
++ (void)logStartupDuration:(id<StartupInformation>)startupInformation {
+  if (![startupInformation isColdStart]) {
     return;
-
-  const base::TimeDelta startDuration =
-      base::TimeTicks::Now() - [startupInformation appLaunchTime];
-
-  const base::TimeDelta startDurationFromProcess =
-      TimeDeltaSinceAppLaunchFromProcess();
-
-  base::UmaHistogramTimes("Startup.ColdStartFromProcessCreationTimeV2",
-                          startDurationFromProcess);
-
-  if ([connectionInformation startupParameters]) {
-    base::UmaHistogramTimes("Startup.ColdStartWithExternalURLTime",
-                            startDuration);
-  } else {
-    base::UmaHistogramTimes("Startup.ColdStartWithoutExternalURLTime",
-                            startDuration);
   }
+
+  [MetricKitSubscriber endExtendedLaunchTask];
+  base::LiveTicks now;
+  const std::optional<base::TimeDelta> mainToNowTime =
+      [startupInformation appLaunchTimer].Elapsed(&now);
+  const base::TimeDelta didFinishLaunchingToNowTime =
+      now - [startupInformation didFinishLaunchingTime];
+  const base::TimeDelta sceneConnectionToNowTime =
+      now - [startupInformation firstSceneConnectionTime];
+
+  if (![startupInformation isLaunchedInBackground]) {
+    if (!mainToNowTime.has_value()) {
+      [startupInformation maybeSetLaunchReason:
+                              IOSLaunchReason::kForegroundWithSystemSuspension];
+    } else if (*mainToNowTime > kLaunchReasonTimeout) {
+      // If main-to-now time is too long, it is likely that the app process was
+      // suspended during startup for an unknown reason, making launch reason
+      // classification unreliable. Treat these as suspicious launches.
+      // Note: The iOS watchdog normally kills apps that don't start within 20
+      // seconds. So if this code is reached, we're likely dealing with an
+      // unexpected startup scenario, possibly an unhandled background launch
+      // use case.
+      [startupInformation maybeSetLaunchReason:IOSLaunchReason::kSuspicious];
+    } else if (base::ios::IsApplicationPreWarmed()) {
+      [startupInformation maybeSetLaunchReason:IOSLaunchReason::kPreWarming];
+    } else {
+      [startupInformation maybeSetLaunchReason:IOSLaunchReason::kForeground];
+    }
+  }
+
+  base::UmaHistogramEnumeration("Startup.IOSLaunchReason.Foregrounded",
+                                *[startupInformation launchReason]);
+
+  NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
+  int consecutiveLoads = [defaults integerForKey:kAppStartupCounterKey];
+  [defaults removeObjectForKey:kAppStartupCounterKey];
+  int consecutiveDidFinishLaunching =
+      [defaults integerForKey:kAppDidFinishLaunchingConsecutiveCallsKey];
+  [defaults removeObjectForKey:kAppDidFinishLaunchingConsecutiveCallsKey];
+  const std::optional<base::TimeDelta> preMainDuration =
+      [startupInformation preMainDuration];
+
+  if ([startupInformation launchReason] !=
+      IOSLaunchReason::kForegroundWithSystemSuspension) {
+    const IOSStartupTemperature temperature =
+        GetStartupTemperature(startupInformation);
+    std::optional<base::TimeDelta> firstPaintLatency;
+    switch (temperature) {
+      case IOSStartupTemperature::kNotPrewarmed: {
+        if (mainToNowTime.has_value() && preMainDuration.has_value()) {
+          firstPaintLatency = *mainToNowTime + *preMainDuration;
+        }
+        break;
+      }
+      case IOSStartupTemperature::kActivePrewarm: {
+        firstPaintLatency = mainToNowTime;
+        break;
+      }
+      case IOSStartupTemperature::kLaunchedInBackground: {
+        firstPaintLatency = sceneConnectionToNowTime;
+        break;
+      }
+      case IOSStartupTemperature::kSuspicious: {
+        break;
+      }
+    }
+
+    const ColdStartType coldStartType = GetColdStartType(startupInformation);
+    if (firstPaintLatency.has_value()) {
+      LogStartupDurationWithTemperatureAndType("Startup.FirstPaintLatency",
+                                               *firstPaintLatency, temperature,
+                                               coldStartType);
+    }
+
+    if (![startupInformation isLaunchedInBackground] &&
+        [startupInformation launchReason] != IOSLaunchReason::kSuspicious &&
+        mainToNowTime.has_value()) {
+      startupInformation.coldStartFromMainDuration = *mainToNowTime;
+      base::UmaHistogramEnumeration(
+          "Startup.IOSColdStartType.ForegroundLaunchesOnly", coldStartType);
+      LogStartupDurationWithTemperatureAndType("Startup.ColdStartFromMain",
+                                               *mainToNowTime, temperature,
+                                               coldStartType);
+      base::UmaHistogramTimes("Startup.TimeFromMainToDidFinishLaunchingCall",
+                              *mainToNowTime - didFinishLaunchingToNowTime);
+      base::UmaHistogramTimes("Startup.TimeFromMainToSceneConnection",
+                              *mainToNowTime - sceneConnectionToNowTime);
+
+      if (temperature == IOSStartupTemperature::kNotPrewarmed &&
+          preMainDuration.has_value()) {
+        LogStartupDurationWithTemperatureAndType("Startup.ColdStartPreMain",
+                                                 *preMainDuration, std::nullopt,
+                                                 coldStartType);
+      }
+    }
+  }
+  base::UmaHistogramCounts100("Startup.ConsecutiveLoadsWithoutLaunch",
+                              consecutiveLoads);
+  base::UmaHistogramCounts100(
+      "Startup.ConsecutiveDidFinishLaunchingWithoutLaunch",
+      consecutiveDidFinishLaunching);
+
+#if BUILDFLAG(IOS_ENABLE_SANDBOX_DUMP)
+  DumpEnvironment(startupInformation);
+#endif  // BUILDFLAG(IOS_ENABLE_SANDBOX_DUMP)
 }
 
 + (void)logDateInUserDefaults {
@@ -213,33 +559,115 @@ using metrics_mediator::kAppEnteredBackgroundDateKey;
                                connectedScenes:(NSArray<SceneState*>*)scenes {
   RecordAndResetUkmLogSizeOnSuccessCounter();
 
-  int numTabs = 0;
-  int numNTPTabs = 0;
+  int tabCount = 0;
+  int tabGroupCount = 0;
+  int pinnedTabCount = 0;
+  int oldTabCount = 0;
+  int duplicatedTabCount = 0;
+  int activeTabCount = 0;
+  int inactiveTabCount = 0;
+  int absoluteInactiveTabCount = 0;
+
+  // Amount of time after which a tab is considered as old.
+  constexpr base::TimeDelta kOldTabThreshold = base::Days(7);
+
+  // Amount of time after which a tab is considered as absolutely inactive.
+  constexpr base::TimeDelta kAbsoluteInactiveTabThreshold = base::Days(21);
+
+  std::set<GURL> uniqueURLs;
+  std::vector<base::TimeDelta> timesSinceCreation;
+  const base::Time now = base::Time::Now();
+
   for (SceneState* scene in scenes) {
-    if (!scene.interfaceProvider) {
+    if (!scene.browserProviderInterface) {
       // The scene might not yet be initiated.
-      // TODO(crbug.com/1064611): This will not be an issue when the tabs are
+      // TODO(crbug.com/40123792): This will not be an issue when the tabs are
       // counted in sessions instead of scenes.
       continue;
     }
 
-    const WebStateList* web_state_list =
-        scene.interfaceProvider.mainInterface.browser->GetWebStateList();
-    numTabs += web_state_list->count();
-    for (int i = 0; i < web_state_list->count(); i++) {
-      if (IsURLNewTabPage(web_state_list->GetWebStateAt(i)->GetVisibleURL())) {
-        numNTPTabs++;
+    Browser* const mainbrowser = scene.browserProviderInterface.mainBrowser;
+    const WebStateList* webStateList = mainbrowser->GetWebStateList();
+    const WebStateList* inactiveWebStateList =
+        mainbrowser->GetInactiveBrowser()->GetWebStateList();
+    const int webStateListCount = webStateList->count();
+    const int inactiveWebStateListCount = inactiveWebStateList->count();
+
+    for (const TabGroup* group : webStateList->GetGroups()) {
+      tabGroupCount++;
+      [self recordStartupTabsPerGroupCount:group->range().count()];
+    }
+
+    tabCount += webStateListCount + inactiveWebStateListCount;
+    pinnedTabCount += webStateList->pinned_tabs_count();
+    activeTabCount += webStateListCount;
+    inactiveTabCount += inactiveWebStateListCount;
+    // All inactive tabs are inactive since minimum 7 days or more.
+    oldTabCount += inactiveWebStateListCount;
+
+    for (int i = 0; i < webStateListCount; i++) {
+      web::WebState* webState = webStateList->GetWebStateAt(i);
+      const bool wasWebStateRealized = webState->IsRealized();
+      const GURL& URL = webState->GetVisibleURL();
+
+      // Count duplicate URLs (if the URL is not inserted, then it is a
+      // duplicate, otherwise it is a new distinct URL).
+      auto [_, inserted] = uniqueURLs.insert(URL.GetWithoutRef());
+      if (!inserted) {
+        duplicatedTabCount++;
+      }
+
+      // Count old tabs.
+      base::TimeDelta inactiveTime = now - webState->GetLastActiveTime();
+      if (inactiveTime > kOldTabThreshold) {
+        oldTabCount++;
+        // Count absolute inactive tabs.
+        if (inactiveTime > kAbsoluteInactiveTabThreshold) {
+          absoluteInactiveTabCount++;
+        }
+      }
+
+      // Calculate the age (time elapsed since creation) of WebState.
+      base::TimeDelta timeSinceCreation = now - webState->GetCreationTime();
+      timesSinceCreation.push_back(timeSinceCreation);
+
+      DCHECK_EQ(wasWebStateRealized, webState->IsRealized());
+    }
+
+    for (int i = 0; i < inactiveWebStateListCount; i++) {
+      web::WebState* webState = inactiveWebStateList->GetWebStateAt(i);
+
+      // Calculate the age (time elapsed since creation) of WebState.
+      base::TimeDelta timeSinceCreation = now - webState->GetCreationTime();
+      timesSinceCreation.push_back(timeSinceCreation);
+
+      // Calculate absolute inactive tabs.
+      base::TimeDelta inactiveTime =
+          base::Time::Now() - webState->GetLastActiveTime();
+      if (inactiveTime > kAbsoluteInactiveTabThreshold) {
+        absoluteInactiveTabCount++;
       }
     }
   }
 
   if (startupInformation.isColdStart) {
-    [self recordNumTabAtStartup:numTabs];
-    [self recordNumNTPTabAtStartup:numNTPTabs];
+    [self recordStartupActiveTabCount:activeTabCount];
+    [self recordStartupInactiveTabCount:inactiveTabCount];
+    [self recordStartupAbsoluteInactiveTabCount:absoluteInactiveTabCount];
+    [self recordStartupPinnedTabCount:pinnedTabCount];
+    [self recordStartupTabCount:tabCount];
+    [self recordStartupTabGroupCount:tabGroupCount];
+    [self recordStartupOldTabCount:oldTabCount];
+    [self recordStartupDuplicatedTabCount:duplicatedTabCount];
+    [self recordTabsAgeAtStartup:timesSinceCreation];
+    [self recordAndResetWarmStartCount];
+    ui_util::RecordSystemFontSizeMetrics();
   } else {
-    [self recordNumTabAtResume:numTabs];
-    [self recordNumNTPTabAtResume:numNTPTabs];
+    [[PreviousSessionInfo sharedInstance] incrementWarmStartCount];
+    [self recordResumeTabCount:tabCount];
   }
+
+  [self recordConnectedAndDisconnectedSceneCount:scenes.count];
 
   if (UIAccessibilityIsVoiceOverRunning()) {
     base::RecordAction(
@@ -247,9 +675,8 @@ using metrics_mediator::kAppEnteredBackgroundDateKey;
   }
 
 #if BUILDFLAG(ENABLE_WIDGET_KIT_EXTENSION)
-  if (@available(iOS 14, *)) {
-    [WidgetMetricsUtil logInstalledWidgets];
-  }
+  [WidgetMetricsUtil logInstalledWidgets];
+  [WidgetMetricsUtil logWidgetDeletedUiCount];
 #endif
 
   // Create the first user action recorder and schedule a task to expire it
@@ -271,10 +698,10 @@ using metrics_mediator::kAppEnteredBackgroundDateKey;
       }
     }
 
-    if (activeScene) {
+    // Proceed if the active scene is initialized.
+    if (activeScene.browserProviderInterface) {
       web::WebState* currentWebState =
-          activeScene.interfaceProvider.currentInterface.browser
-              ->GetWebStateList()
+          activeScene.browserProviderInterface.currentBrowser->GetWebStateList()
               ->GetActiveWebState();
       if (currentWebState &&
           currentWebState->GetLastCommittedURL() == kChromeUINewTabURL) {
@@ -289,34 +716,65 @@ using metrics_mediator::kAppEnteredBackgroundDateKey;
     [[NSUserDefaults standardUserDefaults]
         removeObjectForKey:kAppEnteredBackgroundDateKey];
   }
+
+  if (!startupInformation.isColdStart) {
+    return;
+  }
+  ColdStartType sessionType = GetColdStartType(startupInformation);
+  base::UmaHistogramEnumeration("Startup.IOSColdStartType", sessionType);
+}
+
++ (void)logProfileLoadMetrics:(ProfileIOS*)profile {
+  base::UmaHistogramEnumeration(
+      kInactiveTabsThresholdSettingHistogram,
+      InactiveTabsSettingFromPreference(
+          profile->GetPrefs()->GetInteger(prefs::kInactiveTabsTimeThreshold)));
 }
 
 - (void)updateMetricsStateBasedOnPrefsUserTriggered:(BOOL)isUserTriggered {
   BOOL optIn = [self areMetricsEnabled];
-  BOOL allowUploading = [self isUploadingEnabled];
-  if (!base::FeatureList::IsEnabled(kUmaCellular)) {
-    BOOL wifiOnly = GetApplicationContext()->GetLocalState()->GetBoolean(
-        prefs::kMetricsReportingWifiOnly);
-    optIn = optIn && wifiOnly;
-  }
-
-  if (isUserTriggered)
+  if (isUserTriggered) {
     [self updateMetricsPrefsOnPermissionChange:optIn];
-  [self setMetricsEnabled:optIn withUploading:allowUploading];
-  [self setBreakpadEnabled:optIn withUploading:allowUploading];
-  [self setWatchWWANEnabled:optIn];
+  }
+  [self setMetricsEnabled:optIn];
+  crash_helper::SetEnabled(optIn);
   [self setAppGroupMetricsEnabled:optIn];
-  if (@available(iOS 13, *)) {
+  // Initialize MetricKit immediately unless deferral is active during cold
+  // startup outside Safe Mode. When deferred, registration will happen via low
+  // priority startup tasks in MainController.
+  if (!IsMetrickitDeferRegistrationEnabled() ||
+      _metricKitSubscriberInitialized || [SafeModeCoordinator shouldStart]) {
+    _metricKitSubscriberInitialized = YES;
     [[MetricKitSubscriber sharedInstance] setEnabled:optIn];
   }
 }
 
+- (void)registerMetricKitSubscriberIfNeeded {
+  if (!_metricKitSubscriberInitialized) {
+    _metricKitSubscriberInitialized = YES;
+    [[MetricKitSubscriber sharedInstance] setEnabled:[self areMetricsEnabled]];
+  }
+}
+
+- (void)notifyCredentialProviderWasUsed:(feature_engagement::Tracker*)tracker {
+  if (_credentialExtensionWasUsed) {
+    default_browser::NotifyCredentialExtensionUsed(tracker);
+
+    // Reset to avoid duplicate notifications.
+    _credentialExtensionWasUsed = NO;
+  }
+}
+
 - (BOOL)areMetricsEnabled {
+  if (metrics::IsMetricsReportingForceEnabled()) {
+    return YES;
+  }
 // If this if-def changes, it needs to be changed in
 // IOSChromeMainParts::IsMetricsReportingEnabled and settings_egtest.mm.
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  BOOL optIn = GetApplicationContext()->GetLocalState()->GetBoolean(
-      metrics::prefs::kMetricsReportingEnabled);
+  BOOL optIn =
+      metrics::MetricsReportingChoiceService::IsBasicMetricsReportingEnabled(
+          GetApplicationContext()->GetLocalState());
 #else
   // If a startup crash has been requested, then pretend that metrics have been
   // enabled, so that the app will go into recovery mode.
@@ -325,41 +783,25 @@ using metrics_mediator::kAppEnteredBackgroundDateKey;
   return optIn;
 }
 
-- (BOOL)isUploadingEnabled {
-  BOOL optIn = [self areMetricsEnabled];
-  if (base::FeatureList::IsEnabled(kUmaCellular)) {
-    return optIn;
-  }
-  BOOL wifiOnly = GetApplicationContext()->GetLocalState()->GetBoolean(
-      prefs::kMetricsReportingWifiOnly);
-  BOOL allowUploading = optIn;
-  if (optIn && wifiOnly) {
-    BOOL usingWWAN = net::NetworkChangeNotifier::IsConnectionCellular(
-        net::NetworkChangeNotifier::GetConnectionType());
-    allowUploading = !usingWWAN;
-  }
-  return allowUploading;
-}
-
 #pragma mark - Internal methods.
 
-- (void)setMetricsEnabled:(BOOL)enabled withUploading:(BOOL)allowUploading {
+- (void)setMetricsEnabled:(BOOL)enabled {
   metrics::MetricsService* metrics =
       GetApplicationContext()->GetMetricsService();
   DCHECK(metrics);
-  if (!metrics)
+  if (!metrics) {
     return;
+  }
   if (enabled) {
-    if (!metrics->recording_active())
+    if (!metrics->recording_active()) {
       metrics->Start();
+    }
 
-    if (allowUploading)
-      metrics->EnableReporting();
-    else
-      metrics->DisableReporting();
+    metrics->EnableReporting();
   } else {
-    if (metrics->recording_active())
+    if (metrics->recording_active()) {
       metrics->Stop();
+    }
   }
 }
 
@@ -367,9 +809,7 @@ using metrics_mediator::kAppEnteredBackgroundDateKey;
   if (enabled) {
     PrefService* prefs = GetApplicationContext()->GetLocalState();
     NSString* brandCode =
-        base::SysUTF8ToNSString(ios::GetChromeBrowserProvider()
-                                    ->GetAppDistributionProvider()
-                                    ->GetDistributionBrandCode());
+        base::SysUTF8ToNSString(ios::provider::GetBrandCode());
 
     app_group::main_app::EnableMetrics(
         base::SysUTF8ToNSString(
@@ -378,64 +818,50 @@ using metrics_mediator::kAppEnteredBackgroundDateKey;
         prefs->GetInt64(metrics::prefs::kMetricsReportingEnabledTimestamp));
 
     // If metrics are enabled, process the logs. Otherwise, just delete them.
-    // TODO(crbug.com/782685): remove related code.
+    // TODO(crbug.com/40548746): remove related code.
   } else {
     app_group::main_app::DisableMetrics();
   }
-  RecordWidgetUsage();
-}
 
-- (void)processCrashReportsPresentAtStartup {
-  _hasProcessedCrashReportsPresentAtStartup = YES;
-}
+  // Save CPE use information before it gets reset in RecordWidgetUsage until we
+  // are ready to log it into feture engagement tracker.
+  [self saveCredentialExtensionWasUsed];
 
-- (void)setBreakpadEnabled:(BOOL)enabled withUploading:(BOOL)allowUploading {
-  crash_helper::SetUserEnabledUploading(enabled);
-  if (enabled) {
-    crash_helper::SetEnabled(true);
-
-    // Do some processing of the crash reports present at startup. Note that
-    // this processing must be done before uploading is enabled because once
-    // uploading starts the number of crash reports present will begin to
-    // decrease as they are uploaded. The ordering is ensured here because both
-    // the crash report processing and the upload enabling are handled by
-    // posting blocks to a single |dispath_queue_t| in BreakpadController.
-    if (!_hasProcessedCrashReportsPresentAtStartup && allowUploading) {
-      [self processCrashReportsPresentAtStartup];
-    }
-    [self setBreakpadUploadingEnabled:(![[PreviousSessionInfo sharedInstance]
-                                           isFirstSessionAfterUpgrade] &&
-                                       allowUploading)];
-  } else {
-    crash_helper::SetEnabled(false);
-  }
-}
-
-- (void)setWatchWWANEnabled:(BOOL)enabled {
-  if (!enabled) {
-    _connectionTypeObserverBridge.reset();
-    return;
-  }
-
-  if (!_connectionTypeObserverBridge) {
-    _connectionTypeObserverBridge.reset(new ConnectionTypeObserverBridge(self));
-  }
+  // Histograms fired in extensions that need to be re-fired from the main app.
+  const metrics_mediator::HistogramNameCountPair histogramsFromExtension[] = {
+      {
+          @"IOS.CredentialExtension.PasswordCreated",
+          static_cast<int>(CPEPasswordCreated::kMaxValue) + 1,
+      },
+      {
+          @"IOS.CredentialExtension.NewCredentialUsername",
+          static_cast<int>(CPENewCredentialUsername::kMaxValue) + 1,
+      },
+      {
+          @"PasswordManager.BrowserAssistedLogin.Type",
+          static_cast<int>(password_manager::metrics_util::
+                               BrowserAssistedLoginType::kMaxValue) +
+              1,
+      }};
+  metrics_mediator::RecordWidgetUsage(histogramsFromExtension);
 }
 
 - (void)updateMetricsPrefsOnPermissionChange:(BOOL)enabled {
-  // TODO(crbug.com/635669): Consolidate with metrics_reporting_state.cc
+  // TODO(crbug.com/41268699): Consolidate with metrics_reporting_state.cc
   // function.
   metrics::MetricsService* metrics =
       GetApplicationContext()->GetMetricsService();
   DCHECK(metrics);
-  if (!metrics)
+  if (!metrics) {
     return;
+  }
   if (enabled) {
     // When a user opts in to the metrics reporting service, the previously
     // collected data should be cleared to ensure that nothing is reported
     // before a user opts in and all reported data is accurate.
-    if (!metrics->recording_active())
+    if (!metrics->recording_active()) {
       metrics->ClearSavedStabilityMetrics();
+    }
   } else {
     // Clear the client id pref when opting out.
     // Note: Clearing client id will not affect the running state (e.g. field
@@ -443,98 +869,144 @@ using metrics_mediator::kAppEnteredBackgroundDateKey;
     GetApplicationContext()->GetLocalState()->ClearPref(
         metrics::prefs::kMetricsClientID);
     GetApplicationContext()->GetLocalState()->ClearPref(
+        metrics::prefs::kMetricsProvisionalClientID);
+    GetApplicationContext()->GetLocalState()->ClearPref(
         metrics::prefs::kMetricsReportingEnabledTimestamp);
     crash_keys::ClearMetricsClientId();
   }
 }
 
-+ (void)disableReporting {
-  crash_helper::SetUploadingEnabled(false);
-  metrics::MetricsService* metrics =
-      GetApplicationContext()->GetMetricsService();
-  DCHECK(metrics);
-  metrics->DisableReporting();
-}
-
 + (void)applicationDidEnterBackground:(NSInteger)memoryWarningCount {
   base::RecordAction(base::UserMetricsAction("MobileEnteredBackground"));
-  base::UmaHistogramCounts100("MemoryWarning.OccurrencesPerSession",
-                              memoryWarningCount);
-
-  task_vm_info task_info_data;
-  mach_msg_type_number_t count = sizeof(task_vm_info) / sizeof(natural_t);
-  kern_return_t result =
-      task_info(mach_task_self(), TASK_VM_INFO,
-                reinterpret_cast<task_info_t>(&task_info_data), &count);
-  if (result == KERN_SUCCESS) {
-    mach_vm_size_t footprint_mb = task_info_data.phys_footprint / 1024 / 1024;
-    base::UmaHistogramMemoryLargeMB(
-        "Memory.Browser.MemoryFootprint.OnBackground", footprint_mb);
-  }
+  [self logMemoryToUMA:"Memory.Browser.MemoryFootprint.OnBackground"];
 }
 
-#pragma mark - CRConnectionTypeObserverBridge implementation
++ (uint64_t)logMemoryToUMA:(const std::string&)histogramName {
+  auto result = ios::device_util::GetTaskVMInfo();
+  if (result.has_value()) {
+    task_vm_info task_vm_info_data = result.value();
+    mach_vm_size_t footprint_mb =
+        task_vm_info_data.phys_footprint / 1024 / 1024;
+    base::UmaHistogramMemoryLargeMB(histogramName, footprint_mb);
+    return task_vm_info_data.phys_footprint;
+  }
+  return 0;
+}
 
-- (void)connectionTypeChanged:(net::NetworkChangeNotifier::ConnectionType)type {
-  BOOL wwanEnabled = net::NetworkChangeNotifier::IsConnectionCellular(type);
-  // Currently the MainController only cares about WWAN state for the metrics
-  // reporting preference.  If it's disabled, or the wifi-only preference is
-  // not set, we don't care.  In fact, we should not even be getting this call.
-  DCHECK([self isMetricsReportingEnabledWifiOnly]);
-  // |wwanEnabled| is true if a cellular connection such as EDGE or GPRS is
-  // used. Otherwise, either there is no connection available, or another link
-  // (such as WiFi) is used.
-  if (wwanEnabled) {
-    // If WWAN mode is on, wifi-only prefs should be disabled.
-    // For the crash reporter, we still want to record the crashes.
-    [self setBreakpadUploadingEnabled:NO];
-    [self setReporting:NO];
-  } else if ([self areMetricsEnabled]) {
-    // Double-check that the metrics reporting preference is enabled.
-    if (![[PreviousSessionInfo sharedInstance] isFirstSessionAfterUpgrade])
-      [self setBreakpadUploadingEnabled:YES];
-    [self setReporting:YES];
+- (void)saveCredentialExtensionWasUsed {
+  NSUserDefaults* shared_defaults = app_group::GetGroupUserDefaults();
+
+  int password_use_count = [shared_defaults
+      integerForKey:app_group::kCredentialExtensionPasswordUseCount];
+  int quick_password_use_count = [shared_defaults
+      integerForKey:app_group::kCredentialExtensionQuickPasswordUseCount];
+  int passkey_use_count = [shared_defaults
+      integerForKey:app_group::kCredentialExtensionPasskeyUseCount];
+  int quick_passkey_use_count = [shared_defaults
+      integerForKey:app_group::kCredentialExtensionQuickPasskeyUseCount];
+  if (password_use_count != 0 || quick_password_use_count != 0 ||
+      passkey_use_count != 0 || quick_passkey_use_count != 0) {
+    _credentialExtensionWasUsed = YES;
   }
 }
 
 #pragma mark - interfaces methods
 
-+ (void)recordNumTabAtStartup:(int)numTabs {
-  base::UmaHistogramCounts100("Tabs.CountAtStartup", numTabs);
++ (void)recordStartupActiveTabCount:(int)tabCount {
+  base::UmaHistogramCounts100("Tabs.ActiveCountAtStartup", tabCount);
 }
 
-+ (void)recordNumTabAtResume:(int)numTabs {
-  base::UmaHistogramCounts100("Tabs.CountAtResume", numTabs);
++ (void)recordStartupInactiveTabCount:(int)tabCount {
+  base::UmaHistogramCounts100("Tabs.InactiveCountAtStartup", tabCount);
 }
 
-+ (void)recordNumNTPTabAtStartup:(int)numTabs {
-  base::UmaHistogramCounts100("Tabs.NTPCountAtStartup", numTabs);
++ (void)recordStartupAbsoluteInactiveTabCount:(int)tabCount {
+  base::UmaHistogramCounts1M("Tabs.OldCountAtStartup2", tabCount);
 }
 
-+ (void)recordNumNTPTabAtResume:(int)numTabs {
-  base::UmaHistogramCounts100("Tabs.NTPCountAtResume", numTabs);
++ (void)recordStartupPinnedTabCount:(int)tabCount {
+  base::UmaHistogramCounts1000("Tabs.PinnedCountAtStartup", tabCount);
 }
 
-- (void)setBreakpadUploadingEnabled:(BOOL)enableUploading {
-  crash_helper::SetUploadingEnabled(enableUploading);
++ (void)recordStartupTabCount:(int)tabCount {
+  base::UmaHistogramCounts1M("Tabs.CountAtStartup2", tabCount);
 }
 
-- (void)setReporting:(BOOL)enableReporting {
-  if (enableReporting) {
-    GetApplicationContext()->GetMetricsService()->EnableReporting();
-  } else {
-    GetApplicationContext()->GetMetricsService()->DisableReporting();
++ (void)recordStartupTabGroupCount:(int)tabGroupCount {
+  base::UmaHistogramCounts1M("TabGroups.CountAtStartup", tabGroupCount);
+}
+
++ (void)recordStartupTabsPerGroupCount:(int)tabsPerGroupCount {
+  base::UmaHistogramCounts10000("TabGroups.TabsPerGroupCountAtStartup",
+                                tabsPerGroupCount);
+}
+
++ (void)recordResumeTabCount:(int)tabCount {
+  base::UmaHistogramCounts1M("Tabs.CountAtResume2", tabCount);
+}
+
++ (void)recordStartupOldTabCount:(int)tabCount {
+  base::UmaHistogramCounts1M("Tabs.UnusedCountAtStartup2", tabCount);
+}
+
++ (void)recordStartupDuplicatedTabCount:(int)tabCount {
+  base::UmaHistogramCounts100("Tabs.DuplicatesCountAtStartup", tabCount);
+}
+
++ (void)recordTabsAgeAtStartup:(const std::vector<base::TimeDelta>&)tabsAge {
+  for (const auto timeSinceCreation : tabsAge) {
+    TabsAgeGroup tabsAgeGroup =
+        [self tabsAgeGroupFromTimeSinceCreation:timeSinceCreation];
+    UMA_HISTOGRAM_ENUMERATION("Tabs.TimeSinceCreationAtStartup", tabsAgeGroup);
   }
 }
 
-- (BOOL)isMetricsReportingEnabledWifiOnly {
-  BOOL optIn = GetApplicationContext()->GetLocalState()->GetBoolean(
-      metrics::prefs::kMetricsReportingEnabled);
-  if (base::FeatureList::IsEnabled(kUmaCellular)) {
-    return optIn;
++ (void)recordConnectedAndDisconnectedSceneCount:(int)connectedScenes {
+  base::UmaHistogramCounts100("IOS.MultiWindow.ConnectedScenesCount",
+                              connectedScenes);
+  base::UmaHistogramCounts100(
+      "IOS.MultiWindow.DisconnectedScenesCount",
+      UIApplication.sharedApplication.openSessions.count - connectedScenes);
+}
+
++ (void)recordAndResetWarmStartCount {
+  bool afterUpgrade =
+      [PreviousSessionInfo sharedInstance].isFirstSessionAfterUpgrade;
+  const std::string prefix = WarmStartHistogramPrefix(afterUpgrade);
+
+  NSInteger warmStartCount =
+      [PreviousSessionInfo sharedInstance].warmStartCount;
+  base::UmaHistogramCounts100(prefix + "WarmStartCount", warmStartCount);
+  // The total number of launches from the session is the number of warm starts,
+  // plus the initial cold start.
+  base::UmaHistogramCounts100(prefix + "AppLaunchesPerSession",
+                              warmStartCount + 1);
+  [[PreviousSessionInfo sharedInstance] resetWarmStartCount];
+}
+
++ (TabsAgeGroup)tabsAgeGroupFromTimeSinceCreation:
+    (base::TimeDelta)timeSinceCreation {
+  if (timeSinceCreation < base::Days(1)) {
+    return TabsAgeGroup::kLessThanOneDay;
   }
-  return optIn && GetApplicationContext()->GetLocalState()->GetBoolean(
-                      prefs::kMetricsReportingWifiOnly);
+
+  if (timeSinceCreation < base::Days(3)) {
+    return TabsAgeGroup::kOneToThreeDays;
+  }
+
+  if (timeSinceCreation < base::Days(7)) {
+    return TabsAgeGroup::kThreeToSevenDays;
+  }
+
+  if (timeSinceCreation < base::Days(14)) {
+    return TabsAgeGroup::kSevenToFourteenDays;
+  }
+
+  if (timeSinceCreation < base::Days(30)) {
+    return TabsAgeGroup::kFourteenToThirtyDays;
+  }
+
+  return TabsAgeGroup::kMoreThanThirtyDays;
 }
 
 @end

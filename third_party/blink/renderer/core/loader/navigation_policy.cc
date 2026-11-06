@@ -41,6 +41,7 @@
 #include "third_party/blink/renderer/core/events/mouse_event.h"
 #include "third_party/blink/renderer/core/events/ui_event_with_key_state.h"
 #include "third_party/blink/renderer/platform/keyboard_codes.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
 
 namespace blink {
@@ -52,15 +53,17 @@ NavigationPolicy NavigationPolicyFromEventModifiers(int16_t button,
                                                     bool shift,
                                                     bool alt,
                                                     bool meta) {
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   const bool new_tab_modifier = (button == 1) || meta;
 #else
   const bool new_tab_modifier = (button == 1) || ctrl;
 #endif
-  if (!new_tab_modifier && !shift && !alt)
+  if (new_tab_modifier && alt && !shift) {
+    return kNavigationPolicySplitView;
+  }
+  if (!new_tab_modifier && !shift && !alt) {
     return kNavigationPolicyCurrentTab;
-
-  if (new_tab_modifier) {
+  } else if (new_tab_modifier) {
     return shift ? kNavigationPolicyNewForegroundTab
                  : kNavigationPolicyNewBackgroundTab;
   }
@@ -148,6 +151,12 @@ NavigationPolicy NavigationPolicyFromEvent(const Event* event) {
     return kNavigationPolicyNewForegroundTab;
   }
 
+  if (event_policy == kNavigationPolicySplitView &&
+      input_policy != kNavigationPolicySplitView) {
+    // No split view from synthesized events without user intention.
+    return kNavigationPolicyCurrentTab;
+  }
+
   return event_policy;
 }
 
@@ -155,10 +164,12 @@ NavigationPolicy NavigationPolicyForCreateWindow(
     const WebWindowFeatures& features) {
   // If our default configuration was modified by a script or wasn't
   // created by a user gesture, then show as a popup. Else, let this
-  // new window be opened as a toplevel window.
-  bool as_popup = !features.tool_bar_visible || !features.status_bar_visible ||
-                  !features.scrollbars_visible || !features.menu_bar_visible ||
-                  !features.resizable;
+  // new window be opened as a toplevel window. When a split tab is requested,
+  // the legacy heuristics don't apply, and only an explicit "popup" feature
+  // (reflected in `is_popup`) results in a popup. The browser decides whether
+  // to create the split, based on `features.is_split`.
+  bool as_popup =
+      features.is_popup || (!features.is_split && !features.resizable);
   NavigationPolicy app_policy =
       as_popup ? kNavigationPolicyNewPopup : kNavigationPolicyNewForegroundTab;
   NavigationPolicy user_policy = NavigationPolicyFromCurrentEvent();
@@ -184,6 +195,14 @@ NavigationPolicy NavigationPolicyForCreateWindow(
   return user_policy;
 }
 
+bool UserRequestedNavigationPolicyForCreateWindow() {
+  // NavigationPolicyForCreateWindow() uses the app policy if the current event
+  // doesn't request a policy, or requests a download.
+  const NavigationPolicy user_policy = NavigationPolicyFromCurrentEvent();
+  return user_policy != kNavigationPolicyCurrentTab &&
+         user_policy != kNavigationPolicyDownload;
+}
+
 STATIC_ASSERT_ENUM(kWebNavigationPolicyDownload, kNavigationPolicyDownload);
 STATIC_ASSERT_ENUM(kWebNavigationPolicyCurrentTab, kNavigationPolicyCurrentTab);
 STATIC_ASSERT_ENUM(kWebNavigationPolicyNewBackgroundTab,
@@ -192,5 +211,8 @@ STATIC_ASSERT_ENUM(kWebNavigationPolicyNewForegroundTab,
                    kNavigationPolicyNewForegroundTab);
 STATIC_ASSERT_ENUM(kWebNavigationPolicyNewWindow, kNavigationPolicyNewWindow);
 STATIC_ASSERT_ENUM(kWebNavigationPolicyNewPopup, kNavigationPolicyNewPopup);
+STATIC_ASSERT_ENUM(kWebNavigationPolicyPictureInPicture,
+                   kNavigationPolicyPictureInPicture);
+STATIC_ASSERT_ENUM(kWebNavigationPolicySplitView, kNavigationPolicySplitView);
 
 }  // namespace blink

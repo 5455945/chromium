@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,15 +21,9 @@
 #include "components/version_info/channel.h"
 
 InstallerCrashReporterClient::InstallerCrashReporterClient(
-    bool is_per_user_install)
-    : is_per_user_install_(is_per_user_install) {}
+    bool is_per_user_install) {}
 
 InstallerCrashReporterClient::~InstallerCrashReporterClient() = default;
-
-bool InstallerCrashReporterClient::ShouldCreatePipeName(
-    const std::wstring& process_type) {
-  return true;
-}
 
 bool InstallerCrashReporterClient::GetAlternativeCrashDumpLocation(
     std::wstring* crash_dir) {
@@ -59,32 +53,9 @@ void InstallerCrashReporterClient::GetProductNameAndVersion(
       install_static::GetChromeChannelName(/*with_extended_stable=*/true);
 }
 
-bool InstallerCrashReporterClient::ShouldShowRestartDialog(
-    std::wstring* title,
-    std::wstring* message,
-    bool* is_rtl_locale) {
-  // There is no UX associated with the installer, so no dialog should be shown.
-  return false;
-}
-
-bool InstallerCrashReporterClient::AboutToRestart() {
-  // The installer should never be restarted after a crash.
-  return false;
-}
-
-bool InstallerCrashReporterClient::GetIsPerUserInstall() {
-  return is_per_user_install_;
-}
-
 bool InstallerCrashReporterClient::GetShouldDumpLargerDumps() {
   // Use large dumps for all but the stable channel.
   return install_static::GetChromeChannel() != version_info::Channel::STABLE;
-}
-
-int InstallerCrashReporterClient::GetResultCodeRespawnFailed() {
-  // The restart dialog is never shown for the installer.
-  NOTREACHED();
-  return 0;
 }
 
 bool InstallerCrashReporterClient::GetCrashDumpLocation(
@@ -92,8 +63,9 @@ bool InstallerCrashReporterClient::GetCrashDumpLocation(
   base::FilePath crash_directory_path;
   bool ret =
       base::PathService::Get(chrome::DIR_CRASH_DUMPS, &crash_directory_path);
-  if (ret)
+  if (ret) {
     *crash_dir = crash_directory_path.value();
+  }
   return ret;
 }
 
@@ -115,8 +87,9 @@ bool InstallerCrashReporterClient::GetCollectStatsInSample() {
   base::win::RegKey key(HKEY_CURRENT_USER,
                         install_static::GetRegistryPath().c_str(),
                         KEY_QUERY_VALUE | KEY_WOW64_32KEY);
-  if (!key.Valid())
+  if (!key.Valid()) {
     return true;
+  }
   DWORD out_value = 0;
   if (key.ReadValueDW(install_static::kRegValueChromeStatsSample, &out_value) !=
       ERROR_SUCCESS) {

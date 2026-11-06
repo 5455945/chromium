@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "components/keyed_service/content/browser_context_keyed_service_factory.h"
 
 namespace extensions {
@@ -24,12 +24,12 @@ class ExtensionPrefsFactory : public BrowserContextKeyedServiceFactory {
                              std::unique_ptr<ExtensionPrefs> prefs);
 
  private:
-  friend struct base::DefaultSingletonTraits<ExtensionPrefsFactory>;
+  friend base::NoDestructor<ExtensionPrefsFactory>;
 
   ExtensionPrefsFactory();
   ~ExtensionPrefsFactory() override;
 
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* context) const override;
   content::BrowserContext* GetBrowserContextToUse(
       content::BrowserContext* context) const override;

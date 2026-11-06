@@ -1,6 +1,7 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 
 #include "net/spdy/spdy_write_queue.h"
 
@@ -44,7 +45,7 @@ SpdyWriteQueue::PendingWrite::PendingWrite(PendingWrite&& other) = default;
 SpdyWriteQueue::PendingWrite& SpdyWriteQueue::PendingWrite::operator=(
     PendingWrite&& other) = default;
 
-SpdyWriteQueue::SpdyWriteQueue() : removing_writes_(false) {}
+SpdyWriteQueue::SpdyWriteQueue() = default;
 
 SpdyWriteQueue::~SpdyWriteQueue() {
   DCHECK_GE(num_queued_capped_frames_, 0);
@@ -70,9 +71,9 @@ void SpdyWriteQueue::Enqueue(
   CHECK_LE(priority, MAXIMUM_PRIORITY);
   if (stream.get())
     DCHECK_EQ(stream->priority(), priority);
-  queue_[priority].push_back(
-      {frame_type, std::move(frame_producer), stream,
-       MutableNetworkTrafficAnnotationTag(traffic_annotation)});
+  queue_[priority].emplace_back(
+      frame_type, std::move(frame_producer), stream,
+      MutableNetworkTrafficAnnotationTag(traffic_annotation));
   if (IsSpdyFrameTypeWriteCapped(frame_type)) {
     DCHECK_GE(num_queued_capped_frames_, 0);
     num_queued_capped_frames_++;
@@ -211,8 +212,9 @@ void SpdyWriteQueue::Clear() {
   std::vector<std::unique_ptr<SpdyBufferProducer>> erased_buffer_producers;
 
   for (int i = MINIMUM_PRIORITY; i <= MAXIMUM_PRIORITY; ++i) {
-    for (auto it = queue_[i].begin(); it != queue_[i].end(); ++it) {
-      erased_buffer_producers.push_back(std::move(it->frame_producer));
+    for (auto& pending_write : queue_[i]) {
+      erased_buffer_producers.push_back(
+          std::move(pending_write.frame_producer));
     }
     queue_[i].clear();
   }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,7 @@
 #include <stddef.h>
 
 #include <string>
-#include <vector>
 
-#include "base/macros.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -38,7 +36,7 @@ MATCHER_P3(IsBucketBetween, lower_bound, upper_bound, count, "") {
 // Builder for instances of NTPTileImpression that uses sensible defaults.
 class Builder {
  public:
-  Builder() {}
+  Builder() = default;
 
   Builder& WithIndex(int index) {
     impression_.index = index;
@@ -58,10 +56,6 @@ class Builder {
   }
   Builder& WithIconType(favicon_base::IconType icon_type) {
     impression_.icon_type = icon_type;
-    return *this;
-  }
-  Builder& WithDataGenerationTime(base::Time data_generation_time) {
-    impression_.data_generation_time = data_generation_time;
     return *this;
   }
   Builder& WithUrl(const GURL& url) {
@@ -222,30 +216,6 @@ TEST(RecordTileImpressionTest, ShouldRecordImpressionsForTileTitleSource) {
                           base::Bucket(kInferredTitleSource, /*count=*/1)));
 }
 
-TEST(RecordTileImpressionTest, ShouldRecordAge) {
-  const base::TimeDelta kSuggestionAge = base::TimeDelta::FromMinutes(1);
-  const base::TimeDelta kBucketTolerance = base::TimeDelta::FromSeconds(20);
-  base::HistogramTester histogram_tester;
-  RecordTileImpression(
-      Builder()
-          .WithSource(TileSource::TOP_SITES)
-          .WithDataGenerationTime(base::Time::Now() - kSuggestionAge)
-          .Build());
-
-  EXPECT_THAT(
-      histogram_tester.GetAllSamples("NewTabPage.SuggestionsImpressionAge"),
-      ElementsAre(
-          IsBucketBetween((kSuggestionAge - kBucketTolerance).InSeconds(),
-                          (kSuggestionAge + kBucketTolerance).InSeconds(),
-                          /*count=*/1)));
-  EXPECT_THAT(histogram_tester.GetAllSamples(
-                  "NewTabPage.SuggestionsImpressionAge.client"),
-              ElementsAre(IsBucketBetween(
-                  (kSuggestionAge - kBucketTolerance).InSeconds(),
-                  (kSuggestionAge + kBucketTolerance).InSeconds(),
-                  /*count=*/1)));
-}
-
 TEST(RecordTileImpressionTest, ShouldRecordUmaForIconType) {
   base::HistogramTester histogram_tester;
 
@@ -257,16 +227,27 @@ TEST(RecordTileImpressionTest, ShouldRecordUmaForIconType) {
                            .WithVisualType(ICON_REAL)
                            .WithIconType(IconType::kWebManifestIcon)
                            .Build());
+}
+
+TEST(RecordTileImpressionTest, ShouldRecordImpressionsForAiMode) {
+  base::HistogramTester histogram_tester;
+
+  RecordTileImpression(Builder()
+                           .WithIndex(2)
+                           .WithSource(TileSource::AI_MODE)
+                           .WithVisualType(ICON_REAL)
+                           .Build());
 
   EXPECT_THAT(
-      histogram_tester.GetAllSamples("NewTabPage.TileFaviconType.IconsColor"),
+      histogram_tester.GetAllSamples("NewTabPage.SuggestionsImpression"),
       ElementsAre(base::Bucket(/*min=*/2, /*count=*/1)));
-  EXPECT_THAT(
-      histogram_tester.GetAllSamples("NewTabPage.TileFaviconType.IconsReal"),
-      ElementsAre(base::Bucket(/*min=*/4, /*count=*/1)));
-  EXPECT_THAT(histogram_tester.GetAllSamples("NewTabPage.TileFaviconType"),
-              ElementsAre(base::Bucket(/*min=*/2, /*count=*/1),
-                          base::Bucket(/*min=*/4, /*count=*/1)));
+  EXPECT_THAT(histogram_tester.GetAllSamples(
+                  "NewTabPage.SuggestionsImpression.ai_mode"),
+              ElementsAre(base::Bucket(/*min=*/2, /*count=*/1)));
+  EXPECT_THAT(histogram_tester.GetAllSamples("NewTabPage.TileType.ai_mode"),
+              ElementsAre(base::Bucket(ICON_REAL, /*count=*/1)));
+  EXPECT_THAT(histogram_tester.GetAllSamples("NewTabPage.TileTitle.ai_mode"),
+              ElementsAre(base::Bucket(kUnknownTitleSource, /*count=*/1)));
 }
 
 TEST(RecordTileClickTest, ShouldRecordUmaForIcon) {
@@ -369,29 +350,6 @@ TEST(RecordTileClickTest, ShouldRecordClicksForTileTitleSource) {
                           base::Bucket(kTitleTagTitleSource, /*count=*/3)));
 }
 
-TEST(RecordTileClickTest, ShouldRecordClickAge) {
-  const base::TimeDelta kSuggestionAge = base::TimeDelta::FromMinutes(1);
-  const base::TimeDelta kBucketTolerance = base::TimeDelta::FromSeconds(20);
-  base::HistogramTester histogram_tester;
-  RecordTileClick(
-      Builder()
-          .WithSource(TileSource::TOP_SITES)
-          .WithDataGenerationTime(base::Time::Now() - kSuggestionAge)
-          .Build());
-
-  EXPECT_THAT(histogram_tester.GetAllSamples("NewTabPage.MostVisitedAge"),
-              ElementsAre(IsBucketBetween(
-                  (kSuggestionAge - kBucketTolerance).InSeconds(),
-                  (kSuggestionAge + kBucketTolerance).InSeconds(),
-                  /*count=*/1)));
-  EXPECT_THAT(
-      histogram_tester.GetAllSamples("NewTabPage.MostVisitedAge.client"),
-      ElementsAre(
-          IsBucketBetween((kSuggestionAge - kBucketTolerance).InSeconds(),
-                          (kSuggestionAge + kBucketTolerance).InSeconds(),
-                          /*count=*/1)));
-}
-
 TEST(RecordTileClickTest, ShouldRecordClicksForIconType) {
   base::HistogramTester histogram_tester;
 
@@ -403,17 +361,53 @@ TEST(RecordTileClickTest, ShouldRecordClicksForIconType) {
                       .WithVisualType(ICON_REAL)
                       .WithIconType(IconType::kWebManifestIcon)
                       .Build());
+}
 
-  EXPECT_THAT(histogram_tester.GetAllSamples(
-                  "NewTabPage.TileFaviconTypeClicked.IconsColor"),
+TEST(RecordTileClickTest, ShouldRecordClicksForAiMode) {
+  base::HistogramTester histogram_tester;
+
+  RecordTileClick(Builder()
+                      .WithIndex(2)
+                      .WithSource(TileSource::AI_MODE)
+                      .WithVisualType(ICON_REAL)
+                      .Build());
+
+  EXPECT_THAT(histogram_tester.GetAllSamples("NewTabPage.MostVisited"),
               ElementsAre(base::Bucket(/*min=*/2, /*count=*/1)));
-  EXPECT_THAT(histogram_tester.GetAllSamples(
-                  "NewTabPage.TileFaviconTypeClicked.IconsReal"),
-              ElementsAre(base::Bucket(/*min=*/4, /*count=*/1)));
+  EXPECT_THAT(histogram_tester.GetAllSamples("NewTabPage.MostVisited.ai_mode"),
+              ElementsAre(base::Bucket(/*min=*/2, /*count=*/1)));
   EXPECT_THAT(
-      histogram_tester.GetAllSamples("NewTabPage.TileFaviconTypeClicked"),
-      ElementsAre(base::Bucket(/*min=*/2, /*count=*/1),
-                  base::Bucket(/*min=*/4, /*count=*/1)));
+      histogram_tester.GetAllSamples("NewTabPage.TileTypeClicked.ai_mode"),
+      ElementsAre(base::Bucket(ICON_REAL, /*count=*/1)));
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples("NewTabPage.TileTitleClicked.ai_mode"),
+      ElementsAre(base::Bucket(kUnknownTitleSource, /*count=*/1)));
+}
+
+TEST(CustomPrefixMetricsTest, ShouldRecordMetricsWithCustomPrefix) {
+  base::HistogramTester histogram_tester;
+
+  RecordPageImpression(/*number_of_tiles=*/4, "Omnibox");
+  EXPECT_THAT(histogram_tester.GetAllSamples("Omnibox.NumberOfTiles"),
+              ElementsAre(base::Bucket(4, /*count=*/1)));
+
+  RecordTileImpression(
+      Builder().WithIndex(0).WithSource(TileSource::TOP_SITES).Build(),
+      "Omnibox");
+  EXPECT_THAT(histogram_tester.GetAllSamples("Omnibox.SuggestionsImpression"),
+              ElementsAre(base::Bucket(0, /*count=*/1)));
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples("Omnibox.SuggestionsImpression.client"),
+      ElementsAre(base::Bucket(0, /*count=*/1)));
+
+  RecordTileClick(
+      Builder().WithIndex(1).WithSource(TileSource::CUSTOM_LINKS).Build(),
+      "Omnibox");
+  EXPECT_THAT(histogram_tester.GetAllSamples("Omnibox.MostVisited"),
+              ElementsAre(base::Bucket(1, /*count=*/1)));
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples("Omnibox.MostVisited.custom_links"),
+      ElementsAre(base::Bucket(1, /*count=*/1)));
 }
 
 }  // namespace

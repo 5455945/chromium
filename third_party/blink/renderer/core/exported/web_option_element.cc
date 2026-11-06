@@ -44,8 +44,20 @@ WebString WebOptionElement::GetText() const {
   return ConstUnwrap<HTMLOptionElement>()->DisplayLabel();
 }
 
+WebString WebOptionElement::GetInnerText() const {
+  return ConstUnwrap<HTMLOptionElement>()->text();
+}
+
 WebString WebOptionElement::Label() const {
   return ConstUnwrap<HTMLOptionElement>()->label();
+}
+
+bool WebOptionElement::IsEnabled() const {
+  return !ConstUnwrap<HTMLOptionElement>()->IsDisabledFormControl();
+}
+
+bool WebOptionElement::IsSelected() const {
+  return ConstUnwrap<HTMLOptionElement>()->Selected();
 }
 
 WebOptionElement::WebOptionElement(HTMLOptionElement* elem)

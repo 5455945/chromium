@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -46,9 +46,6 @@ class PagePasswordsAnalyser {
   // Sets of renderer_ids which have already been analyzed.
   std::set<FormRendererId> skip_form_element_renderer_ids_;
   std::set<FieldRendererId> skip_control_element_renderer_ids_;
-  // This is true when new DOM content is available since the last time
-  // the page was analysed, meaning the page needs to be reanalysed.
-  bool page_dirty_;
 };
 
 }  // namespace autofill

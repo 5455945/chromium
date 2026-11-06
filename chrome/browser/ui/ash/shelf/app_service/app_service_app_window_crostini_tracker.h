@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include "ash/public/cpp/shelf_types.h"
 #include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/ash/shelf/crostini_app_display.h"
 
 class AppServiceAppWindowShelfController;
@@ -15,9 +16,7 @@ namespace aura {
 class Window;
 }
 
-namespace exo {
-class Permission;
-}
+class Profile;
 
 // AppServiceAppWindowCrostiniTracker is used to handle Crostini app window
 // special cases, e.g. CrostiniAppDisplay, Crostini shelf app id, etc.
@@ -49,13 +48,23 @@ class AppServiceAppWindowCrostiniTracker {
   void RegisterCrostiniWindowForForceClose(aura::Window* window,
                                            const std::string& app_name);
 
-  AppServiceAppWindowShelfController* const app_service_controller_;
+  // Checks the current app id saved in InstanceRegistry for `window`. If the
+  // save app id is not `app_id`, remove the instance and add it back with
+  // `app_id` to modify the app id saved in InstanceRegistry. The app id in
+  // InstanceRegistry can't be modified directly, so we have to remove it first,
+  // then add it back again.
+  void MaybeModifyInstance(Profile* profile,
+                           aura::Window* window,
+                           const std::string& app_id) const;
+
+  const raw_ptr<AppServiceAppWindowShelfController> app_service_controller_;
 
   CrostiniAppDisplay crostini_app_display_;
 
   // Windows that have been granted the permission to activate via the
   // exo::Permission window property.
-  base::flat_set<aura::Window*> activation_permissions_;
+  base::flat_set<raw_ptr<aura::Window, CtnExperimental>>
+      activation_permissions_;
 };
 
 #endif  // CHROME_BROWSER_UI_ASH_SHELF_APP_SERVICE_APP_SERVICE_APP_WINDOW_CROSTINI_TRACKER_H_

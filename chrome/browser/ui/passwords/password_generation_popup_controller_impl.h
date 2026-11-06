@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,40 +6,46 @@
 #define CHROME_BROWSER_UI_PASSWORDS_PASSWORD_GENERATION_POPUP_CONTROLLER_IMPL_H_
 
 #include <stddef.h>
+
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/functional/callback_helpers.h"
+#include "base/i18n/rtl.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/autofill/popup_controller_common.h"
 #include "chrome/browser/ui/passwords/password_generation_popup_controller.h"
-#include "components/autofill/content/browser/key_press_handler_manager.h"
+#include "components/autofill/core/browser/ui/popup_open_enums.h"
 #include "components/autofill/core/common/signatures.h"
 #include "components/autofill/core/common/unique_ids.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_string.h"
+#include "components/zoom/zoom_observer.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
-#include "ui/gfx/native_widget_types.h"
-
-#if !defined(OS_ANDROID)
-#include "components/zoom/zoom_observer.h"
-#endif  // !defined(OS_ANDROID)
+#include "ui/gfx/native_ui_types.h"
 
 namespace content {
-struct NativeWebKeyboardEvent;
 class WebContents;
 }  // namespace content
+
+namespace input {
+struct NativeWebKeyboardEvent;
+}  // namespace input
 
 namespace password_manager {
 class PasswordManagerDriver;
 }  // namespace password_manager
 
 namespace autofill {
-struct FormData;
+class FormData;
 namespace password_generation {
+enum class PasswordGenerationType;
 struct PasswordGenerationUIData;
 }  // namespace password_generation
 }  // namespace autofill
@@ -51,19 +57,10 @@ class PasswordGenerationPopupView;
 // determining the location of the popup, handling keypress events while the
 // popup is active, and notifying both the renderer and the password manager
 // if the password is accepted.
-//
-// NOTE: This is used on Android only to display the editing popup.
-//
-// TODO(crbug.com/944502): Clean up the popup code on Android to make its use
-// clear and remove unused code.
 class PasswordGenerationPopupControllerImpl
     : public PasswordGenerationPopupController,
-      public content::WebContentsObserver
-#if !defined(OS_ANDROID)
-    ,
-      public zoom::ZoomObserver
-#endif  // !defined(OS_ANDROID)
-{
+      public content::WebContentsObserver,
+      public zoom::ZoomObserver {
  public:
   // Create a controller or return |previous| if it is suitable. Will hide
   // |previous| if it is not returned. |bounds| is the bounds of the element
@@ -78,14 +75,29 @@ class PasswordGenerationPopupControllerImpl
       PasswordGenerationPopupObserver* observer,
       content::WebContents* web_contents,
       content::RenderFrameHost* frame);
+
+  PasswordGenerationPopupControllerImpl(
+      const PasswordGenerationPopupControllerImpl&) = delete;
+  PasswordGenerationPopupControllerImpl& operator=(
+      const PasswordGenerationPopupControllerImpl&) = delete;
+
   ~PasswordGenerationPopupControllerImpl() override;
 
-  // Create a PasswordGenerationPopupView if one doesn't already exist.
-  // Returns |true| in case of success, |false| otherwise.
-  bool Show(GenerationUIState state);
+  // Generate the password string and store it in `current_generated_password_`.
+  void GeneratePasswordValue(
+      autofill::password_generation::PasswordGenerationType generation_type);
 
-  // Update the password to be displayed in the UI.
-  void UpdatePassword(std::u16string new_password);
+  // Creates and shows a PasswordGenerationPopupView if one doesn't already
+  // exist, or updates the existing view. Returns true if `this` and `driver_`
+  // are still alive and the popup is visible after showing; otherwise hides
+  // the popup (if `this` is still alive) and returns false.
+  // Note: May synchronously destroy `this`, `driver_`, or `WebContents` if
+  // dropping fullscreen triggers synchronous frame or tab teardown.
+  bool Show(GenerationUIState state, bool is_manually_triggered = false);
+
+  // Update the value of the generated password to be displayed in the UI (e.g.
+  // upon editing the generated password).
+  void UpdateGeneratedPassword(password_manager::PasswordString new_password);
 
   // Hides the popup, since its position is no longer valid.
   void FrameWasScrolled();
@@ -101,16 +113,45 @@ class PasswordGenerationPopupControllerImpl
   // automatically on that field.
   void GeneratedPasswordRejected();
 
+  base::WeakPtr<PasswordGenerationPopupControllerImpl> GetWeakPtr();
+
   // content::WebContentsObserver overrides
   void WebContentsDestroyed() override;
-  void DidFinishNavigation(
-      content::NavigationHandle* navigation_handle) override;
+  void PrimaryPageChanged(content::Page& page) override;
 
-#if !defined(OS_ANDROID)
-  // ZoomObserver implementation.
+  // Returns true if the popup is visible, or false otherwise.
+  bool IsVisible() const;
+
+  // ZoomObserver:
+  void OnZoomControllerDestroyed(
+      zoom::ZoomController* zoom_controller) override;
   void OnZoomChanged(
       const zoom::ZoomController::ZoomChangedEventData& data) override;
-#endif  // !defined(OS_ANDROID)
+
+  base::WeakPtr<password_manager::PasswordManagerDriver> driver() const {
+    return driver_;
+  }
+
+#if defined(UNIT_TEST)
+  PasswordGenerationPopupView* view() const { return view_; }
+  void SetViewForTesting(PasswordGenerationPopupView* view) { view_ = view; }
+  void SelectAcceptButtonForTesting() {
+    SelectElement(PasswordGenerationPopupElement::kAcceptButton);
+  }
+  void SelectCancelButtonForTesting() {
+    SelectElement(PasswordGenerationPopupElement::kCancelButton);
+  }
+  bool HandleKeyPressEventForTesting(
+      const input::NativeWebKeyboardEvent& event) {
+    return HandleKeyPressEvent(event);
+  }
+  bool accept_button_selected_for_testing() const {
+    return accept_button_selected();
+  }
+  bool cancel_button_selected_for_testing() const {
+    return cancel_button_selected();
+  }
+#endif
 
  protected:
   PasswordGenerationPopupControllerImpl(
@@ -121,46 +162,56 @@ class PasswordGenerationPopupControllerImpl
       content::WebContents* web_contents,
       content::RenderFrameHost* frame);
 
-  // Handle to the popup. May be NULL if popup isn't showing.
-  PasswordGenerationPopupView* view_;
-
  private:
   class KeyPressRegistrator;
-  // PasswordGenerationPopupController implementation:
-  void Hide(autofill::PopupHidingReason) override;
+
+  // Defines different elements of the popup that can be selected.
+  enum class PasswordGenerationPopupElement {
+    kNone = 0,
+    kAcceptButton = 1,
+    kCancelButton = 2,
+  };
+
+  // AutofillPopupViewDelegate implementation:
+  void Hide(autofill::SuggestionHidingReason) override;
   void ViewDestroyed() override;
-  void SelectionCleared() override;
-  void SetSelected() override;
-  void PasswordAccepted() override;
   gfx::NativeView container_view() const override;
   content::WebContents* GetWebContents() const override;
   const gfx::RectF& element_bounds() const override;
-  bool IsRTL() const override;
+  autofill::PopupAnchorType anchor_type() const override;
+  base::i18n::TextDirection GetElementTextDirection() const override;
+
+  // PasswordGenerationPopupController implementation:
+  void PasswordAccepted() override;
+  void PasswordRejected() override;
+  std::u16string GetPrimaryAccountEmail() override;
+  GenerationUIState state() const override;
+  bool accept_button_selected() const override;
+  bool cancel_button_selected() const override;
+  const password_manager::PasswordString& password() const override;
+  std::u16string SuggestedText() const override;
+  const std::u16string& HelpText() const override;
 
   void HideImpl();
 
-  GenerationUIState state() const override;
-  bool password_selected() const override;
-  const std::u16string& password() const override;
-  std::u16string SuggestedText() override;
-  const std::u16string& HelpText() override;
+  bool HandleKeyPressEvent(const input::NativeWebKeyboardEvent& event);
 
-  base::WeakPtr<PasswordGenerationPopupControllerImpl> GetWeakPtr();
+  // Whether the elements of popup are selectable (true in generation state).
+  bool IsSelectable() const;
+  // Sets currently selected popup element.
+  void SelectElement(PasswordGenerationPopupElement element);
+  // Accepts currently selected element. No-op if no element is selected.
+  bool PossiblyAcceptSelectedElement();
 
-  bool HandleKeyPressEvent(const content::NativeWebKeyboardEvent& event);
-
-  // Set if the password is currently selected.
-  void PasswordSelected(bool selected);
-
-  // Accept password if it's selected.
-  bool PossiblyAcceptPassword();
+  // Handle to the popup. May be NULL if popup isn't showing.
+  raw_ptr<PasswordGenerationPopupView> view_;
 
   const autofill::FormData form_data_;
 
   base::WeakPtr<password_manager::PasswordManagerDriver> const driver_;
 
   // May be NULL.
-  PasswordGenerationPopupObserver* const observer_;
+  const raw_ptr<PasswordGenerationPopupObserver> observer_;
 
   // Signature of the form for which password generation is triggered.
   const autofill::FormSignature form_signature_;
@@ -181,20 +232,27 @@ class PasswordGenerationPopupControllerImpl
   // Help text in the footer.
   std::u16string help_text_;
 
-  // The password value to be displayed in the UI.
-  std::u16string current_password_;
-  // Whether the row with the password is currently selected/highlighted.
-  bool password_selected_;
+  // The current password that is considered generated. This is the password to
+  // be displayed in the user generation dialog.
+  password_manager::PasswordString current_generated_password_;
+
+  // Currently selected / highlighted element of the popup.
+  PasswordGenerationPopupElement selected_element_ =
+      PasswordGenerationPopupElement::kNone;
 
   // The state of the generation popup.
   GenerationUIState state_;
 
   std::unique_ptr<KeyPressRegistrator> key_press_handler_manager_;
 
+  // Fullscreen block held while the popup is showing.
+  base::ScopedClosureRunner fullscreen_blocker_;
+
+  base::ScopedObservation<zoom::ZoomController, zoom::ZoomObserver>
+      zoom_observation_{this};
+
   base::WeakPtrFactory<PasswordGenerationPopupControllerImpl> weak_ptr_factory_{
       this};
-
-  DISALLOW_COPY_AND_ASSIGN(PasswordGenerationPopupControllerImpl);
 };
 
 #endif  // CHROME_BROWSER_UI_PASSWORDS_PASSWORD_GENERATION_POPUP_CONTROLLER_IMPL_H_

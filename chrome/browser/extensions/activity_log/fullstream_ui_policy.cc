@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,29 +8,33 @@
 
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/strings/cstring_view.h"
+#include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
-#include "base/task_runner_util.h"
 #include "chrome/browser/extensions/activity_log/activity_action_constants.h"
 #include "chrome/browser/extensions/activity_log/activity_database.h"
 #include "chrome/browser/extensions/activity_log/activity_log_task_runner.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
+#include "content/public/browser/browser_thread.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/dom_action_types.h"
 #include "extensions/common/extension.h"
 #include "sql/statement.h"
 #include "sql/transaction.h"
 #include "url/gurl.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using base::FilePath;
 using base::Unretained;
@@ -40,30 +44,29 @@ namespace constants = activity_log_constants;
 
 namespace extensions {
 
-const char FullStreamUIPolicy::kTableName[] = "activitylog_full";
-const char* const FullStreamUIPolicy::kTableContentFields[] = {
-  "extension_id", "time", "action_type", "api_name", "args", "page_url",
-  "page_title", "arg_url", "other"
-};
-const char* const FullStreamUIPolicy::kTableFieldTypes[] = {
-  "LONGVARCHAR NOT NULL", "INTEGER", "INTEGER", "LONGVARCHAR", "LONGVARCHAR",
-  "LONGVARCHAR", "LONGVARCHAR", "LONGVARCHAR", "LONGVARCHAR"
-};
-const int FullStreamUIPolicy::kTableFieldCount =
-    base::size(FullStreamUIPolicy::kTableContentFields);
+namespace {
+
+constexpr base::cstring_view kTableContentFields[] = {
+    "extension_id", "time",       "action_type", "api_name", "args",
+    "page_url",     "page_title", "arg_url",     "other"};
+constexpr base::cstring_view kTableFieldTypes[] = {
+    "LONGVARCHAR NOT NULL", "INTEGER",     "INTEGER",
+    "LONGVARCHAR",          "LONGVARCHAR", "LONGVARCHAR",
+    "LONGVARCHAR",          "LONGVARCHAR", "LONGVARCHAR"};
+
+}  // namespace
 
 FullStreamUIPolicy::FullStreamUIPolicy(Profile* profile)
     : ActivityLogDatabasePolicy(
           profile,
           FilePath(chrome::kExtensionActivityLogFilename)) {}
 
-FullStreamUIPolicy::~FullStreamUIPolicy() {}
+FullStreamUIPolicy::~FullStreamUIPolicy() = default;
 
 bool FullStreamUIPolicy::InitDatabase(sql::Database* db) {
   // Create the unified activity log entry table.
-  return ActivityDatabase::InitializeTable(db, kTableName, kTableContentFields,
-                                           kTableFieldTypes,
-                                           base::size(kTableContentFields));
+  return ActivityDatabase::InitializeTable(
+      db, "activitylog_full", kTableContentFields, kTableFieldTypes);
 }
 
 bool FullStreamUIPolicy::FlushDatabase(sql::Database* db) {
@@ -74,40 +77,39 @@ bool FullStreamUIPolicy::FlushDatabase(sql::Database* db) {
   if (!transaction.Begin())
     return false;
 
-  std::string sql_str =
-      "INSERT INTO " + std::string(FullStreamUIPolicy::kTableName) +
-      " (extension_id, time, action_type, api_name, args, "
+  static constexpr char kSql[] =
+      "INSERT INTO activitylog_full (extension_id, time, action_type, "
+      "api_name, args, "
       "page_url, page_title, arg_url, other) VALUES (?,?,?,?,?,?,?,?,?)";
-  sql::Statement statement(db->GetCachedStatement(
-      sql::StatementID(SQL_FROM_HERE), sql_str.c_str()));
+  sql::Statement statement(
+      db->GetCachedStatement(sql::StatementID(SQL_FROM_HERE), kSql));
 
-  for (size_t i = 0; i != queued_actions_.size(); ++i) {
-    const Action& action = *queued_actions_[i];
+  for (const auto& action : queued_actions_) {
     statement.Reset(true);
-    statement.BindString(0, action.extension_id());
-    statement.BindInt64(1, action.time().ToInternalValue());
-    statement.BindInt(2, static_cast<int>(action.action_type()));
-    statement.BindString(3, action.api_name());
-    if (action.args()) {
-      statement.BindString(4, Util::Serialize(action.args()));
+    statement.BindString(0, action->extension_id());
+    statement.BindTime(1, action->time());
+    statement.BindInt(2, static_cast<int>(action->action_type()));
+    statement.BindString(3, action->api_name());
+    if (action->args()) {
+      statement.BindString(4, Util::Serialize(action->args()));
     }
-    std::string page_url_string = action.SerializePageUrl();
+    std::string page_url_string = action->SerializePageUrl();
     if (!page_url_string.empty()) {
       statement.BindString(5, page_url_string);
     }
-    if (!action.page_title().empty()) {
-      statement.BindString(6, action.page_title());
+    if (!action->page_title().empty()) {
+      statement.BindString(6, action->page_title());
     }
-    std::string arg_url_string = action.SerializeArgUrl();
+    std::string arg_url_string = action->SerializeArgUrl();
     if (!arg_url_string.empty()) {
       statement.BindString(7, arg_url_string);
     }
-    if (action.other()) {
-      statement.BindString(8, Util::Serialize(action.other()));
+    if (action->other()) {
+      statement.BindString(8, Util::Serialize(action->other()));
     }
 
     if (!statement.Run()) {
-      LOG(ERROR) << "Activity log database I/O failed: " << sql_str;
+      LOG(ERROR) << "Activity log database I/O failed: " << kSql;
       return false;
     }
   }
@@ -162,11 +164,10 @@ std::unique_ptr<Action::ActionVector> FullStreamUIPolicy::DoReadFilteredData(
     where_str += where_next + "time BETWEEN ? AND ?";
   std::string query_str = base::StringPrintf(
       "SELECT extension_id,time,action_type,api_name,args,page_url,page_title,"
-      "arg_url,other,rowid FROM %s %s %s ORDER BY time DESC LIMIT 300",
-      kTableName,
-      where_str.empty() ? "" : "WHERE",
-      where_str.c_str());
-  sql::Statement query(db->GetUniqueStatement(query_str.c_str()));
+      "arg_url,other,rowid FROM activitylog_full %s %s ORDER BY time DESC "
+      "LIMIT 300",
+      where_str.empty() ? "" : "WHERE", where_str.c_str());
+  sql::Statement query(db->GetUniqueStatement(query_str));
   int i = -1;
   if (!extension_id.empty())
     query.BindString(++i, extension_id);
@@ -189,17 +190,15 @@ std::unique_ptr<Action::ActionVector> FullStreamUIPolicy::DoReadFilteredData(
   // Execute the query and get results.
   while (query.is_valid() && query.Step()) {
     auto action = base::MakeRefCounted<Action>(
-        query.ColumnString(0),
-        base::Time::FromInternalValue(query.ColumnInt64(1)),
+        query.ColumnString(0), query.ColumnTime(1),
         static_cast<Action::ActionType>(query.ColumnInt(2)),
         query.ColumnString(3), query.ColumnInt64(9));
 
     if (query.GetColumnType(4) != sql::ColumnType::kNull) {
-      std::unique_ptr<base::Value> parsed_value =
-          base::JSONReader::ReadDeprecated(query.ColumnString(4));
+      std::optional<base::Value> parsed_value = base::JSONReader::Read(
+          query.ColumnStringView(4), base::JSON_PARSE_CHROMIUM_EXTENSIONS);
       if (parsed_value && parsed_value->is_list()) {
-        action->set_args(base::WrapUnique(
-            static_cast<base::ListValue*>(parsed_value.release())));
+        action->set_args(std::move(*parsed_value).TakeList());
       }
     }
 
@@ -208,11 +207,10 @@ std::unique_ptr<Action::ActionVector> FullStreamUIPolicy::DoReadFilteredData(
     action->ParseArgUrl(query.ColumnString(7));
 
     if (query.GetColumnType(8) != sql::ColumnType::kNull) {
-      std::unique_ptr<base::Value> parsed_value =
-          base::JSONReader::ReadDeprecated(query.ColumnString(8));
+      std::optional<base::Value> parsed_value = base::JSONReader::Read(
+          query.ColumnStringView(8), base::JSON_PARSE_CHROMIUM_EXTENSIONS);
       if (parsed_value && parsed_value->is_dict()) {
-        action->set_other(base::WrapUnique(
-            static_cast<base::DictionaryValue*>(parsed_value.release())));
+        action->set_other(std::move(*parsed_value).TakeDict());
       }
     }
     actions->push_back(action);
@@ -239,13 +237,12 @@ void FullStreamUIPolicy::DoRemoveActions(
   if (!transaction.Begin())
     return;
 
-  std::string statement_str =
-      base::StringPrintf("DELETE FROM %s WHERE rowid = ?", kTableName);
-  sql::Statement statement(db->GetCachedStatement(
-      sql::StatementID(SQL_FROM_HERE), statement_str.c_str()));
-  for (size_t i = 0; i < action_ids.size(); i++) {
+  static constexpr char kSql[] = "DELETE FROM activitylog_full WHERE rowid = ?";
+  sql::Statement statement(
+      db->GetCachedStatement(sql::StatementID(SQL_FROM_HERE), kSql));
+  for (long action_id : action_ids) {
     statement.Reset(true);
-    statement.BindInt64(0, action_ids[i]);
+    statement.BindInt64(0, action_id);
     if (!statement.Run()) {
       LOG(ERROR) << "Removing activities from database failed: "
                  << statement.GetSQLStatement();
@@ -271,11 +268,11 @@ void FullStreamUIPolicy::DoRemoveURLs(const std::vector<GURL>& restrict_urls) {
   // If no restrictions then then all URLs need to be removed.
   if (restrict_urls.empty()) {
     sql::Statement statement;
-    std::string sql_str = base::StringPrintf(
-        "UPDATE %s SET page_url=NULL,page_title=NULL,arg_url=NULL",
-        kTableName);
-    statement.Assign(db->GetCachedStatement(
-        sql::StatementID(SQL_FROM_HERE), sql_str.c_str()));
+    static constexpr char kSql[] =
+        "UPDATE activitylog_full"
+        " SET page_url=NULL,page_title=NULL,arg_url=NULL";
+    statement.Assign(
+        db->GetCachedStatement(sql::StatementID(SQL_FROM_HERE), kSql));
 
     if (!statement.Run()) {
       LOG(ERROR) << "Removing URLs from database failed: "
@@ -285,19 +282,18 @@ void FullStreamUIPolicy::DoRemoveURLs(const std::vector<GURL>& restrict_urls) {
   }
 
   // If URLs are specified then restrict to only those URLs.
-  for (size_t i = 0; i < restrict_urls.size(); ++i) {
-    if (!restrict_urls[i].is_valid()) {
+  for (const auto& url : restrict_urls) {
+    if (!url.is_valid()) {
       continue;
     }
 
     // Remove any matching page url info.
     sql::Statement statement;
-    std::string sql_str = base::StringPrintf(
-      "UPDATE %s SET page_url=NULL,page_title=NULL WHERE page_url=?",
-      kTableName);
     statement.Assign(db->GetCachedStatement(
-        sql::StatementID(SQL_FROM_HERE), sql_str.c_str()));
-    statement.BindString(0, restrict_urls[i].spec());
+        sql::StatementID(SQL_FROM_HERE),
+        "UPDATE activitylog_full SET page_url=NULL,page_title=NULL WHERE "
+        "page_url=?"));
+    statement.BindString(0, url.spec());
 
     if (!statement.Run()) {
       LOG(ERROR) << "Removing page URL from database failed: "
@@ -306,11 +302,10 @@ void FullStreamUIPolicy::DoRemoveURLs(const std::vector<GURL>& restrict_urls) {
     }
 
     // Remove any matching arg urls.
-    sql_str = base::StringPrintf("UPDATE %s SET arg_url=NULL WHERE arg_url=?",
-                                 kTableName);
     statement.Assign(db->GetCachedStatement(
-        sql::StatementID(SQL_FROM_HERE), sql_str.c_str()));
-    statement.BindString(0, restrict_urls[i].spec());
+        sql::StatementID(SQL_FROM_HERE),
+        "UPDATE activitylog_full SET arg_url=NULL WHERE arg_url=?"));
+    statement.BindString(0, url.spec());
 
     if (!statement.Run()) {
       LOG(ERROR) << "Removing arg URL from database failed: "
@@ -334,11 +329,8 @@ void FullStreamUIPolicy::DoRemoveExtensionData(
   // Make sure any queued in memory are sent to the database before cleaning.
   activity_database()->AdviseFlush(ActivityDatabase::kFlushImmediately);
 
-  std::string sql_str = base::StringPrintf(
-      "DELETE FROM %s WHERE extension_id=?", kTableName);
-  sql::Statement statement;
-  statement.Assign(
-      db->GetCachedStatement(sql::StatementID(SQL_FROM_HERE), sql_str.c_str()));
+  sql::Statement statement(db->GetCachedStatement(
+      SQL_FROM_HERE, "DELETE FROM activitylog_full WHERE extension_id=?"));
   statement.BindString(0, extension_id);
   if (!statement.Run()) {
     LOG(ERROR) << "Removing URLs for extension "
@@ -358,20 +350,15 @@ void FullStreamUIPolicy::DoDeleteDatabase() {
 
   // Not wrapped in a transaction because the deletion should happen even if
   // the vacuuming fails.
-  std::string sql_str = base::StringPrintf("DELETE FROM %s;", kTableName);
-  sql::Statement statement(db->GetCachedStatement(
-      sql::StatementID(SQL_FROM_HERE), sql_str.c_str()));
-  if (!statement.Run()) {
+  if (sql::Statement statement(db->GetCachedStatement(
+          SQL_FROM_HERE, "DELETE FROM activitylog_full"));
+      !statement.Run()) {
     LOG(ERROR) << "Deleting the database failed: "
                << statement.GetSQLStatement();
     return;
   }
-  statement.Clear();
-  statement.Assign(db->GetCachedStatement(sql::StatementID(SQL_FROM_HERE),
-                                          "VACUUM"));
-  if (!statement.Run()) {
-    LOG(ERROR) << "Vacuuming the database failed: "
-               << statement.GetSQLStatement();
+  if (!db->Vacuum()) {
+    LOG(ERROR) << "Vacuuming the database failed.";
   }
 }
 
@@ -395,8 +382,8 @@ void FullStreamUIPolicy::ReadFilteredData(
     const std::string& arg_url,
     const int days_ago,
     base::OnceCallback<void(std::unique_ptr<Action::ActionVector>)> callback) {
-  base::PostTaskAndReplyWithResult(
-      GetActivityLogTaskRunner().get(), FROM_HERE,
+  GetActivityLogTaskRunner()->PostTaskAndReplyWithResult(
+      FROM_HERE,
       base::BindOnce(&FullStreamUIPolicy::DoReadFilteredData,
                      base::Unretained(this), extension_id, type, api_name,
                      page_url, arg_url, days_ago),

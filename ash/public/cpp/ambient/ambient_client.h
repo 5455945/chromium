@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,12 @@
 #include <string>
 
 #include "ash/public/cpp/ash_public_export.h"
-#include "base/callback_forward.h"
+#include "ash/public/cpp/image_downloader.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
 #include "services/device/public/mojom/wake_lock_provider.mojom.h"
+
+class GaiaId;
 
 namespace base {
 class Time;
@@ -28,21 +31,35 @@ namespace ash {
 class ASH_PUBLIC_EXPORT AmbientClient {
  public:
   using GetAccessTokenCallback =
-      base::OnceCallback<void(const std::string& gaia_id,
+      base::OnceCallback<void(const GaiaId& gaia_id,
                               const std::string& access_token,
                               const base::Time& expiration_time)>;
 
   static AmbientClient* Get();
 
+  AmbientClient(const AmbientClient&) = delete;
+  AmbientClient& operator=(const AmbientClient&) = delete;
+
   // Return whether the ambient mode is allowed for the user.
   virtual bool IsAmbientModeAllowed() = 0;
+
+  virtual void SetAmbientModeAllowedForTesting(bool allowed) = 0;
 
   // Return the gaia and access token associated with the active user's profile.
   virtual void RequestAccessToken(GetAccessTokenCallback callback) = 0;
 
+  // Downloads the image at given |url|.
+  virtual void DownloadImage(
+      const std::string& url,
+      ash::ImageDownloader::DownloadCallback callback) = 0;
+
   // Return the URL loader factory associated with the active user's profile.
   virtual scoped_refptr<network::SharedURLLoaderFactory>
   GetURLLoaderFactory() = 0;
+
+  // Return the URL loader factory associated with the sign in profile.
+  virtual scoped_refptr<network::SharedURLLoaderFactory>
+  GetSigninURLLoaderFactory() = 0;
 
   // Requests a connection to the device service's |WakeLockProvider|
   // from the browser.
@@ -54,8 +71,6 @@ class ASH_PUBLIC_EXPORT AmbientClient {
 
  protected:
   AmbientClient();
-  AmbientClient(const AmbientClient&) = delete;
-  AmbientClient& operator=(const AmbientClient&) = delete;
   virtual ~AmbientClient();
 };
 

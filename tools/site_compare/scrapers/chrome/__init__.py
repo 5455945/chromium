@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+# Copyright 2011 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -22,10 +22,12 @@ def GetScraper(version):
 
   parsed_version = [int(x) for x in version.split(".")]
 
-  if (parsed_version[0] > 0 or
-      parsed_version[1] > 1 or
-      parsed_version[2] > 97 or
-      parsed_version[3] > 0):
+  if (
+    parsed_version[0] > 0
+    or parsed_version[1] > 1
+    or parsed_version[2] > 97
+    or parsed_version[3] > 0
+  ):
     scraper_version = "chrome011010"
   else:
     scraper_version = "chrome01970"

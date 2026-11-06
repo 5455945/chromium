@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,7 @@ MediaBlocker::MediaBlocker(content::WebContents* web_contents) {
   content::WebContentsObserver::Observe(web_contents);
 }
 
-MediaBlocker::~MediaBlocker() {}
+MediaBlocker::~MediaBlocker() = default;
 
 void MediaBlocker::BlockMediaLoading(bool blocked) {
   if (media_loading_blocked_ == blocked)
@@ -43,11 +43,12 @@ void MediaBlocker::UpdateMediaLoadingBlockedState() {
   if (!web_contents())
     return;
 
-  const std::vector<content::RenderFrameHost*> frames =
-      web_contents()->GetAllFrames();
-  for (content::RenderFrameHost* frame : frames) {
-    UpdateRenderFrameMediaLoadingBlockedState(frame);
-  }
+  web_contents()->ForEachRenderFrameHost(
+      [this](content::RenderFrameHost* render_frame_host) {
+        if (render_frame_host->IsRenderFrameLive()) {
+          UpdateRenderFrameMediaLoadingBlockedState(render_frame_host);
+        }
+      });
 }
 
 void MediaBlocker::UpdateRenderFrameMediaLoadingBlockedState(

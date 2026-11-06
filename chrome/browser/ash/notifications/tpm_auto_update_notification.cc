@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,13 @@
 
 #include <string>
 
+#include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/notification_utils.h"
-#include "base/bind.h"
-#include "chrome/browser/notifications/system_notification_helper.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/prefs/pref_service.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/message_center/message_center.h"
 
 namespace ash {
 
@@ -27,17 +26,18 @@ void ShowAutoUpdateNotification(
   std::u16string title, text;
   std::string notification_id;
   bool pinned = false;
+  auto catalog_name = NotificationCatalogName::kNone;
 
   switch (notification_type) {
     case TpmAutoUpdateUserNotification::kNone:
       NOTREACHED();
-      return;
     case TpmAutoUpdateUserNotification::kPlanned:
       title = l10n_util::GetStringUTF16(
           IDS_TPM_AUTO_UPDATE_PLANNED_NOTIFICATION_TITLE);
       text = l10n_util::GetStringUTF16(
           IDS_TPM_AUTO_UPDATE_PLANNED_NOTIFICATION_MESSAGE);
       notification_id = kTPMPlannedAutoUpdateNotificationId;
+      catalog_name = NotificationCatalogName::kTPMAutoUpdatePlanned;
       break;
     case TpmAutoUpdateUserNotification::kOnNextReboot:
       title = l10n_util::GetStringUTF16(
@@ -46,22 +46,24 @@ void ShowAutoUpdateNotification(
           IDS_TPM_AUTO_UPDATE_REBOOT_NOTIFICATION_MESSAGE);
       notification_id = kTPMAutoUpdateOnRebootNotificationId;
       pinned = true;
+      catalog_name = NotificationCatalogName::kTPMAutoUpdateOnReboot;
       break;
   }
 
-  std::unique_ptr<message_center::Notification> notification =
-      ash::CreateSystemNotification(
-          message_center::NOTIFICATION_TYPE_SIMPLE, notification_id, title,
-          text, std::u16string() /*display_source*/, GURL(),
-          message_center::NotifierId(
-              message_center::NotifierType::SYSTEM_COMPONENT, notification_id),
-          message_center::RichNotificationData(),
-          new message_center::NotificationDelegate(),
-          vector_icons::kBusinessIcon,
-          message_center::SystemNotificationWarningLevel::NORMAL);
+  auto notification = ash::CreateSystemNotificationPtr(
+      message_center::NOTIFICATION_TYPE_SIMPLE, notification_id, title, text,
+      std::u16string() /*display_source*/,
+      message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
+                                 notification_id, catalog_name),
+      message_center::RichNotificationData(),
+      base::MakeRefCounted<message_center::NotificationDelegate>(),
+      ::features::IsRoundedIconsEnabled() ? vector_icons::kDomainIcon
+                                          : vector_icons::kBusinessOldIcon,
+      message_center::SystemNotificationWarningLevel::NORMAL);
   notification->set_priority(message_center::SYSTEM_PRIORITY);
   notification->set_pinned(pinned);
 
-  SystemNotificationHelper::GetInstance()->Display(*notification);
+  message_center::MessageCenter::Get()->AddNotification(
+      std::move(notification));
 }
 }  // namespace ash

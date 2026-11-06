@@ -1,10 +1,12 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.mojo.bindings;
 
-import org.chromium.mojo.bindings.Callbacks.Callback1;
+import org.chromium.base.JavaUtils;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.mojo.bindings.Interface.AbstractProxy.HandlerImpl;
 import org.chromium.mojo.bindings.interfacecontrol.QueryVersion;
 import org.chromium.mojo.bindings.interfacecontrol.RequireVersion;
@@ -22,9 +24,8 @@ import org.chromium.mojo.system.Pair;
 import java.io.Closeable;
 import java.util.concurrent.Executor;
 
-/**
- * Base class for mojo generated interfaces.
- */
+/** Base class for mojo generated interfaces. */
+@NullMarked
 public interface Interface extends ConnectionErrorHandler, Closeable {
 
     /**
@@ -33,70 +34,61 @@ public interface Interface extends ConnectionErrorHandler, Closeable {
      * @see java.io.Closeable#close()
      */
     @Override
-    public void close();
+    void close();
 
     /**
      * A proxy to a mojo interface. This is base class for all generated proxies. It implements the
      * Interface and each time a method is called, the parameters are serialized and sent to the
      * {@link MessageReceiverWithResponder}, along with the response callback if needed.
      */
-    public interface Proxy extends Interface {
-        /**
-         * Class allowing to interact with the proxy itself.
-         */
-        public interface Handler extends Closeable {
-            /**
-             * Sets the {@link ConnectionErrorHandler} that will be notified of errors.
-             */
-            public void setErrorHandler(ConnectionErrorHandler errorHandler);
+    interface Proxy extends Interface {
+        /** Class allowing to interact with the proxy itself. */
+        interface Handler extends Closeable {
+            /** Sets the {@link ConnectionErrorHandler} that will be notified of errors. */
+            void setErrorHandler(ConnectionErrorHandler errorHandler);
 
             /**
              * Unbinds the proxy and passes the handle. Can return null if the proxy is not bound or
              * if the proxy is not over a message pipe.
              */
-            public MessagePipeHandle passHandle();
+            MessagePipeHandle passHandle();
 
-            /**
-             * Returns the version number of the interface that the remote side supports.
-             */
-            public int getVersion();
+            /** Returns the version number of the interface that the remote side supports. */
+            int getVersion();
+
+            /** Callback interface for the async response to {@link Proxy#queryVersion}. */
+            interface QueryVersionCallback {
+                void call(int version);
+            }
 
             /**
              * Queries the max version that the remote side supports. On completion, the result will
              * be returned as the input of |callback|. The version number of this interface pointer
              * will also be updated.
              */
-            public void queryVersion(Callback1<Integer> callback);
+            void queryVersion(QueryVersionCallback callback);
 
             /**
              * If the remote side doesn't support the specified version, it will close its end of
              * the message pipe asynchronously. The call does nothing if |version| is no greater
              * than getVersion().
-             * <p>
-             * If you make a call to requireVersion() with a version number X which is not supported
-             * by the remote side, it is guaranteed that all calls to the interface methods after
-             * requireVersion(X) will be ignored.
+             *
+             * <p>If you make a call to requireVersion() with a version number X which is not
+             * supported by the remote side, it is guaranteed that all calls to the interface
+             * methods after requireVersion(X) will be ignored.
              */
-            public void requireVersion(int version);
+            void requireVersion(int version);
         }
 
-        /**
-         * Returns the {@link Handler} object allowing to interact with the proxy itself.
-         */
-        public Handler getProxyHandler();
+        /** Returns the {@link Handler} object allowing to interact with the proxy itself. */
+        Handler getProxyHandler();
     }
 
-    /**
-     * Base implementation of {@link Proxy}.
-     */
+    /** Base implementation of {@link Proxy}. */
     abstract class AbstractProxy implements Proxy {
-        /**
-         * Implementation of {@link Handler}.
-         */
+        /** Implementation of {@link Handler}. */
         protected static class HandlerImpl implements Proxy.Handler, ConnectionErrorHandler {
-            /**
-             * The {@link Core} implementation to use.
-             */
+            /** The {@link Core} implementation to use. */
             private final Core mCore;
 
             /**
@@ -105,14 +97,10 @@ public interface Interface extends ConnectionErrorHandler, Closeable {
              */
             private final MessageReceiverWithResponder mMessageReceiver;
 
-            /**
-             * The {@link ConnectionErrorHandler} that will be notified of errors.
-             */
-            private ConnectionErrorHandler mErrorHandler;
+            /** The {@link ConnectionErrorHandler} that will be notified of errors. */
+            private @Nullable ConnectionErrorHandler mErrorHandler;
 
-            /**
-             * The currently known version of the interface.
-             */
+            /** The currently known version of the interface. */
             private int mVersion;
 
             /**
@@ -130,23 +118,17 @@ public interface Interface extends ConnectionErrorHandler, Closeable {
                 mVersion = version;
             }
 
-            /**
-             * Returns the message receiver to send message to.
-             */
+            /** Returns the message receiver to send message to. */
             public MessageReceiverWithResponder getMessageReceiver() {
                 return mMessageReceiver;
             }
 
-            /**
-             * Returns the Core implementation.
-             */
+            /** Returns the Core implementation. */
             public Core getCore() {
                 return mCore;
             }
 
-            /**
-             * Sets the {@link ConnectionErrorHandler} that will be notified of errors.
-             */
+            /** Sets the {@link ConnectionErMrorHandler} that will be notified of errors. */
             @Override
             public void setErrorHandler(ConnectionErrorHandler errorHandler) {
                 this.mErrorHandler = errorHandler;
@@ -190,16 +172,19 @@ public interface Interface extends ConnectionErrorHandler, Closeable {
             }
 
             /**
-             * @see Handler#queryVersion(org.chromium.mojo.bindings.Callbacks.Callback1)
+             * @see Handler#queryVersion(orgM.chromium.mojo.bindings.Callbacks.Callback1)
              */
             @Override
-            public void queryVersion(final Callback1<Integer> callback) {
+            public void queryVersion(QueryVersionCallback callback) {
                 RunMessageParams message = new RunMessageParams();
                 message.input = new RunInput();
                 message.input.setQueryVersion(new QueryVersion());
 
-                InterfaceControlMessagesHelper.sendRunMessage(getCore(), mMessageReceiver, message,
-                        new Callback1<RunResponseMessageParams>() {
+                InterfaceControlMessagesHelper.sendRunMessage(
+                        getCore(),
+                        mMessageReceiver,
+                        message,
+                        new InterfaceControlMessagesHelper.SendRunMessageCallback() {
                             @Override
                             public void call(RunResponseMessageParams response) {
                                 if (response.output != null
@@ -223,16 +208,15 @@ public interface Interface extends ConnectionErrorHandler, Closeable {
                 mVersion = version;
                 RunOrClosePipeMessageParams message = new RunOrClosePipeMessageParams();
                 message.input = new RunOrClosePipeInput();
-                message.input.setRequireVersion(new RequireVersion());
-                message.input.getRequireVersion().version = version;
+                RequireVersion requireVersion = new RequireVersion();
+                requireVersion.version = version;
+                message.input.setRequireVersion(requireVersion);
                 InterfaceControlMessagesHelper.sendRunOrClosePipeMessage(
                         getCore(), mMessageReceiver, message);
             }
         }
 
-        /**
-         * The handler associated with this proxy.
-         */
+        /** The handler associated with this proxy. */
         private final HandlerImpl mHandler;
 
         protected AbstractProxy(Core core, MessageReceiverWithResponder messageReceiver) {
@@ -262,60 +246,42 @@ public interface Interface extends ConnectionErrorHandler, Closeable {
         public void onConnectionError(MojoException e) {
             mHandler.onConnectionError(e);
         }
-    }
 
-    /**
-     * Base implementation of Stub. Stubs are message receivers that deserialize the payload and
-     * call the appropriate method in the implementation. If the method returns result, the stub
-     * serializes the response and sends it back.
-     *
-     * @param <I> the type of the interface to delegate calls to.
-     */
-    abstract class Stub<I extends Interface> implements MessageReceiverWithResponder {
-
-        /**
-         * The {@link Core} implementation to use.
-         */
-        private final Core mCore;
-
-        /**
-         * The implementation to delegate calls to.
-         */
-        private final I mImpl;
-
-        /**
-         * Constructor.
-         *
-         * @param core the {@link Core} implementation to use.
-         * @param impl the implementation to delegate calls to.
-         */
-        public Stub(Core core, I impl) {
-            mCore = core;
-            mImpl = impl;
+        /** Serializes and sends a message for a method without a response. */
+        protected final void sendMessage(Struct message, int methodId) {
+            try {
+                mHandler.getMessageReceiver()
+                        .accept(
+                                message.serializeWithHeader(
+                                        mHandler.getCore(),
+                                        new MessageHeader(
+                                                MessageHeader.TEMPORARY_DEFAULT_INTERFACE_ID,
+                                                methodId)));
+            } catch (BadMessageException e) {
+                // Should not be possible, because we serialized above.
+                throw new IllegalStateException(e);
+            }
         }
 
-        /**
-         * Returns the Core implementation.
-         */
-        protected Core getCore() {
-            return mCore;
+        /** Serializes and sends a message for a method with a response. */
+        protected final void sendMessageWithResponder(
+                Struct message, int methodId, MessageReceiver responder) {
+            try {
+                mHandler.getMessageReceiver()
+                        .acceptWithResponder(
+                                message.serializeWithHeader(
+                                        mHandler.getCore(),
+                                        new MessageHeader(
+                                                MessageHeader.TEMPORARY_DEFAULT_INTERFACE_ID,
+                                                methodId,
+                                                MessageHeader.MESSAGE_EXPECTS_RESPONSE_FLAG,
+                                                0)),
+                                responder);
+            } catch (BadMessageException e) {
+                // Should not be possible, because we serialized above.
+                throw new IllegalStateException(e);
+            }
         }
-
-        /**
-         * Returns the implementation to delegate calls to.
-         */
-        protected I getImpl() {
-            return mImpl;
-        }
-
-        /**
-         * @see org.chromium.mojo.bindings.MessageReceiver#close()
-         */
-        @Override
-        public void close() {
-            mImpl.close();
-        }
-
     }
 
     /**
@@ -330,9 +296,7 @@ public interface Interface extends ConnectionErrorHandler, Closeable {
          */
         private final MessageReceiverWithResponder mMessageReceiver;
 
-        /**
-         * The {@link Executor} to forward all tasks to.
-         */
+        /** The {@link Executor} to forward all tasks to. */
         private final Executor mExecutor;
 
         /**
@@ -351,19 +315,32 @@ public interface Interface extends ConnectionErrorHandler, Closeable {
          */
         @Override
         public void close() {
-            mExecutor.execute(() -> {
-                mMessageReceiver.close();
-            });
+            mExecutor.execute(
+                    () -> {
+                        mMessageReceiver.close();
+                    });
         }
 
         /**
          * @see org.chromium.mojo.bindings.MessageReceiver#accept()
          */
         @Override
-        public boolean accept(Message message) {
-            mExecutor.execute(() -> {
-                mMessageReceiver.accept(message);
-            });
+        public boolean accept(Message message) throws BadMessageException {
+            // TODO(crbug.com/469861566?): this is not correct, because it swallows any
+            // potential channel issues when forwarding to another thread. Instead, we
+            // should have some sort of pre-validation (which can throw BadMessageException),
+            // then forward some sort of blessed message type. If *those* messages fail, then
+            // we would throw some sort of RuntimeException that would cause a hard crash.
+            mExecutor.execute(
+                    () -> {
+                        try {
+                            mMessageReceiver.accept(message);
+                        } catch (BadMessageException e) {
+                            // Needed to match existing behaviour before |BadMessageException|
+                            // was introduced.
+                            throw JavaUtils.throwUnchecked(e);
+                        }
+                    });
             return true;
         }
 
@@ -371,10 +348,18 @@ public interface Interface extends ConnectionErrorHandler, Closeable {
          * @see org.chromium.mojo.bindings.MessageReceiverWithResponder#acceptWithResponder()
          */
         @Override
-        public boolean acceptWithResponder(Message message, MessageReceiver responder) {
-            mExecutor.execute(() -> {
-                mMessageReceiver.acceptWithResponder(message, responder);
-            });
+        public boolean acceptWithResponder(Message message, MessageReceiver responder)
+                throws BadMessageException {
+            mExecutor.execute(
+                    () -> {
+                        try {
+                            mMessageReceiver.acceptWithResponder(message, responder);
+                        } catch (BadMessageException e) {
+                            // Needed to match existing behaviour before |BadMessageException|
+                            // was introduced.
+                            throw JavaUtils.throwUnchecked(e);
+                        }
+                    });
             return true;
         }
     }
@@ -386,37 +371,48 @@ public interface Interface extends ConnectionErrorHandler, Closeable {
      * @param <P> the type of the proxy the manager can handle. To be noted, P always extends I.
      */
     abstract class Manager<I extends Interface, P extends Proxy> {
+        private final String mName;
+        private final int mVersion;
+
+        /**
+         * @param name the name of the interface.
+         * @param version the version of the interface.
+         */
+        protected Manager(String name, int version) {
+            mName = name;
+            mVersion = version;
+        }
 
         /**
          * Returns the name of the interface. This is an opaque (but human readable) identifier used
          * by the service provider to identify services.
          */
-        public abstract String getName();
+        public final String getName() {
+            return mName;
+        }
+
+        /** Returns the version of the managed interface. */
+        public final int getVersion() {
+            return mVersion;
+        }
+
+        /** Binds the given implementation to the InterfaceRequest. */
+        public final Router bind(I impl, InterfaceRequest<I> request) {
+            return bind(impl, request.passHandle());
+        }
 
         /**
-         * Returns the version of the managed interface.
-         */
-        public abstract int getVersion();
-
-        /**
-         * Binds the given implementation to the handle.
-         * Returns the router that owns the implementation and connection handle, which can be used
-         * to close the binding if necessary. If the router (and by consequence the handle) is
-         * intentionally leaked it will close itself when the connection handle is closed and the
-         * proxy receives the connection error.
+         * Binds the given implementation to the handle. Returns the router that owns the
+         * implementation and connection handle, which can be used to close the binding if
+         * necessary. If the router (and by consequence the handle) is intentionally leaked it will
+         * close itself when the connection handle is closed and the proxy receives the connection
+         * error.
          */
         public Router bind(I impl, MessagePipeHandle handle) {
             Router router = new RouterImpl(handle);
             bind(handle.getCore(), impl, router);
             router.start();
             return router;
-        }
-
-        /**
-         * Binds the given implementation to the InterfaceRequest.
-         */
-        public final Router bind(I impl, InterfaceRequest<I> request) {
-            return bind(impl, request.passHandle());
         }
 
         /**
@@ -465,8 +461,10 @@ public interface Interface extends ConnectionErrorHandler, Closeable {
             // Close the original proxy now that its handle has been passed.
             proxy.close();
 
-            proxy = buildProxy(
-                core, new ThreadSafeForwarder(core, new AutoCloseableRouter(core, router)));
+            proxy =
+                    buildProxy(
+                            core,
+                            new ThreadSafeForwarder(core, new AutoCloseableRouter(core, router)));
             DelegatingConnectionErrorHandler handlers = new DelegatingConnectionErrorHandler();
             handlers.addConnectionErrorHandler(proxy);
             router.setErrorHandler(handlers);
@@ -475,35 +473,33 @@ public interface Interface extends ConnectionErrorHandler, Closeable {
             return proxy;
         }
 
-        /**
-         * Binds the implementation to the given |router|.
-         */
-        final void bind(Core core, I impl, Router router) {
+        /** Binds the implementation to the given |router|. */
+        final void bind(@Nullable Core core, I impl, Router router) {
+            var stub = buildStub(core, impl, Router.PRIMARY_INTERFACE_ID);
             router.setErrorHandler(impl);
-            router.setIncomingMessageReceiver(buildStub(core, impl));
+            try {
+                router.setPrimaryStub(stub);
+            } catch (BadMessageException e) {
+                throw new IllegalStateException(
+                        "Bad message received while setting up primary stub. This should not be"
+                                + " possible as the router has not been started yet",
+                        e);
+            }
         }
 
-        /**
-         * Returns a Proxy that will send messages to the given |router|.
-         */
-        final P attachProxy(Core core, Router router) {
+        /** Returns a Proxy that will send messages to the given |router|. */
+        final P attachProxy(@Nullable Core core, Router router) {
             return buildProxy(core, new AutoCloseableRouter(core, router));
         }
 
-        /**
-         * Creates a new array of the given |size|.
-         */
+        /** Creates a new array of the given |size|. */
         protected abstract I[] buildArray(int size);
 
-        /**
-         * Constructs a Stub delegating to the given implementation.
-         */
-        protected abstract Stub<I> buildStub(Core core, I impl);
+        /** Constructs a Stub delegating to the given implementation. */
+        protected abstract Stub<I> buildStub(@Nullable Core core, I impl, int interfaceId);
 
-        /**
-         * Constructs a Proxy forwarding the calls to the given message receiver.
-         */
-        protected abstract P buildProxy(Core core, MessageReceiverWithResponder messageReceiver);
-
+        /** Constructs a Proxy forwarding the calls to the given message receiver. */
+        protected abstract P buildProxy(
+                @Nullable Core core, MessageReceiverWithResponder messageReceiver);
     }
 }

@@ -1,10 +1,10 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/renderer_host/media/media_capture_devices_impl.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "content/browser/browser_main_loop.h"
 #include "content/browser/renderer_host/media/media_stream_manager.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -15,7 +15,7 @@ namespace content {
 namespace {
 
 void EnsureMonitorCaptureDevices() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
   GetIOThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(
@@ -36,7 +36,7 @@ MediaCaptureDevicesImpl* MediaCaptureDevicesImpl::GetInstance() {
 
 const blink::MediaStreamDevices&
 MediaCaptureDevicesImpl::GetAudioCaptureDevices() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
   if (!devices_enumerated_) {
     EnsureMonitorCaptureDevices();
     devices_enumerated_ = true;
@@ -46,7 +46,7 @@ MediaCaptureDevicesImpl::GetAudioCaptureDevices() {
 
 const blink::MediaStreamDevices&
 MediaCaptureDevicesImpl::GetVideoCaptureDevices() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
   if (!devices_enumerated_) {
     EnsureMonitorCaptureDevices();
     devices_enumerated_ = true;
@@ -114,14 +114,14 @@ MediaCaptureDevicesImpl::~MediaCaptureDevicesImpl() {
 
 void MediaCaptureDevicesImpl::UpdateAudioDevicesOnUIThread(
     const blink::MediaStreamDevices& devices) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
   devices_enumerated_ = true;
   audio_devices_ = devices;
 }
 
 void MediaCaptureDevicesImpl::UpdateVideoDevicesOnUIThread(
     const blink::MediaStreamDevices& devices) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
   devices_enumerated_ = true;
   video_devices_ = devices;
 }

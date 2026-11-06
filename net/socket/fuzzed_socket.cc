@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,11 @@
 
 #include <algorithm>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/notreached.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "net/base/io_buffer.h"
 #include "net/log/net_log_source_type.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
@@ -69,8 +69,8 @@ int FuzzedSocket::Read(IOBuffer* buf,
     std::string data = data_provider_->ConsumeRandomLengthString(buf_len);
     result = data.size();
 
-    if (result > 0) {
-      std::copy(data.data(), data.data() + result, buf->data());
+    if (!data.empty()) {
+      std::ranges::copy(data, buf->data());
     } else {
       result = ConsumeReadWriteErrorFromData();
       net_error_ = result;
@@ -91,7 +91,7 @@ int FuzzedSocket::Read(IOBuffer* buf,
   }
 
   read_pending_ = true;
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(&FuzzedSocket::OnReadComplete, weak_factory_.GetWeakPtr(),
                      std::move(callback), result));
@@ -139,7 +139,7 @@ int FuzzedSocket::Write(
   }
 
   write_pending_ = true;
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(&FuzzedSocket::OnWriteComplete, weak_factory_.GetWeakPtr(),
                      std::move(callback), result));
@@ -156,7 +156,6 @@ int FuzzedSocket::SetSendBufferSize(int32_t size) {
 
 int FuzzedSocket::Bind(const net::IPEndPoint& local_addr) {
   NOTREACHED();
-  return ERR_NOT_IMPLEMENTED;
 }
 
 int FuzzedSocket::Connect(CompletionOnceCallback callback) {
@@ -187,7 +186,7 @@ int FuzzedSocket::Connect(CompletionOnceCallback callback) {
   connect_pending_ = true;
   if (result != OK)
     error_pending_ = true;
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(&FuzzedSocket::OnConnectComplete,
                      weak_factory_.GetWeakPtr(), std::move(callback), result));
@@ -233,25 +232,13 @@ bool FuzzedSocket::WasEverUsed() const {
   return total_bytes_written_ != 0 || total_bytes_read_ != 0;
 }
 
-bool FuzzedSocket::WasAlpnNegotiated() const {
-  return false;
-}
-
 NextProto FuzzedSocket::GetNegotiatedProtocol() const {
-  return kProtoUnknown;
+  return NextProto::kProtoUnknown;
 }
 
 bool FuzzedSocket::GetSSLInfo(SSLInfo* ssl_info) {
   return false;
 }
-
-void FuzzedSocket::GetConnectionAttempts(ConnectionAttempts* out) const {
-  out->clear();
-}
-
-void FuzzedSocket::ClearConnectionAttempts() {}
-
-void FuzzedSocket::AddConnectionAttempts(const ConnectionAttempts& attempts) {}
 
 int64_t FuzzedSocket::GetTotalReceivedBytes() const {
   return total_bytes_read_;

@@ -1,80 +1,87 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SIGNIN_INTERNAL_IDENTITY_MANAGER_ACCOUNT_CAPABILITIES_FETCHER_H_
 #define COMPONENTS_SIGNIN_INTERNAL_IDENTITY_MANAGER_ACCOUNT_CAPABILITIES_FETCHER_H_
 
-#include "base/memory/scoped_refptr.h"
-#include "base/time/time.h"
+#include <optional>
+
+#include "base/functional/callback.h"
+#include "components/signin/public/identity_manager/account_capabilities.h"
+#include "components/signin/public/identity_manager/account_info.h"
 #include "google_apis/gaia/core_account_id.h"
-#include "google_apis/gaia/gaia_oauth_client.h"
-#include "google_apis/gaia/oauth2_access_token_manager.h"
 
-namespace network {
-class SharedURLLoaderFactory;
-}
-
-class AccountFetcherService;
-class ProfileOAuth2TokenService;
-class GoogleServiceAuthError;
-
-class AccountCapabilitiesFetcher : public OAuth2AccessTokenManager::Consumer,
-                                   public gaia::GaiaOAuthClient::Delegate {
+class AccountCapabilitiesFetcher {
  public:
-  // These values are persisted to logs. Entries should not be renumbered and
-  // numeric values should never be reused.
-  enum class FetchResult {
-    kSuccess = 0,
-    kGetTokenFailure = 1,
-    kParseResponseFailure = 2,
-    kOAuthError = 3,
-    kNetworkError = 4,
-    kCancelled = 5,
-    kMaxValue = kCancelled
+  // This provides a hint regarding the priority this fetch should be performed
+  // with.
+  // Platform-specific implementations may or may not change the actual priority
+  // of the fetch based on this.
+  enum class FetchPriority {
+    // This corresponds to a user-visible foreground operation, and should be
+    // completed as quickly as possible.
+    kForeground,
+    // This corresponds to a non-user-visible background operation, and does not
+    // need to be completed in a timely fashion.
+    kBackground,
   };
 
-  AccountCapabilitiesFetcher(
-      ProfileOAuth2TokenService* token_service,
-      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      AccountFetcherService* service,
-      const CoreAccountId& account_id);
-  ~AccountCapabilitiesFetcher() override;
+  // Callback invoked each time the fetcher fetches some account capabilities.
+  // This may be called zero, one or multiple times. It cannot be called after
+  // `on_all_fetches_complete_callback_` is called.
+  using OnSomeCapabilitiesFetchedCallback =
+      base::RepeatingCallback<void(const CoreAccountId&,
+                                   const AccountCapabilities&)>;
+  // Callback invoked once all fetches are complete (either successfully or
+  // unsuccessfully).
+  using OnAllFetchesCompleteCallback =
+      base::OnceCallback<void(const CoreAccountId&)>;
+
+  explicit AccountCapabilitiesFetcher(
+      const CoreAccountInfo& account_info,
+      FetchPriority fetch_priority,
+      OnSomeCapabilitiesFetchedCallback on_some_capabilities_fetched_callback,
+      OnAllFetchesCompleteCallback on_all_fetches_complete_callback);
+  virtual ~AccountCapabilitiesFetcher();
 
   AccountCapabilitiesFetcher(const AccountCapabilitiesFetcher&) = delete;
   AccountCapabilitiesFetcher& operator=(const AccountCapabilitiesFetcher&) =
       delete;
 
-  // Start fetching account capabilities.
+  // Start fetching account capabilities. Must be called no more than once per
+  // object lifetime.
   void Start();
 
-  // OAuth2AccessTokenManager::Consumer:
-  void OnGetTokenSuccess(
-      const OAuth2AccessTokenManager::Request* request,
-      const OAuth2AccessTokenConsumer::TokenResponse& token_response) override;
-  void OnGetTokenFailure(const OAuth2AccessTokenManager::Request* request,
-                         const GoogleServiceAuthError& error) override;
+ protected:
+  const CoreAccountInfo& account_info() { return account_info_; }
+  const CoreAccountId& account_id() { return account_info_.account_id; }
 
-  // gaia::GaiaOAuthClient::Delegate:
-  void OnGetAccountCapabilitiesResponse(
-      std::unique_ptr<base::Value> account_capabilities) override;
-  void OnOAuthError() override;
-  void OnNetworkError(int response_code) override;
+  // Implemented by subclasses.
+  virtual void StartImpl() = 0;
+
+  // Helper for fetchers that implement a single-phase fetch.
+  // Completes the fetch by calling `on_some_capabilities_fetched_callback_`
+  // then `on_all_fetches_complete_callback_`. Must be called no more than once
+  // per object lifetime.
+  // `this` may be destroyed after calling this function.
+  void UpdateAndCompleteFetchAndMaybeDestroySelf(
+      const std::optional<AccountCapabilities>& capabilities);
+
+  // Helper for fetchers that implement a multi-phase fetch.
+  void UpdateFetchedCapabilities(const AccountCapabilities& capabilities);
+  void CompleteFetchAndMaybeDestroySelf();
+
+  FetchPriority fetch_priority() { return fetch_priority_; }
 
  private:
-  void RecordFetchResultAndDuration(FetchResult result);
+  // Ensures that `Start()` isn't called multiple times.
+  bool started_ = false;
 
-  ProfileOAuth2TokenService* token_service_;
-  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
-  AccountFetcherService* service_;
-  const CoreAccountId account_id_;
-
-  std::unique_ptr<OAuth2AccessTokenManager::Request> login_token_request_;
-  std::unique_ptr<gaia::GaiaOAuthClient> gaia_oauth_client_;
-
-  // Used for metrics:
-  base::TimeTicks fetch_start_time_;
-  bool fetch_histograms_recorded_ = false;
+  const CoreAccountInfo account_info_;
+  const FetchPriority fetch_priority_;
+  OnSomeCapabilitiesFetchedCallback on_some_capabilities_fetched_callback_;
+  OnAllFetchesCompleteCallback on_all_fetches_complete_callback_;
 };
 
 #endif  // COMPONENTS_SIGNIN_INTERNAL_IDENTITY_MANAGER_ACCOUNT_CAPABILITIES_FETCHER_H_

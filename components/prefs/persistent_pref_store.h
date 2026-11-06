@@ -1,11 +1,12 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PREFS_PERSISTENT_PREF_STORE_H_
 #define COMPONENTS_PREFS_PERSISTENT_PREF_STORE_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "components/prefs/pref_filter.h"
 #include "components/prefs/prefs_export.h"
 #include "components/prefs/writeable_pref_store.h"
 
@@ -37,7 +38,7 @@ class COMPONENTS_PREFS_EXPORT PersistentPrefStore : public WriteablePrefStore {
 
   class ReadErrorDelegate {
    public:
-    virtual ~ReadErrorDelegate() {}
+    virtual ~ReadErrorDelegate() = default;
 
     virtual void OnError(PrefReadError error) = 0;
   };
@@ -71,29 +72,37 @@ class COMPONENTS_PREFS_EXPORT PersistentPrefStore : public WriteablePrefStore {
       base::OnceClosure reply_callback = base::OnceClosure(),
       base::OnceClosure synchronous_done_callback = base::OnceClosure());
 
-  // Like CommitPendingWrite(), but writes to disk on this thread synchronously
-  // rather than scheduling a write. CommitPendingWriteSynchronously() is
-  // appropriate to call only in the exceptional situation in which you need to
-  // write to disk early on during startup before threads have been started.
-  virtual void CommitPendingWriteSynchronously() = 0;
-
   // Schedules a write if there is any lossy data pending. Unlike
   // CommitPendingWrite() this does not immediately sync to disk, instead it
   // triggers an eventual write if there is lossy data pending and if there
   // isn't one scheduled already.
   virtual void SchedulePendingLossyWrites() = 0;
 
-  // It should be called only for Incognito pref store.
-  virtual void ClearMutableValues() = 0;
-
   // Cleans preference data that may have been saved outside of the store.
   virtual void OnStoreDeletionFromDisk() = 0;
 
-  // TODO(crbug.com/942491) Remove this after fixing the bug.
+  // TODO(crbug.com/41447167) Remove this after fixing the bug.
   virtual bool IsInMemoryPrefStore() const;
 
+  // Returns whether this holds a read error delegate (can be null), passed
+  // during ReadPrefsAsync().
+  // When used in conjugation with IsInitializationComplete() and
+  // GetReadError(), this can be used to identity if there's a pending read.
+  virtual bool HasReadErrorDelegate() const = 0;
+
+  // Returns this store's filter, or nullptr if it has none.
+  virtual PrefFilter* GetFilter();
+
+  // Returns the default store filter used by SegregatedPrefStore.
+  // Returns nullptr by default.
+  virtual PrefFilter* GetDefaultStoreFilter();
+
+  // Returns the selected store filter used by SegregatedPrefStore.
+  // Returns nullptr by default.
+  virtual PrefFilter* GetSelectedStoreFilter();
+
  protected:
-  ~PersistentPrefStore() override {}
+  ~PersistentPrefStore() override = default;
 };
 
 #endif  // COMPONENTS_PREFS_PERSISTENT_PREF_STORE_H_

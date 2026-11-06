@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,17 +8,20 @@ import android.graphics.Rect;
 import android.view.View;
 import android.widget.ProgressBar;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.toolbar.ToolbarProgressBar;
 
 /**
  * An interface for outside packages to interact with the top toolbar. Other than for testing
- * purposes this interface should be used rather than {@link TopToolbarCoordinator} or
- * {@link ToolbarLayout} and extending classes.
+ * purposes this interface should be used rather than {@link TopToolbarCoordinator} or {@link
+ * ToolbarLayout} and extending classes.
  */
+@NullMarked
 public interface Toolbar {
     /**
-     * Calculates the {@link Rect} that represents the content area of the location bar.  This
-     * rect will be relative to the toolbar.
+     * Calculates the {@link Rect} that represents the content area of the location bar. This rect
+     * will be relative to the toolbar.
+     *
      * @param outRect The Rect that represents the content area of the location bar.
      */
     void getLocationBarContentRect(Rect outRect);
@@ -37,14 +40,24 @@ public interface Toolbar {
 
     /**
      * Get the height of the toolbar in px.
+     *
      * @return The height of the toolbar.
      */
     int getHeight();
 
     /**
-     * Sets whether or not the toolbar should draw as if it's being captured for a snapshot
-     * texture.  In this mode it will only draw the toolbar in it's normal state (no TabSwitcher
-     * or animations).
+     * Returns the top padding, in px, added inside the toolbar so it can draw behind the status bar
+     * when the page (e.g. a themed NTP) is drawn edge-to-edge at the top. This is included in
+     * {@link #getHeight()} but is not part of the toolbar height reserved by the browser controls.
+     * Returns 0 when not drawing edge-to-edge.
+     */
+    int getEdgeToEdgeTopPadding();
+
+    /**
+     * Sets whether or not the toolbar should draw as if it's being captured for a snapshot texture.
+     * In this mode it will only draw the toolbar in it's normal state (no TabSwitcher or
+     * animations).
+     *
      * @param textureMode Whether or not to be in texture capture mode.
      */
     void setTextureCaptureMode(boolean textureMode);
@@ -52,21 +65,12 @@ public interface Toolbar {
     /**
      * @return Whether a dirty check for invalidation makes sense at this time.
      */
-    boolean isReadyForTextureCapture();
-
-    /**
-     * Sets whether or not the toolbar should force itself to draw for a texture capture regardless
-     * of other criteria used in isReadyForTextureCapture(). A texture capture will only be forced
-     * if the toolbar drawables tint is changing.
-     *
-     * @param forceTextureCapture Whether the toolbar should force itself to draw.
-     * @return True if a texture capture will be forced on the next draw.
-     */
-    boolean setForceTextureCapture(boolean forceTextureCapture);
+    CaptureReadinessResult isReadyForTextureCapture();
 
     /**
      * Returns the height of the tab strip, iff the toolbar has one. Returns 0 for toolbars that do
      * not have a tabstrip.
+     *
      * @return height of the tab strip in px.
      */
     int getTabStripHeight();
@@ -86,4 +90,26 @@ public interface Toolbar {
      * @return The primary color to use for the background drawable.
      */
     int getPrimaryColor();
+
+    /**
+     * Updates the visibility of the reload button.
+     *
+     * @param isReloading Whether or not the page is loading.
+     */
+    void updateReloadButtonVisibility(boolean isReloading);
+
+    /**
+     * Removes the location bar view from the toolbar (if it exists) and returns it. If there is no
+     * location bar, returns null. The appearance/behavior of the toolbar is not well-defined after
+     * this has been done, so it should only be used in cases where the toolbar is not visible.
+     */
+    View removeLocationBarView();
+
+    /** Add the location bar view back to the toolbar. */
+    void restoreLocationBarView();
+
+    /**
+     * Notify the toolbar the capture size has updated so the overlay position needs adjustments.
+     */
+    void onCaptureSizeUpdated();
 }

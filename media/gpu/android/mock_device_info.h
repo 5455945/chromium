@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,16 +20,12 @@ class MockDeviceInfo : public DeviceInfo {
   virtual ~MockDeviceInfo();
 
   MOCK_METHOD0(SdkVersion, int());
+  MOCK_METHOD0(SdkVersionFull, int());
   MOCK_METHOD0(IsVp8DecoderAvailable, bool());
-  MOCK_METHOD0(IsVp9DecoderAvailable, bool());
-  MOCK_METHOD0(IsAv1DecoderAvailable, bool());
   MOCK_METHOD1(IsDecoderKnownUnaccelerated, bool(VideoCodec codec));
-  MOCK_METHOD0(IsSetOutputSurfaceSupported, bool());
-  MOCK_METHOD0(SupportsOverlaySurfaces, bool());
   MOCK_METHOD1(CodecNeedsFlushWorkaround, bool(MediaCodecBridge* codec));
-  MOCK_METHOD0(IsAsyncApiSupported, bool());
   MOCK_METHOD1(AddSupportedCodecProfileLevels,
-               bool(std::vector<CodecProfileLevel>*));
+               void(std::vector<CodecProfileLevel>*));
 };
 
 }  // namespace media

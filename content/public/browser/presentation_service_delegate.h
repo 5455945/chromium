@@ -1,20 +1,17 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_PUBLIC_BROWSER_PRESENTATION_SERVICE_DELEGATE_H_
 #define CONTENT_PUBLIC_BROWSER_PRESENTATION_SERVICE_DELEGATE_H_
 
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "content/common/content_export.h"
 #include "media/base/flinging_controller.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "third_party/blink/public/mojom/presentation/presentation.mojom.h"
 
 namespace content {
@@ -49,9 +46,7 @@ using PresentationConnectionStateChangedCallback =
     base::RepeatingCallback<void(const PresentationConnectionStateChangeInfo&)>;
 
 using ReceiverConnectionAvailableCallback = base::RepeatingCallback<void(
-    blink::mojom::PresentationInfoPtr,
-    mojo::PendingRemote<blink::mojom::PresentationConnection>,
-    mojo::PendingReceiver<blink::mojom::PresentationConnection>)>;
+    blink::mojom::PresentationConnectionResultPtr)>;
 
 // Base class for ControllerPresentationServiceDelegate and
 // ReceiverPresentationServiceDelegate.

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,16 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/memory/singleton.h"
 #include "base/synchronization/lock.h"
-#include "base/task_runner.h"
+#include "base/task/task_runner.h"
 #include "base/time/time.h"
-#include "content/browser/metrics/histogram_subscriber.h"
+#include "components/metrics/histogram_subscriber.h"
+
+namespace metrics {
+class MetricsNameMapper;
+}
 
 namespace content {
 
@@ -48,7 +51,7 @@ namespace content {
 // outstanding sequence number, the pickled data is accepted into the browser,
 // but there is no impact on the counters.
 
-class HistogramSynchronizer : public HistogramSubscriber {
+class HistogramSynchronizer : public metrics::HistogramSubscriber {
  public:
   enum ProcessHistogramRequester {
     UNKNOWN,
@@ -58,6 +61,9 @@ class HistogramSynchronizer : public HistogramSubscriber {
   // Return pointer to the singleton instance for the current process, or NULL
   // if none.
   static HistogramSynchronizer* GetInstance();
+
+  HistogramSynchronizer(const HistogramSynchronizer&) = delete;
+  HistogramSynchronizer& operator=(const HistogramSynchronizer&) = delete;
 
   // Contact all processes, and get them to upload to the browser any/all
   // changes to histograms. This method is called from about:histograms.
@@ -102,6 +108,7 @@ class HistogramSynchronizer : public HistogramSubscriber {
   // number. This method is accessible on UI thread.
   void OnHistogramDataCollected(
       int sequence_number,
+      bool is_webium_renderer,
       const std::vector<std::string>& pickled_histograms) override;
 
   // Set the |callback_task_runner_| and |callback_| members. If these members
@@ -144,7 +151,7 @@ class HistogramSynchronizer : public HistogramSubscriber {
   // contact all processes.
   int async_sequence_number_ GUARDED_BY(lock_);
 
-  DISALLOW_COPY_AND_ASSIGN(HistogramSynchronizer);
+  std::unique_ptr<metrics::MetricsNameMapper> webium_metrics_name_mapper_;
 };
 
 }  // namespace content

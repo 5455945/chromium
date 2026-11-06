@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,21 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "build/build_config.h"
+#include "components/feed/core/v2/ios_shared_prefs.h"
 #include "components/feed/core/v2/public/feed_api.h"
 #include "components/feed/core/v2/public/types.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/leveldb_proto/public/proto_database.h"
+#include "components/search_engines/template_url_service.h"
+#include "components/signin/public/base/consent_level.h"
 #include "components/web_resource/eula_accepted_notifier.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "base/android/application_status_listener.h"
 #endif
 
@@ -62,16 +67,27 @@ class FeedService : public KeyedService {
     // Returns a string which represents the top locale and region of the
     // device.
     virtual std::string GetLanguageTag() = 0;
+    // Returns the country code. Country code is in the format of uppercase ISO
+    // 3166-1 alpha-2.
+    virtual std::string GetCountry() = 0;
     // Returns display metrics for the device.
     virtual DisplayMetrics GetDisplayMetrics() = 0;
-    // Returns true if autoplay is enabled.
-    virtual bool IsAutoplayEnabled() = 0;
+    // Returns how the tab group feature is enabled.
+    virtual TabGroupEnabledState GetTabGroupEnabledState() = 0;
     // Clear all stored data.
     virtual void ClearAll() = 0;
     // Fetch the image and store it in the disk cache.
     virtual void PrefetchImage(const GURL& url) = 0;
     // Register the synthetic field experiments for UMA.
     virtual void RegisterExperiments(const Experiments& experiments) = 0;
+    // Returns the synthetic field experiments.
+    virtual const Experiments& GetExperiments() const = 0;
+    // Registers a synthetic field trial "FeedUserSettings".
+    virtual void RegisterFeedUserSettingsFieldTrial(std::string_view group) = 0;
+    // Returns the server-provided feed launch CUI metadata.
+    virtual const std::string& GetFeedLaunchCuiMetadata() const = 0;
+    // Sets the server-provided feed launch CUI metadata.
+    virtual void SetFeedLaunchCuiMetadata(const std::string& metadata) = 0;
   };
 
   // Construct a FeedService given an already constructed FeedStream.
@@ -92,7 +108,8 @@ class FeedService : public KeyedService {
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       scoped_refptr<base::SequencedTaskRunner> background_task_runner,
       const std::string& api_key,
-      const ChromeInfo& chrome_info);
+      const ChromeInfo& chrome_info,
+      TemplateURLService* template_url_service);
   static std::unique_ptr<FeedService> CreateForTesting(FeedApi* api);
   ~FeedService() override;
   FeedService(const FeedService&) = delete;
@@ -116,6 +133,17 @@ class FeedService : public KeyedService {
   //  Whether autoplay is enabled.
   static bool IsAutoplayEnabled(const PrefService& pref_service);
 
+  // Returns true if the feed is personalized.
+  // TODO(iwells): Add comments and consider renaming to explain exceptional
+  // cases.
+  bool IsSignedIn();
+
+  // Returns the synthetic field experiments.
+  const Experiments& GetExperiments() const;
+
+  // Returns the server-provided feed launch CUI metadata.
+  const std::string& GetFeedLaunchCuiMetadata() const;
+
  private:
   class StreamDelegateImpl;
   class NetworkDelegateImpl;
@@ -123,9 +151,11 @@ class FeedService : public KeyedService {
   class IdentityManagerObserverImpl;
 
   FeedService();
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   void OnApplicationStateChange(base::android::ApplicationState state);
 #endif
+
+  void Shutdown() override;
 
   // These components are owned for construction of |FeedApi|. These will
   // be null if |FeedApi| is created externally.
@@ -140,13 +170,13 @@ class FeedService : public KeyedService {
   std::unique_ptr<RefreshTaskScheduler> refresh_task_scheduler_;
   std::unique_ptr<HistoryObserverImpl> history_observer_;
   std::unique_ptr<IdentityManagerObserverImpl> identity_manager_observer_;
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   bool foregrounded_ = true;
   std::unique_ptr<base::android::ApplicationStatusListener>
       application_status_listener_;
 #endif
   std::unique_ptr<FeedStream> stream_;
-  FeedApi* api_;  // Points to `stream_`, overridden for testing.
+  raw_ptr<FeedApi> api_;  // Points to `stream_`, overridden for testing.
 };
 
 }  // namespace feed

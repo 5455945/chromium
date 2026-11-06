@@ -1,71 +1,22 @@
-// Copyright 2006 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.dateTest');
 goog.setTestOnly();
 
 const DateDate = goog.require('goog.date.Date');
 const DateTime = goog.require('goog.date.DateTime');
-const DateTimeSymbols = goog.require('goog.i18n.DateTimeSymbols');
-const ExpectedFailures = goog.require('goog.testing.ExpectedFailures');
 const Interval = goog.require('goog.date.Interval');
-const googArray = goog.require('goog.array');
 const googRequiredGoogDate = goog.require('goog.date');
-const isVersion = goog.require('goog.userAgent.product.isVersion');
 const month = goog.require('goog.date.month');
-const platform = goog.require('goog.userAgent.platform');
-const product = goog.require('goog.userAgent.product');
 const testSuite = goog.require('goog.testing.testSuite');
-const userAgent = goog.require('goog.userAgent');
 const weekDay = goog.require('goog.date.weekDay');
 
-let expectedFailures;
-
-function shouldRunTests() {
-  // Test disabled in Chrome-vista due to flakiness. See b/2753939.
-  if (product.CHROME && userAgent.WINDOWS && platform.VERSION == '6.0') {
-    return false;
-  }
-
-  return true;
-}
-
-//=== tests for goog.date.Date ===
-
-// test private function used by goog.date.Date.toIsoString()
-
-//=== tests for goog.date.Interval.equals() ===
-
-//=== tests for adding two goog.date.Interval intervals ===
-
-//=== tests conversion to and from ISO 8601 duration string ===
-
-function isWinxpSafari4() {
-  return product.SAFARI && isVersion('4') && !isVersion('5') &&
-      userAgent.WINDOWS && platform.isVersion('5.0') &&
-      !platform.isVersion('6.0');
-}
 
 testSuite({
-  setUpPage() {
-    expectedFailures = new ExpectedFailures();
-  },
-
-  tearDown() {
-    expectedFailures.handleTearDown();
-  },
-
   /** Unit test for Closure's 'googRequiredGoogDate'. */
   testIsLeapYear() {
     const f = googRequiredGoogDate.isLeapYear;
@@ -91,6 +42,7 @@ testSuite({
     assertFalse('2000 was not an ISO leap year', f(2000));
   },
 
+  /** @suppress {checkTypes} suppression added to enable type checking */
   testGetNumberOfDaysInMonth() {
     const f = googRequiredGoogDate.getNumberOfDaysInMonth;
 
@@ -360,12 +312,6 @@ testSuite({
         f(2015, month.JAN, 1, weekDay.MON));
   },
 
-  testFormatMonthAndYear() {
-    const f = googRequiredGoogDate.formatMonthAndYear;
-    assertEquals('January 2008', f(DateTimeSymbols.MONTHS[month.JAN], 2008));
-    assertEquals('Jun 2007', f(DateTimeSymbols.SHORTMONTHS[month.JUN], 2007));
-  },
-
   testIsDateLikeWithGoogDate() {
     const jsDate = new Date();
     const googDate = new DateDate();
@@ -400,7 +346,7 @@ testSuite({
     assertEquals(3, date.getDate());
     assertEquals(new Date(2001, 2, 3).getTime(), date.getTime());
 
-    goog.now = () => new Date(2001, 2, 3, 4).getTime();
+    Date.now = () => new Date(2001, 2, 3, 4).getTime();
     date = new DateDate();
     assertEquals(2001, date.getFullYear());
     assertEquals(2, date.getMonth());
@@ -436,7 +382,7 @@ testSuite({
     assertEquals('20130101', date.toIsoString());
 
     date = new DateDate(12, 12, 1);
-    assertEquals('130101', date.toIsoString());
+    assertEquals('00130101', date.toIsoString());
   },
 
   testDateToIsoString() {
@@ -718,12 +664,92 @@ testSuite({
     assertEquals(`Got 22 minutes from ${iso}`, 22, date.getUTCMinutes());
     assertEquals(`Got 33 seconds from ${iso}`, 33, date.getUTCSeconds());
 
+    // +YYYYYY-MM-DD
+    iso = '+102005-02-22';
+    assertEquals(
+        `From ${iso}`, '+102005-02-22T00:00:00',
+        DateTime.fromIsoString(iso).toIsoString(true));
+
+    // +YYYYYY-MM-DDTHH:MM:SS
+    iso = '+102005-02-22T11:22:33';
+    assertEquals(
+        `From ${iso}`, '+102005-02-22T11:22:33',
+        DateTime.fromIsoString(iso).toIsoString(true));
+
+    // +YYYYYY-MM-DDTHH:MM:SS+03:00
+    iso = '+102005-02-22T11:22:33+03:00';
+    assertEquals(
+        `From ${iso}`, '+102005-02-22T08:22:33',
+        DateTime.fromIsoString(iso).toUTCIsoString(true));
+
+    // +YYYY-MM-DD
+    iso = '+2005-02-22';
+    assertEquals(
+        `From ${iso}`, '2005-02-22T00:00:00',
+        DateTime.fromIsoString(iso).toIsoString(true));
+
+    // +YYYYY-MM-DD
+    iso = '+12005-02-22';
+    assertEquals(
+        `From ${iso}`, '+012005-02-22T00:00:00',
+        DateTime.fromIsoString(iso).toIsoString(true));
+
+    // -YYYYYY-MM-DD
+    iso = '-000100-02-22';
+    assertEquals(
+        `From ${iso}`, '-000100-02-22T00:00:00',
+        DateTime.fromIsoString(iso).toIsoString(true));
+
+    // -YYYYYY-MM-DDTHH:MM:SS
+    iso = '-000100-02-22T11:22:33';
+    assertEquals(
+        `From ${iso}`, '-000100-02-22T11:22:33',
+        DateTime.fromIsoString(iso).toIsoString(true));
+
+    // -YYYYYY-MM-DDTHH:MM:SS+03:00
+    iso = '-000100-02-22T11:22:33+03:00';
+    assertEquals(
+        `From ${iso}`, '-000100-02-22T08:22:33',
+        DateTime.fromIsoString(iso).toUTCIsoString(true));
+
+    // -YYYY-MM-DD
+    iso = '-0100-02-22';
+    assertEquals(
+        `From ${iso}`, '-000100-02-22T00:00:00',
+        DateTime.fromIsoString(iso).toIsoString(true));
+
+    // -YYYYY-MM-DD
+    iso = '-00100-02-22';
+    assertEquals(
+        `From ${iso}`, '-000100-02-22T00:00:00',
+        DateTime.fromIsoString(iso).toIsoString(true));
+
     // On a DST boundary, using a UTC timestamp
     iso = '2019-03-10T11:22:33Z';
     date = DateTime.fromIsoString(iso);
     assertEquals(`Got 2019 from ${iso}`, 2019, date.getUTCFullYear());
     assertEquals(`Got March from ${iso}`, 2, date.getUTCMonth());
     assertEquals(`Got 10th from ${iso}`, 10, date.getUTCDate());
+    assertEquals(`Got 11 hours from ${iso}`, 11, date.getUTCHours());
+    assertEquals(`Got 22 minutes from ${iso}`, 22, date.getUTCMinutes());
+    assertEquals(`Got 33 seconds from ${iso}`, 33, date.getUTCSeconds());
+
+    // Before a leap day in year 1 BC
+    iso = '0000-01-02T11:22:33Z';
+    date = DateTime.fromIsoString(iso);
+    assertEquals(`Got 0 from ${iso}`, 0, date.getUTCFullYear());
+    assertEquals(`Got January from ${iso}`, 0, date.getUTCMonth());
+    assertEquals(`Got 2nd from ${iso}`, 2, date.getUTCDate());
+    assertEquals(`Got 11 hours from ${iso}`, 11, date.getUTCHours());
+    assertEquals(`Got 22 minutes from ${iso}`, 22, date.getUTCMinutes());
+    assertEquals(`Got 33 seconds from ${iso}`, 33, date.getUTCSeconds());
+
+    // After a leap day in year 4 AD
+    iso = '0004-03-04T11:22:33Z';
+    date = DateTime.fromIsoString(iso);
+    assertEquals(`Got 4 from ${iso}`, 4, date.getUTCFullYear());
+    assertEquals(`Got March from ${iso}`, 2, date.getUTCMonth());
+    assertEquals(`Got 4th from ${iso}`, 4, date.getUTCDate());
     assertEquals(`Got 11 hours from ${iso}`, 11, date.getUTCHours());
     assertEquals(`Got 22 minutes from ${iso}`, 22, date.getUTCMinutes());
     assertEquals(`Got 33 seconds from ${iso}`, 33, date.getUTCSeconds());
@@ -779,13 +805,8 @@ testSuite({
     assertEquals(`Got 00 seconds from ${iso}`, 0, date.getUTCSeconds());
   },
 
+  /** @suppress {visibility} suppression added to enable type checking */
   test_setIso8601TimeOnly_() {
-    if (product.SAFARI) {
-      // TODO(b/20733468): Disabled so we can get the rest of the Closure test
-      // suite running in a continuous build. Will investigate later.
-      return;
-    }
-
     // 23:59:59
     let d = new DateTime(0, 0);
     let iso = '18:46:39';
@@ -841,40 +862,17 @@ testSuite({
     assertEquals(`Got 46 minutes from ${iso}`, 46, d.getMinutes());
     assertEquals(`Got 39 seconds from ${iso}`, 39, d.getSeconds());
 
-    // Fails in Safari4 Winxp, temporarily disabled
-    expectedFailures.expectFailureFor(isWinxpSafari4());
-    try {
-      if (userAgent.WEBKIT && userAgent.MAC) {
-        // Both Safari 3.1 and WebKit (on Mac) return floating-point values.
-        assertRoughlyEquals(
-            `Got roughly 994.2 milliseconds from ${iso}`, 994.2,
-            d.getMilliseconds(), 0.01);
-      } else {
-        // Other browsers, including WebKit on Windows, return integers.
-        assertEquals(
-            `Got 994 milliseconds from ${iso}`, 994, d.getMilliseconds());
-      }
+    assertEquals(`Got 994 milliseconds from ${iso}`, 994, d.getMilliseconds());
 
-      d = new DateTime(0, 0);
-      iso = '184639.9942';
-      assertTrue(
-          `parsed ${iso}`, googRequiredGoogDate.setIso8601TimeOnly_(d, iso));
-      assertEquals(`Got 18 hours from ${iso}`, 18, d.getHours());
-      assertEquals(`Got 46 minutes from ${iso}`, 46, d.getMinutes());
-      assertEquals(`Got 39 seconds from ${iso}`, 39, d.getSeconds());
-      if (userAgent.WEBKIT && userAgent.MAC) {
-        // Both Safari 3.1 and WebKit (on Mac) return floating-point values.
-        assertRoughlyEquals(
-            `Got roughly 994.2 milliseconds from ${iso}`, 994.2,
-            d.getMilliseconds(), 0.01);
-      } else {
-        // Other browsers, including WebKit on Windows, return integers.
-        assertEquals(
-            `Got 994 milliseconds from ${iso}`, 994, d.getMilliseconds());
-      }
-    } catch (e) {
-      expectedFailures.handleException(e);
-    }
+    d = new DateTime(0, 0);
+    iso = '184639.9942';
+    assertTrue(
+        `parsed ${iso}`, googRequiredGoogDate.setIso8601TimeOnly_(d, iso));
+    assertEquals(`Got 18 hours from ${iso}`, 18, d.getHours());
+    assertEquals(`Got 46 minutes from ${iso}`, 46, d.getMinutes());
+    assertEquals(`Got 39 seconds from ${iso}`, 39, d.getSeconds());
+    // Other browsers, including WebKit on Windows, return integers.
+    assertEquals(`Got 994 milliseconds from ${iso}`, 994, d.getMilliseconds());
 
     // 1995-02-04 24:00 = 1995-02-05 00:00
     // timezone tests
@@ -1020,8 +1018,61 @@ testSuite({
     d = new DateDate(2008, month.FEB, 17);
     d.add(new Interval(Interval.DAYS, 1));
     assertEquals('2008-02-17 + 1d = 2008-02-18', '20080218', d.toIsoString());
+
+    // Javascript Date objects have special behavior for years 0-99
+    d = new DateDate(0, month.MAR, 3);
+    d.add(new Interval(Interval.DAYS, -1));
+    assertEquals('0000-3-3 - 1d = 0000-03-02', '00000302', d.toIsoString());
+
+    // Javascript Date objects have special behavior for years 0-99
+    d = new DateDate(99, month.OCT, 31);
+    d.add(new Interval(Interval.DAYS, -1));
+    assertEquals('0099-10-31 - 1d = 0099-10-30', '00991030', d.toIsoString());
+
+    // Javascript Date objects have special behavior for years 0-99; -1 is just
+    // outside that range.
+    d = new DateDate(-1, month.JUN, 10);
+    d.add(new Interval(Interval.DAYS, 1));
+    assertEquals(
+        '-0001-06-10 + 1d = -0001-06-11', '-0000010611', d.toIsoString());
+
+    // Javascript Date objects have special behavior for years 0-99; 100 is just
+    // outside that range.
+    d = new DateDate(100, month.JUN, 10);
+    d.add(new Interval(Interval.DAYS, 1));
+    assertEquals('0100-06-10 + 1d = 0100-06-11', '01000611', d.toIsoString());
+
+    // Javascript Date objects have special behavior for years 0-99; add an
+    // interval that pushes the original date into the range from across the
+    // bottom boundary.
+    d = new DateDate(-1, month.DEC, 20);
+    d.add(new Interval(Interval.DAYS, 12));
+    assertEquals('-0001-12-20 + 12d = 0000-01-01', '00000101', d.toIsoString());
+
+    // Javascript Date objects have special behavior for years 0-99; add an
+    // interval that pushes the original date into the range from across the top
+    // boundary.
+    d = new DateDate(100, month.JAN, 3);
+    d.add(new Interval(Interval.DAYS, -3));
+    assertEquals('0100-01-03 - 3d = 0099-12-31', '00991231', d.toIsoString());
+
+    // Javascript Date objects have special behavior for years 0-99; add an
+    // interval that pushes the original, special date outside the range across
+    // the bottom boundary.
+    d = new DateDate(0, month.JAN, 2);
+    d.add(new Interval(Interval.DAYS, -2));
+    assertEquals(
+        '0000-01-02 - 2d = -000001-12-31', '-0000011231', d.toIsoString());
+
+    // Javascript Date objects have special behavior for years 0-99; add an
+    // interval that pushes the original, special date outside the range across
+    // the top boundary.
+    d = new DateDate(99, month.DEC, 30);
+    d.add(new Interval(Interval.DAYS, 2));
+    assertEquals('0099-12-30 + 2d = 0100-01-01', '01000101', d.toIsoString());
   },
 
+  /** @suppress {checkTypes} suppression added to enable type checking */
   testDateEquals() {
     let d1 = new DateDate(2004, month.MAR, 1);
     let d2 = new DateDate(2004, month.MAR, 1);
@@ -1078,7 +1129,7 @@ testSuite({
     assertEquals(7, date.getMilliseconds());
     assertEquals(new Date(2001, 2, 3, 4, 5, 6, 7).getTime(), date.getTime());
 
-    goog.now = () => new Date(2001, 2, 3, 4).getTime();
+    Date.now = () => new Date(2001, 2, 3, 4).getTime();
     date = new DateTime();
     assertEquals(2001, date.getFullYear());
     assertEquals(2, date.getMonth());
@@ -1100,6 +1151,7 @@ testSuite({
     assertEquals(new Date(2002, 9, 2, 8).getTime(), date.getTime());
   },
 
+  /** @suppress {checkTypes} suppression added to enable type checking */
   testDateTimeEquals() {
     let d1 = new DateTime(2004, month.MAR, 1, 12, 30, 30);
     let d2 = new DateTime(2004, month.MAR, 1, 12, 30, 30);
@@ -1574,7 +1626,7 @@ testSuite({
     assertEquals(1, DateDate.compare(date2, date1));
 
     const dates = [date2, date3, date1];
-    googArray.sort(dates, DateDate.compare);
+    dates.sort(DateDate.compare);
     assertArrayEquals(
         'Dates should be sorted in time.', [date1, date2, date3], dates);
 

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,9 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/lazy_instance.h"
-#include "base/macros.h"
 #include "base/values.h"
 #include "components/content_settings/core/browser/content_settings_utils.h"
 #include "components/content_settings/core/browser/website_settings_info.h"
@@ -55,6 +55,9 @@ class WebsiteSettingsRegistry {
 
   static WebsiteSettingsRegistry* GetInstance();
 
+  WebsiteSettingsRegistry(const WebsiteSettingsRegistry&) = delete;
+  WebsiteSettingsRegistry& operator=(const WebsiteSettingsRegistry&) = delete;
+
   // Reset the instance for use inside tests.
   void ResetForTest();
 
@@ -68,8 +71,8 @@ class WebsiteSettingsRegistry {
   // |platforms| doesn't match the current platform).
   const WebsiteSettingsInfo* Register(
       ContentSettingsType type,
-      const std::string& name,
-      std::unique_ptr<base::Value> initial_default_value,
+      std::string_view name,
+      base::Value initial_default_value,
       WebsiteSettingsInfo::SyncStatus sync_status,
       WebsiteSettingsInfo::LossyStatus lossy_status,
       WebsiteSettingsInfo::ScopingType scoping_type,
@@ -90,8 +93,6 @@ class WebsiteSettingsRegistry {
   void Init();
 
   Map website_settings_info_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebsiteSettingsRegistry);
 };
 
 }  // namespace content_settings

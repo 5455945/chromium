@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,17 +11,20 @@ import androidx.annotation.VisibleForTesting;
 import org.chromium.base.ApplicationState;
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.ThreadUtils;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.ntp.ForeignSessionHelper;
+import org.chromium.base.lifetime.Destroyable;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.profiles.ProfileKeyedMap;
+import org.chromium.chrome.browser.recent_tabs.ForeignSessionHelper;
 
 /**
- * Class responsible for managing registration for invalidations for noisy sync
- * data types such as SESSIONS on Android. It keeps track of how many recent
- * pages tab open and register/unregister for SESSIONS invalidation accordingly.
- * It should be used only from the UI thread.
+ * Class responsible for managing registration for invalidations for noisy sync data types such as
+ * SESSIONS on Android. It keeps track of how many recent pages tab open and register/unregister for
+ * SESSIONS invalidation accordingly. It should be used only from the UI thread.
  */
-public class SessionsInvalidationManager implements ApplicationStatus.ApplicationStateListener {
+@NullMarked
+public class SessionsInvalidationManager
+        implements ApplicationStatus.ApplicationStateListener, Destroyable {
     /**
      * The amount of time after the RecentTabsPage is opened to register for session sync
      * invalidations. The delay is designed so that only users who linger on the RecentTabsPage
@@ -31,48 +34,30 @@ public class SessionsInvalidationManager implements ApplicationStatus.Applicatio
     static final int REGISTER_FOR_SESSION_SYNC_INVALIDATIONS_DELAY_MS =
             (int) DateUtils.SECOND_IN_MILLIS * 20;
 
-    /**
-     * The amount of time after the RecentTabsPage is closed to unregister for session sync
-     * invalidations. The delay is long to avoid registering and unregistering a lot if the user
-     * visits the RecentTabsPage a lot.
-     * Only applied if the feature SyncUseSessionsUnregisterDelay is enabled.
-     */
-    static final int UNREGISTER_FOR_SESSION_SYNC_INVALIDATIONS_DELAY_MS =
-            (int) DateUtils.HOUR_IN_MILLIS;
+    private static final ProfileKeyedMap<SessionsInvalidationManager> sProfileMap =
+            ProfileKeyedMap.createMapOfDestroyables();
 
-    /**
-     * Used to schedule tasks to enable and disable session sync invalidations.
-     */
+    /** Used to schedule tasks to enable and disable session sync invalidations. */
     private final ResumableDelayedTaskRunner mEnableSessionInvalidationsRunner;
 
-    /**
-     * Used to call native code that enables and disables session invalidations.
-     */
+    /** Used to call native code that enables and disables session invalidations. */
     private final Profile mProfile;
 
-    private static SessionsInvalidationManager sInstance;
-
-    /**
-     *  Whether session sync invalidations are enabled.
-     */
+    /** Whether session sync invalidations are enabled. */
     private boolean mIsSessionInvalidationsEnabled;
 
-    /**
-     * The number of open RecentTabsPages
-     */
+    /** The number of open RecentTabsPages */
     private int mNumRecentTabPages;
 
     /**
-     * Returns the a singleton SessionsInvalidationManager.
+     * Returns the {@link SessionsInvalidationManager} for the given {@link Profile}.
      *
-     * Calling this method will create the instance if it does not yet exist.
+     * <p>Calling this method will create the instance if it does not yet exist.
      */
     public static SessionsInvalidationManager get(Profile profile) {
         ThreadUtils.assertOnUiThread();
-        if (sInstance == null) {
-            sInstance = new SessionsInvalidationManager(profile, new ResumableDelayedTaskRunner());
-        }
-        return sInstance;
+        return sProfileMap.getForProfile(
+                profile, p -> new SessionsInvalidationManager(p, new ResumableDelayedTaskRunner()));
     }
 
     @VisibleForTesting
@@ -83,9 +68,13 @@ public class SessionsInvalidationManager implements ApplicationStatus.Applicatio
         ApplicationStatus.registerApplicationStateListener(this);
     }
 
-    /**
-     * Called when a RecentTabsPage is opened.
-     */
+    @Override
+    public void destroy() {
+        mEnableSessionInvalidationsRunner.cancel();
+        ApplicationStatus.unregisterApplicationStateListener(this);
+    }
+
+    /** Called when a RecentTabsPage is opened. */
     public void onRecentTabsPageOpened() {
         ++mNumRecentTabPages;
         if (mNumRecentTabPages == 1) {
@@ -93,17 +82,11 @@ public class SessionsInvalidationManager implements ApplicationStatus.Applicatio
         }
     }
 
-    /**
-     * Called when a RecentTabsPage is closed.
-     */
+    /** Called when a RecentTabsPage is closed. */
     public void onRecentTabsPageClosed() {
         --mNumRecentTabPages;
         if (mNumRecentTabPages == 0) {
-            setSessionInvalidationsEnabled(false,
-                    ChromeFeatureList.isEnabled(
-                            ChromeFeatureList.SYNC_USE_SESSIONS_UNREGISTER_DELAY)
-                            ? UNREGISTER_FOR_SESSION_SYNC_INVALIDATIONS_DELAY_MS
-                            : 0);
+            setSessionInvalidationsEnabled(false, 0);
         }
     }
 
@@ -120,12 +103,14 @@ public class SessionsInvalidationManager implements ApplicationStatus.Applicatio
             return;
         }
 
-        mEnableSessionInvalidationsRunner.setRunnable(() -> {
-            mIsSessionInvalidationsEnabled = isEnabled;
-            ForeignSessionHelper foreignSessionHelper = new ForeignSessionHelper(mProfile);
-            foreignSessionHelper.setInvalidationsForSessionsEnabled(isEnabled);
-            foreignSessionHelper.destroy();
-        }, delayMs);
+        mEnableSessionInvalidationsRunner.setRunnable(
+                () -> {
+                    mIsSessionInvalidationsEnabled = isEnabled;
+                    ForeignSessionHelper foreignSessionHelper = new ForeignSessionHelper(mProfile);
+                    foreignSessionHelper.setInvalidationsForSessionsEnabled(isEnabled);
+                    foreignSessionHelper.destroy();
+                },
+                delayMs);
         mEnableSessionInvalidationsRunner.resume();
     }
 

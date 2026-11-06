@@ -35,6 +35,10 @@ class CORE_EXPORT HTMLMeterElement final : public HTMLElement {
   explicit HTMLMeterElement(Document&);
   ~HTMLMeterElement() override;
 
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLMeterElement;
+  }
+
   enum GaugeRegion {
     kGaugeRegionOptimum,
     kGaugeRegionSuboptimal,
@@ -64,14 +68,18 @@ class CORE_EXPORT HTMLMeterElement final : public HTMLElement {
 
   bool CanContainRangeEndPoint() const override;
 
+  void AdjustStyle(ComputedStyleBuilder& builder) override;
+
   void Trace(Visitor*) const override;
 
- private:
-  bool AreAuthorShadowsAllowed() const override { return false; }
+ protected:
+  bool SupportsBaseAppearanceInternal(BaseAppearanceValue) const override;
 
+ private:
   bool IsLabelable() const override { return true; }
 
-  LayoutObject* CreateLayoutObject(const ComputedStyle&, LegacyLayout) override;
+  LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
+  void DidRecalcStyle(const StyleRecalcChange) override;
   void ParseAttribute(const AttributeModificationParams&) override;
 
   void DidElementStateChange();

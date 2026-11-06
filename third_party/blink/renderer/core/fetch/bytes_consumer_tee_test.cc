@@ -1,19 +1,25 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/fetch/bytes_consumer_tee.h"
 
+#include <memory>
+
 #include "base/memory/scoped_refptr.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/core/fetch/bytes_consumer_test_util.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
 #include "third_party/blink/renderer/platform/blob/blob_data.h"
+#include "third_party/blink/renderer/platform/loader/fetch/response_body_loader.h"
+#include "third_party/blink/renderer/platform/loader/fetch/response_body_loader_client.h"
 #include "third_party/blink/renderer/platform/loader/testing/bytes_consumer_test_reader.h"
 #include "third_party/blink/renderer/platform/loader/testing/replaying_bytes_consumer.h"
 #include "third_party/blink/renderer/platform/network/encoded_form_data.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 
 namespace blink {
@@ -37,7 +43,7 @@ class BytesConsumerTestClient final
 class BytesConsumerTeeTest : public PageTestBase {
  public:
   using Command = ReplayingBytesConsumer::Command;
-  void SetUp() override { PageTestBase::SetUp(IntSize()); }
+  void SetUp() override { PageTestBase::SetUp(gfx::Size()); }
 };
 
 class FakeBlobBytesConsumer : public BytesConsumer {
@@ -46,7 +52,7 @@ class FakeBlobBytesConsumer : public BytesConsumer {
       : blob_handle_(std::move(handle)) {}
   ~FakeBlobBytesConsumer() override {}
 
-  Result BeginRead(const char** buffer, size_t* available) override {
+  Result BeginRead(base::span<const char>& buffer) override {
     if (state_ == PublicState::kClosed)
       return Result::kDone;
     blob_handle_ = nullptr;
@@ -90,7 +96,7 @@ class FakeFormDataBytesConsumer : public BytesConsumer {
       : form_data_(std::move(form_data)) {}
   ~FakeFormDataBytesConsumer() override {}
 
-  Result BeginRead(const char** buffer, size_t* available) override {
+  Result BeginRead(base::span<const char>& buffer) override {
     if (state_ == PublicState::kClosed)
       return Result::kDone;
     form_data_ = nullptr;
@@ -137,10 +143,10 @@ TEST_F(BytesConsumerTeeTest, CreateDone) {
   auto result2 = (MakeGarbageCollected<BytesConsumerTestReader>(dest2))->Run();
 
   EXPECT_EQ(Result::kDone, result1.first);
-  EXPECT_TRUE(result1.second.IsEmpty());
+  EXPECT_TRUE(result1.second.empty());
   EXPECT_EQ(BytesConsumer::PublicState::kClosed, dest1->GetPublicState());
   EXPECT_EQ(Result::kDone, result2.first);
-  EXPECT_TRUE(result2.second.IsEmpty());
+  EXPECT_TRUE(result2.second.empty());
   EXPECT_EQ(BytesConsumer::PublicState::kClosed, dest2->GetPublicState());
   EXPECT_FALSE(src->IsCancelled());
 
@@ -177,12 +183,10 @@ TEST_F(BytesConsumerTeeTest, TwoPhaseRead) {
   auto result2 = (MakeGarbageCollected<BytesConsumerTestReader>(dest2))->Run();
 
   EXPECT_EQ(Result::kDone, result1.first);
-  EXPECT_EQ("hello, world",
-            BytesConsumerTestUtil::CharVectorToString(result1.second));
+  EXPECT_EQ("hello, world", String(result1.second));
   EXPECT_EQ(BytesConsumer::PublicState::kClosed, dest1->GetPublicState());
   EXPECT_EQ(Result::kDone, result2.first);
-  EXPECT_EQ("hello, world",
-            BytesConsumerTestUtil::CharVectorToString(result2.second));
+  EXPECT_EQ("hello, world", String(result2.second));
   EXPECT_EQ(BytesConsumer::PublicState::kClosed, dest2->GetPublicState());
   EXPECT_FALSE(src->IsCancelled());
 }
@@ -209,12 +213,10 @@ TEST_F(BytesConsumerTeeTest, TwoPhaseReadWithDataAndDone) {
   auto result2 = (MakeGarbageCollected<BytesConsumerTestReader>(dest2))->Run();
 
   EXPECT_EQ(Result::kDone, result1.first);
-  EXPECT_EQ("hello, world",
-            BytesConsumerTestUtil::CharVectorToString(result1.second));
+  EXPECT_EQ("hello, world", String(result1.second));
   EXPECT_EQ(BytesConsumer::PublicState::kClosed, dest1->GetPublicState());
   EXPECT_EQ(Result::kDone, result2.first);
-  EXPECT_EQ("hello, world",
-            BytesConsumerTestUtil::CharVectorToString(result2.second));
+  EXPECT_EQ("hello, world", String(result2.second));
   EXPECT_EQ(BytesConsumer::PublicState::kClosed, dest2->GetPublicState());
   EXPECT_FALSE(src->IsCancelled());
 }
@@ -238,10 +240,10 @@ TEST_F(BytesConsumerTeeTest, Error) {
   auto result2 = (MakeGarbageCollected<BytesConsumerTestReader>(dest2))->Run();
 
   EXPECT_EQ(Result::kError, result1.first);
-  EXPECT_TRUE(result1.second.IsEmpty());
+  EXPECT_TRUE(result1.second.empty());
   EXPECT_EQ(BytesConsumer::PublicState::kErrored, dest1->GetPublicState());
   EXPECT_EQ(Result::kError, result2.first);
-  EXPECT_TRUE(result2.second.IsEmpty());
+  EXPECT_TRUE(result2.second.empty());
   EXPECT_EQ(BytesConsumer::PublicState::kErrored, dest2->GetPublicState());
   EXPECT_FALSE(src->IsCancelled());
 
@@ -311,8 +313,7 @@ TEST_F(BytesConsumerTeeTest, CancelShouldNotAffectTheOtherDestination) {
   EXPECT_EQ(BytesConsumer::PublicState::kClosed, dest1->GetPublicState());
   EXPECT_EQ(BytesConsumer::PublicState::kClosed, dest2->GetPublicState());
   EXPECT_EQ(Result::kDone, result2.first);
-  EXPECT_EQ("hello, world",
-            BytesConsumerTestUtil::CharVectorToString(result2.second));
+  EXPECT_EQ("hello, world", String(result2.second));
   EXPECT_FALSE(src->IsCancelled());
 }
 
@@ -421,10 +422,9 @@ TEST_F(BytesConsumerTeeTest, ConsumerCanBeErroredInTwoPhaseRead) {
       MakeGarbageCollected<BytesConsumerTestClient>();
   dest1->SetClient(client);
 
-  const char* buffer = nullptr;
-  size_t available = 0;
-  ASSERT_EQ(Result::kOk, dest1->BeginRead(&buffer, &available));
-  ASSERT_EQ(1u, available);
+  base::span<const char> buffer;
+  ASSERT_EQ(Result::kOk, dest1->BeginRead(buffer));
+  ASSERT_EQ(1u, buffer.size());
 
   EXPECT_EQ(BytesConsumer::PublicState::kReadableOrWaiting,
             dest1->GetPublicState());
@@ -435,7 +435,7 @@ TEST_F(BytesConsumerTeeTest, ConsumerCanBeErroredInTwoPhaseRead) {
   EXPECT_EQ(BytesConsumer::PublicState::kErrored, dest1->GetPublicState());
   EXPECT_EQ(num_on_state_change_called + 1, client->NumOnStateChangeCalled());
   EXPECT_EQ('a', buffer[0]);
-  EXPECT_EQ(Result::kOk, dest1->EndRead(available));
+  EXPECT_EQ(Result::kOk, dest1->EndRead(buffer.size()));
 }
 
 TEST_F(BytesConsumerTeeTest,
@@ -454,10 +454,9 @@ TEST_F(BytesConsumerTeeTest,
 
   dest1->SetClient(client);
 
-  const char* buffer = nullptr;
-  size_t available = 0;
-  ASSERT_EQ(Result::kOk, dest1->BeginRead(&buffer, &available));
-  ASSERT_EQ(1u, available);
+  base::span<const char> buffer;
+  ASSERT_EQ(Result::kOk, dest1->BeginRead(buffer));
+  ASSERT_EQ(1u, buffer.size());
   EXPECT_EQ('a', buffer[0]);
 
   EXPECT_EQ(BytesConsumer::PublicState::kReadableOrWaiting,
@@ -491,10 +490,9 @@ TEST_F(BytesConsumerTeeTest,
 
   dest1->SetClient(client);
 
-  const char* buffer = nullptr;
-  size_t available = 0;
-  ASSERT_EQ(Result::kOk, dest1->BeginRead(&buffer, &available));
-  ASSERT_EQ(1u, available);
+  base::span<const char> buffer;
+  ASSERT_EQ(Result::kOk, dest1->BeginRead(buffer));
+  ASSERT_EQ(1u, buffer.size());
   EXPECT_EQ('a', buffer[0]);
 
   test::RunPendingTasks();
@@ -504,7 +502,7 @@ TEST_F(BytesConsumerTeeTest,
   EXPECT_EQ(BytesConsumer::PublicState::kReadableOrWaiting,
             dest1->GetPublicState());
 
-  EXPECT_EQ(Result::kDone, dest1->BeginRead(&buffer, &available));
+  EXPECT_EQ(Result::kDone, dest1->BeginRead(buffer));
   EXPECT_EQ(0, client->NumOnStateChangeCalled());
   EXPECT_EQ(BytesConsumer::PublicState::kClosed, dest1->GetPublicState());
   test::RunPendingTasks();
@@ -512,22 +510,120 @@ TEST_F(BytesConsumerTeeTest,
   EXPECT_EQ(BytesConsumer::PublicState::kClosed, dest1->GetPublicState());
 }
 
+TEST_F(BytesConsumerTeeTest,
+       AsyncCloseNotificationShouldBeCancelledBySubsequentCancelCall) {
+  ReplayingBytesConsumer* src = MakeGarbageCollected<ReplayingBytesConsumer>(
+      GetDocument().GetTaskRunner(TaskType::kNetworking));
+  src->Add(Command(Command::kData, "a"));
+  src->Add(Command(Command::kDone));
+  BytesConsumerTestClient* client =
+      MakeGarbageCollected<BytesConsumerTestClient>();
+
+  BytesConsumer* dest1 = nullptr;
+  BytesConsumer* dest2 = nullptr;
+  BytesConsumerTee(GetFrame().DomWindow(), src, &dest1, &dest2);
+
+  dest1->SetClient(client);
+
+  base::span<const char> buffer;
+  ASSERT_EQ(Result::kOk, dest1->BeginRead(buffer));
+  ASSERT_EQ(1u, buffer.size());
+  EXPECT_EQ('a', buffer[0]);
+
+  test::RunPendingTasks();
+  ASSERT_EQ(Result::kOk, dest1->EndRead(1));
+  EXPECT_EQ(BytesConsumer::PublicState::kReadableOrWaiting,
+            dest1->GetPublicState());
+
+  dest1->Cancel();
+  EXPECT_EQ(0, client->NumOnStateChangeCalled());
+  EXPECT_EQ(BytesConsumer::PublicState::kClosed, dest1->GetPublicState());
+  test::RunPendingTasks();
+  EXPECT_EQ(0, client->NumOnStateChangeCalled());
+  EXPECT_EQ(BytesConsumer::PublicState::kClosed, dest1->GetPublicState());
+}
+
+class NoopResponseBodyLoaderClient final
+    : public GarbageCollected<NoopResponseBodyLoaderClient>,
+      public ResponseBodyLoaderClient {
+ public:
+  void DidReceiveData(base::span<const char>) override {}
+  void DidReceiveDecodedData(const String&,
+                             std::unique_ptr<SecureStringDigest>) override {}
+  void DidFinishLoadingBody() override {}
+  void DidFailLoadingBody() override {}
+  void DidCancelLoadingBody() override {}
+  void WillCreateBlobFromDrainedDataPipe() override {}
+  void DidCreateBlobFromDrainedDataPipe(
+      const scoped_refptr<BlobDataHandle>&) override {}
+};
+
+// Regression test for b/564248014:
+// When a teed ResponseBodyLoader::DelegatingBytesConsumer finishes reading all
+// bytes (`PublicState::kClosed` / `State::kDone`) and a TeeHelper::Destination
+// branch posts `Destination::Close()` asynchronously in `EndRead()`, aborting
+// the `ResponseBodyLoader` before `Destination::Close()` executes must not flip
+// `DelegatingBytesConsumer::GetPublicState()` from `kClosed` to `kErrored`.
+TEST_F(BytesConsumerTeeTest,
+       AbortResponseBodyLoaderWhileDestinationCloseTaskIsPending) {
+  auto task_runner = GetDocument().GetTaskRunner(TaskType::kNetworking);
+  ReplayingBytesConsumer* underlying =
+      MakeGarbageCollected<ReplayingBytesConsumer>(task_runner);
+  underlying->Add(Command(Command::kData, "a"));
+  underlying->Add(Command(Command::kDone));
+
+  auto* loader_client = MakeGarbageCollected<NoopResponseBodyLoaderClient>();
+  auto* body_loader = MakeGarbageCollected<ResponseBodyLoader>(
+      *underlying, *loader_client, task_runner,
+      /*back_forward_cache_loader_helper=*/nullptr);
+  BytesConsumer& src = body_loader->DrainAsBytesConsumer();
+
+  BytesConsumer* dest1 = nullptr;
+  BytesConsumer* dest2 = nullptr;
+  BytesConsumerTee(GetFrame().DomWindow(), &src, &dest1, &dest2);
+
+  // Run pending tasks so `DelegatingBytesConsumer::OnStateChange` peeks "a",
+  // feeds it to `TeeHelper`, and reaches `State::kDone` (`kClosed`).
+  test::RunPendingTasks();
+  EXPECT_EQ(BytesConsumer::PublicState::kClosed, src.GetPublicState());
+
+  // Consume the last chunk from `dest1`. `Destination::EndRead` sees
+  // `chunks_.empty()` and `tee_->GetPublicState() == PublicState::kClosed`,
+  // so it posts `Destination::Close()` to `TaskType::kNetworking`.
+  base::span<const char> buffer;
+  ASSERT_EQ(Result::kOk, dest1->BeginRead(buffer));
+  ASSERT_EQ(1u, buffer.size());
+  EXPECT_EQ('a', buffer[0]);
+  ASSERT_EQ(Result::kOk, dest1->EndRead(1));
+
+  // Before the posted `Destination::Close()` task runs, abort the loader.
+  body_loader->Abort();
+  EXPECT_EQ(BytesConsumer::PublicState::kClosed, src.GetPublicState());
+
+  // Running the queued `Destination::Close()` task must not trigger a DCHECK
+  // (`PublicState::kClosed == tee_->GetPublicState()`).
+  test::RunPendingTasks();
+  EXPECT_EQ(BytesConsumer::PublicState::kClosed, dest1->GetPublicState());
+  EXPECT_EQ(BytesConsumer::PublicState::kReadableOrWaiting,
+            dest2->GetPublicState());
+}
+
 TEST(BytesConusmerTest, ClosedBytesConsumer) {
+  test::TaskEnvironment task_environment;
   BytesConsumer* consumer = BytesConsumer::CreateClosed();
 
-  const char* buffer = nullptr;
-  size_t available = 0;
-  EXPECT_EQ(Result::kDone, consumer->BeginRead(&buffer, &available));
+  base::span<const char> buffer;
+  EXPECT_EQ(Result::kDone, consumer->BeginRead(buffer));
   EXPECT_EQ(BytesConsumer::PublicState::kClosed, consumer->GetPublicState());
 }
 
 TEST(BytesConusmerTest, ErroredBytesConsumer) {
+  test::TaskEnvironment task_environment;
   BytesConsumer::Error error("hello");
   BytesConsumer* consumer = BytesConsumer::CreateErrored(error);
 
-  const char* buffer = nullptr;
-  size_t available = 0;
-  EXPECT_EQ(Result::kError, consumer->BeginRead(&buffer, &available));
+  base::span<const char> buffer;
+  EXPECT_EQ(Result::kError, consumer->BeginRead(buffer));
   EXPECT_EQ(BytesConsumer::PublicState::kErrored, consumer->GetPublicState());
   EXPECT_EQ(error.Message(), consumer->GetError().Message());
 

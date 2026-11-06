@@ -1,19 +1,19 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/certificate_provider/pin_dialog_manager.h"
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
+#include <algorithm>
+#include <vector>
+
+#include "base/functional/bind.h"
 #include "base/logging.h"
 
-namespace ash {
+namespace chromeos {
 
 // Define timeout for issued sign_request_id.
-constexpr base::TimeDelta kSignRequestIdTimeout =
-    base::TimeDelta::FromMinutes(10);
+constexpr base::TimeDelta kSignRequestIdTimeout = base::Minutes(10);
 
 PinDialogManager::PinDialogManager() = default;
 
@@ -22,15 +22,15 @@ PinDialogManager::~PinDialogManager() = default;
 void PinDialogManager::AddSignRequestId(
     const std::string& extension_id,
     int sign_request_id,
-    const absl::optional<AccountId>& authenticating_user_account_id) {
+    const std::optional<AccountId>& authenticating_user_account_id) {
   ExtensionNameRequestIdPair key(extension_id, sign_request_id);
   sign_requests_.insert(
       std::make_pair(key, SignRequestState(/*begin_time=*/base::Time::Now(),
                                            authenticating_user_account_id)));
 }
 
-void PinDialogManager::AbortSignRequest(const std::string& extension_id,
-                                        int sign_request_id) {
+void PinDialogManager::RemoveSignRequest(const std::string& extension_id,
+                                         int sign_request_id) {
   if (active_dialog_state_ &&
       active_dialog_state_->extension_id == extension_id &&
       active_dialog_state_->sign_request_id == sign_request_id) {
@@ -41,6 +41,10 @@ void PinDialogManager::AbortSignRequest(const std::string& extension_id,
   sign_requests_.erase(key);
 }
 
+int PinDialogManager::StoredSignRequestsForTesting() const {
+  return sign_requests_.size();
+}
+
 PinDialogManager::RequestPinResult PinDialogManager::RequestPin(
     const std::string& extension_id,
     const std::string& extension_name,
@@ -49,7 +53,7 @@ PinDialogManager::RequestPinResult PinDialogManager::RequestPin(
     security_token_pin::ErrorLabel error_label,
     int attempts_left,
     RequestPinCallback callback) {
-  DCHECK_GE(attempts_left, -1);
+  CHECK_GE(attempts_left, -1, base::NotFatalUntil::M160);
   const bool accept_input = (attempts_left != 0);
 
   // Check the validity of sign_request_id.
@@ -99,7 +103,8 @@ PinDialogManager::StopPinRequestWithError(
     const std::string& extension_id,
     security_token_pin::ErrorLabel error_label,
     StopPinRequestCallback callback) {
-  DCHECK_NE(error_label, security_token_pin::ErrorLabel::kNone);
+  CHECK_NE(error_label, security_token_pin::ErrorLabel::kNone,
+           base::NotFatalUntil::M160);
 
   // Perform sanity checks, as the extension might have issued this call
   // incorrectly.
@@ -168,7 +173,9 @@ void PinDialogManager::ExtensionUnloaded(const std::string& extension_id) {
 
 void PinDialogManager::AddPinDialogHost(
     SecurityTokenPinDialogHost* pin_dialog_host) {
-  DCHECK(!base::Contains(added_dialog_hosts_, pin_dialog_host));
+  // TODO(crbug.com/576706178): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK(!std::ranges::contains(added_dialog_hosts_, pin_dialog_host));
   added_dialog_hosts_.push_back(pin_dialog_host);
 }
 
@@ -176,20 +183,22 @@ void PinDialogManager::RemovePinDialogHost(
     SecurityTokenPinDialogHost* pin_dialog_host) {
   if (active_dialog_state_ && active_dialog_state_->host == pin_dialog_host)
     CloseActiveDialog();
-  DCHECK(base::Contains(added_dialog_hosts_, pin_dialog_host));
-  base::Erase(added_dialog_hosts_, pin_dialog_host);
+  CHECK(std::ranges::contains(added_dialog_hosts_, pin_dialog_host),
+        base::NotFatalUntil::M160);
+  std::erase(added_dialog_hosts_, pin_dialog_host);
 }
 
 PinDialogManager::SignRequestState::SignRequestState(
     base::Time begin_time,
-    const absl::optional<AccountId>& authenticating_user_account_id)
+    const std::optional<AccountId>& authenticating_user_account_id)
     : begin_time(begin_time),
       authenticating_user_account_id(authenticating_user_account_id) {}
 
 PinDialogManager::SignRequestState::SignRequestState(const SignRequestState&) =
     default;
-PinDialogManager::SignRequestState& PinDialogManager::SignRequestState::
-operator=(const SignRequestState&) = default;
+PinDialogManager::SignRequestState&
+PinDialogManager::SignRequestState::operator=(const SignRequestState&) =
+    default;
 
 PinDialogManager::SignRequestState::~SignRequestState() = default;
 
@@ -218,15 +227,17 @@ PinDialogManager::SignRequestState* PinDialogManager::FindSignRequestState(
 }
 
 void PinDialogManager::OnPinEntered(const std::string& user_input) {
-  DCHECK(!active_dialog_state_->stop_pin_request_callback);
+  CHECK(!active_dialog_state_->stop_pin_request_callback,
+        base::NotFatalUntil::M160);
   last_response_closed_[active_dialog_state_->extension_id] = false;
   if (active_dialog_state_->request_pin_callback)
     std::move(active_dialog_state_->request_pin_callback).Run(user_input);
 }
 
 void PinDialogManager::OnPinDialogClosed() {
-  DCHECK(!active_dialog_state_->request_pin_callback ||
-         !active_dialog_state_->stop_pin_request_callback);
+  CHECK(!active_dialog_state_->request_pin_callback ||
+            !active_dialog_state_->stop_pin_request_callback,
+        base::NotFatalUntil::M160);
 
   last_response_closed_[active_dialog_state_->extension_id] = true;
   if (active_dialog_state_->request_pin_callback) {
@@ -254,7 +265,7 @@ void PinDialogManager::CloseActiveDialog() {
 
   active_dialog_state_->host->CloseSecurityTokenPinDialog();
   OnPinDialogClosed();
-  DCHECK(!active_dialog_state_);
+  CHECK(!active_dialog_state_, base::NotFatalUntil::M160);
 }
 
-}  // namespace ash
+}  // namespace chromeos

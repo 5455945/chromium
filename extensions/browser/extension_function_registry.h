@@ -1,16 +1,16 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef EXTENSIONS_BROWSER_EXTENSION_FUNCTION_REGISTRY_H_
 #define EXTENSIONS_BROWSER_EXTENSION_FUNCTION_REGISTRY_H_
 
-#include <map>
 #include <string>
+#include <string_view>
 
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "extensions/browser/extension_function_histogram_value.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 class ExtensionFunction;
 
@@ -43,10 +43,15 @@ class ExtensionFunctionRegistry {
     extensions::functions::HistogramValue histogram_value_ =
         extensions::functions::UNKNOWN;
   };
-  using FactoryMap = std::map<std::string, FactoryEntry>;
+  using FactoryMap = absl::flat_hash_map<std::string_view, FactoryEntry>;
 
   static ExtensionFunctionRegistry& GetInstance();
   ExtensionFunctionRegistry();
+
+  ExtensionFunctionRegistry(const ExtensionFunctionRegistry&) = delete;
+  ExtensionFunctionRegistry& operator=(const ExtensionFunctionRegistry&) =
+      delete;
+
   ~ExtensionFunctionRegistry();
 
   // Allows overriding of specific functions for testing.  Functions must be
@@ -69,8 +74,6 @@ class ExtensionFunctionRegistry {
 
  private:
   FactoryMap factories_;
-
-  DISALLOW_COPY_AND_ASSIGN(ExtensionFunctionRegistry);
 };
 
 #endif  // EXTENSIONS_BROWSER_EXTENSION_FUNCTION_REGISTRY_H_

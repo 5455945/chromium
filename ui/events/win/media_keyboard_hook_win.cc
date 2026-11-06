@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,6 +21,10 @@ class MediaKeyboardHookWinImpl : public KeyboardHookWinBase {
  public:
   MediaKeyboardHookWinImpl(KeyEventCallback callback,
                            bool enable_hook_registration);
+
+  MediaKeyboardHookWinImpl(const MediaKeyboardHookWinImpl&) = delete;
+  MediaKeyboardHookWinImpl& operator=(const MediaKeyboardHookWinImpl&) = delete;
+
   ~MediaKeyboardHookWinImpl() override;
 
   // KeyboardHookWinBase implementation.
@@ -41,8 +45,6 @@ class MediaKeyboardHookWinImpl : public KeyboardHookWinBase {
   // Tracks the last non-located key down seen in order to determine if the
   // current key event should be marked as a repeated key press.
   DWORD last_key_down_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaKeyboardHookWinImpl);
 };
 
 // static
@@ -52,7 +54,7 @@ MediaKeyboardHookWinImpl::MediaKeyboardHookWinImpl(
     KeyEventCallback callback,
     bool enable_hook_registration)
     : KeyboardHookWinBase(
-          absl::optional<base::flat_set<DomCode>>(
+          std::optional<base::flat_set<DomCode>>(
               {DomCode::MEDIA_PLAY_PAUSE, DomCode::MEDIA_STOP,
                DomCode::MEDIA_TRACK_NEXT, DomCode::MEDIA_TRACK_PREVIOUS}),
           std::move(callback),
@@ -62,13 +64,13 @@ MediaKeyboardHookWinImpl::~MediaKeyboardHookWinImpl() {
   if (!enable_hook_registration())
     return;
 
-  DCHECK_EQ(instance_, this);
+  CHECK_EQ(instance_, this, base::NotFatalUntil::M163);
   instance_ = nullptr;
 }
 
 bool MediaKeyboardHookWinImpl::Register() {
   // Only one instance of this class can be registered at a time.
-  DCHECK(!instance_);
+  CHECK(!instance_, base::NotFatalUntil::M163);
   instance_ = this;
 
   return KeyboardHookWinBase::Register(
@@ -91,21 +93,21 @@ bool MediaKeyboardHookWinImpl::ProcessKeyEventMessage(WPARAM w_param,
     return false;
 
   bool is_repeat = false;
-  MSG msg = {nullptr, static_cast<UINT>(w_param), vk,
-             GetLParamFromScanCode(scan_code), time_stamp};
+  CHROME_MSG msg = {nullptr, static_cast<UINT>(w_param), vk,
+                    GetLParamFromScanCode(scan_code), time_stamp};
   EventType event_type = EventTypeFromMSG(msg);
-  if (event_type == ET_KEY_PRESSED) {
+  if (event_type == EventType::kKeyPressed) {
     is_repeat = (last_key_down_ == vk);
     last_key_down_ = vk;
   } else {
-    DCHECK_EQ(event_type, ET_KEY_RELEASED);
+    CHECK_EQ(event_type, EventType::kKeyReleased, base::NotFatalUntil::M163);
     last_key_down_ = 0;
   }
 
   std::unique_ptr<KeyEvent> key_event =
       std::make_unique<KeyEvent>(KeyEventFromMSG(msg));
   if (is_repeat)
-    key_event->set_flags(key_event->flags() | EF_IS_REPEAT);
+    key_event->SetFlags(key_event->flags() | EF_IS_REPEAT);
   ForwardCapturedKeyEvent(key_event.get());
 
   // If the event is handled, don't propagate to the OS.

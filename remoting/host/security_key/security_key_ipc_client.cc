@@ -1,28 +1,34 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/host/security_key/security_key_ipc_client.h"
 
+#include <memory>
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "ipc/ipc_channel.h"
-#include "ipc/ipc_listener.h"
-#include "ipc/ipc_message.h"
-#include "ipc/ipc_message_macros.h"
-#include "remoting/host/chromoting_messages.h"
-#include "remoting/host/ipc_constants.h"
+#include "base/task/single_thread_task_runner.h"
+#include "build/build_config.h"
+#include "remoting/base/logging.h"
+#include "remoting/host/chromoting_host_services_client.h"
 #include "remoting/host/security_key/security_key_ipc_constants.h"
+
+#if BUILDFLAG(IS_WIN)
+#include <Windows.h>
+#endif
 
 namespace remoting {
 
 SecurityKeyIpcClient::SecurityKeyIpcClient()
-    : named_channel_handle_(remoting::GetSecurityKeyIpcChannel()) {}
+    : SecurityKeyIpcClient(std::make_unique<ChromotingHostServicesClient>()) {}
+
+SecurityKeyIpcClient::SecurityKeyIpcClient(
+    std::unique_ptr<ChromotingHostServicesProvider> service_provider)
+    : service_provider_(std::move(service_provider)) {}
 
 SecurityKeyIpcClient::~SecurityKeyIpcClient() {
   DCHECK(thread_checker_.CalledOnValidThread());
@@ -31,11 +37,7 @@ SecurityKeyIpcClient::~SecurityKeyIpcClient() {
 bool SecurityKeyIpcClient::CheckForSecurityKeyIpcServerChannel() {
   DCHECK(thread_checker_.CalledOnValidThread());
 
-  if (!channel_handle_.is_valid()) {
-    channel_handle_ =
-        mojo::NamedPlatformChannel::ConnectToServer(named_channel_handle_);
-  }
-  return channel_handle_.is_valid();
+  return service_provider_->GetSessionServices() != nullptr;
 }
 
 void SecurityKeyIpcClient::EstablishIpcConnection(
@@ -44,7 +46,7 @@ void SecurityKeyIpcClient::EstablishIpcConnection(
   DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK(connected_callback);
   DCHECK(connection_error_callback);
-  DCHECK(!ipc_channel_);
+  DCHECK(!security_key_forwarder_.is_bound());
 
   connected_callback_ = std::move(connected_callback);
   connection_error_callback_ = std::move(connection_error_callback);
@@ -59,7 +61,8 @@ bool SecurityKeyIpcClient::SendSecurityKeyRequest(
   DCHECK(!request_payload.empty());
   DCHECK(response_callback);
 
-  if (!ipc_channel_) {
+  if (!security_key_forwarder_.is_bound() ||
+      !security_key_forwarder_.is_connected()) {
     LOG(ERROR) << "Request made before IPC connection was established.";
     return false;
   }
@@ -71,67 +74,32 @@ bool SecurityKeyIpcClient::SendSecurityKeyRequest(
   }
 
   response_callback_ = std::move(response_callback);
-  return ipc_channel_->Send(
-      new ChromotingRemoteSecurityKeyToNetworkMsg_Request(request_payload));
+  security_key_forwarder_->OnSecurityKeyRequest(
+      request_payload,
+      base::BindOnce(&SecurityKeyIpcClient::OnSecurityKeyResponse,
+                     base::Unretained(this)));
+
+  return true;
 }
 
 void SecurityKeyIpcClient::CloseIpcConnection() {
   DCHECK(thread_checker_.CalledOnValidThread());
-  ipc_channel_.reset();
+  HOST_LOG << "IPC connection closed.";
+  security_key_forwarder_.reset();
 }
 
-void SecurityKeyIpcClient::SetIpcChannelHandleForTest(
-    const mojo::NamedPlatformChannel::ServerName& server_name) {
-  named_channel_handle_ = server_name;
-}
-
-void SecurityKeyIpcClient::SetExpectedIpcServerSessionIdForTest(
-    uint32_t expected_session_id) {
-  expected_ipc_server_session_id_ = expected_session_id;
-}
-
-bool SecurityKeyIpcClient::OnMessageReceived(const IPC::Message& message) {
+void SecurityKeyIpcClient::OnQueryVersionResult(uint32_t unused_version) {
   DCHECK(thread_checker_.CalledOnValidThread());
 
-  bool handled = true;
-  IPC_BEGIN_MESSAGE_MAP(SecurityKeyIpcClient, message)
-    IPC_MESSAGE_HANDLER(ChromotingNetworkToRemoteSecurityKeyMsg_Response,
-                        OnSecurityKeyResponse)
-    IPC_MESSAGE_HANDLER(ChromotingNetworkToRemoteSecurityKeyMsg_ConnectionReady,
-                        OnConnectionReady)
-    IPC_MESSAGE_HANDLER(ChromotingNetworkToRemoteSecurityKeyMsg_InvalidSession,
-                        OnInvalidSession)
-    IPC_MESSAGE_UNHANDLED(handled = false)
-  IPC_END_MESSAGE_MAP()
-
-  CHECK(handled) << "Received unexpected IPC type: " << message.type();
-  return handled;
-}
-
-void SecurityKeyIpcClient::OnChannelConnected(int32_t peer_pid) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-
-#if defined(OS_WIN)
-  DWORD peer_session_id;
-  if (!ProcessIdToSessionId(peer_pid, &peer_session_id)) {
-    PLOG(ERROR) << "ProcessIdToSessionId failed";
-    std::move(connection_error_callback_).Run();
-    return;
-  }
-
-  if (peer_session_id != expected_ipc_server_session_id_) {
-    LOG(ERROR)
-        << "Cannot establish connection with IPC server running in session: "
-        << peer_session_id;
-    std::move(connection_error_callback_).Run();
-    return;
-  }
-#endif  // defined(OS_WIN)
+  HOST_LOG << "IPC channel connected.";
+  std::move(connected_callback_).Run();
 }
 
 void SecurityKeyIpcClient::OnChannelError() {
   DCHECK(thread_checker_.CalledOnValidThread());
 
+  LOG(ERROR) << "IPC channel error.";
+  security_key_forwarder_.reset();
   if (connection_error_callback_) {
     std::move(connection_error_callback_).Run();
   }
@@ -151,58 +119,35 @@ void SecurityKeyIpcClient::OnSecurityKeyResponse(
   }
 }
 
-void SecurityKeyIpcClient::OnConnectionReady() {
-  DCHECK(thread_checker_.CalledOnValidThread());
-
-  if (!connected_callback_) {
-    LOG(ERROR) << "Unexpected ConnectionReady message received.";
-    if (connection_error_callback_) {
-      std::move(connection_error_callback_).Run();
-    }
-    return;
-  }
-
-  std::move(connected_callback_).Run(/*connection_usable=*/true);
-}
-
-void SecurityKeyIpcClient::OnInvalidSession() {
-  DCHECK(thread_checker_.CalledOnValidThread());
-
-  if (!connected_callback_) {
-    LOG(ERROR) << "Unexpected InvalidSession message received.";
-    if (connection_error_callback_) {
-      std::move(connection_error_callback_).Run();
-    }
-    return;
-  }
-
-  std::move(connected_callback_).Run(/*connection_usable=*/false);
-}
-
 void SecurityKeyIpcClient::ConnectToIpcChannel() {
   DCHECK(thread_checker_.CalledOnValidThread());
 
   // Verify that any existing IPC connection has been closed.
   CloseIpcConnection();
 
-  if (!channel_handle_.is_valid() && !CheckForSecurityKeyIpcServerChannel()) {
-    if (connection_error_callback_) {
-      std::move(connection_error_callback_).Run();
-    }
+  if (!CheckForSecurityKeyIpcServerChannel()) {
+    LOG(ERROR) << "Invalid channel handle.";
+    OnChannelError();
     return;
   }
-
-  ipc_channel_ = IPC::Channel::CreateClient(
-      mojo_connection_.Connect(std::move(channel_handle_)).release(), this,
-      base::ThreadTaskRunnerHandle::Get());
-  if (ipc_channel_->Connect()) {
-    return;
-  }
-  ipc_channel_.reset();
-
-  if (connection_error_callback_) {
-    std::move(connection_error_callback_).Run();
-  }
+  auto disconnect_handler = base::BindRepeating(
+      &SecurityKeyIpcClient::OnChannelError, base::Unretained(this));
+  // There is a bug in Mojo, such that if the host rejects binding of session
+  // services, there is a chance that binding of SecurityKeyForwarder appears to
+  // be successful and the disconnect handler of `remote_` is never called, so
+  // `remote_` will remain invalid forever.
+  // The disconnect handler of session services is still called, so we set a
+  // disconnect handler on it.
+  // See https://crbug.com/425759818#comment8 for more context.
+  service_provider_->set_disconnect_handler(disconnect_handler);
+  service_provider_->GetSessionServices()->BindSecurityKeyForwarder(
+      security_key_forwarder_.BindNewPipeAndPassReceiver());
+  security_key_forwarder_.set_disconnect_handler(disconnect_handler);
+  // This is to determine if the peer binding is successful. If the connection
+  // is disconnected before OnQueryVersionResult() is called, it means the
+  // server has rejected the binding request.
+  security_key_forwarder_.QueryVersion(base::BindOnce(
+      &SecurityKeyIpcClient::OnQueryVersionResult, base::Unretained(this)));
 }
 
 }  // namespace remoting

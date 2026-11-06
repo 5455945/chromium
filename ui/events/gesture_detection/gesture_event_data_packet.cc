@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include "base/check_op.h"
 #include "base/notreached.h"
-#include "ui/events/gesture_detection/motion_event.h"
+#include "ui/events/velocity_tracker/motion_event.h"
 
 namespace ui {
 namespace {
@@ -32,11 +32,11 @@ GestureEventDataPacket::GestureSource ToGestureSource(
     case ui::MotionEvent::Action::HOVER_MOVE:
     case ui::MotionEvent::Action::BUTTON_PRESS:
     case ui::MotionEvent::Action::BUTTON_RELEASE:
+    case ui::MotionEvent::Action::OUTSIDE:
+    case ui::MotionEvent::Action::SCROLL:
       NOTREACHED();
-      return GestureEventDataPacket::INVALID;
   }
   NOTREACHED();
-  return GestureEventDataPacket::INVALID;
 }
 
 }  // namespace
@@ -50,75 +50,77 @@ GestureEventDataPacket::GestureEventDataPacket()
 GestureEventDataPacket::GestureEventDataPacket(
     base::TimeTicks timestamp,
     GestureSource source,
+    MotionEvent::ToolType tool_type,
     const gfx::PointF& touch_location,
     const gfx::PointF& raw_touch_location,
-    uint32_t unique_touch_event_id)
+    uint32_t unique_touch_event_id,
+    int flags)
     : timestamp_(timestamp),
       touch_location_(touch_location),
       raw_touch_location_(raw_touch_location),
       gesture_source_(source),
+      tool_type_(tool_type),
       ack_state_(AckState::PENDING),
-      unique_touch_event_id_(unique_touch_event_id) {
-  DCHECK_NE(gesture_source_, UNDEFINED);
+      unique_touch_event_id_(unique_touch_event_id),
+      flags_(flags) {
+  CHECK_NE(gesture_source_, UNDEFINED, base::NotFatalUntil::M163);
 }
 
 GestureEventDataPacket::GestureEventDataPacket(
-    const GestureEventDataPacket& other)
-    : timestamp_(other.timestamp_),
-      gestures_(other.gestures_),
-      touch_location_(other.touch_location_),
-      raw_touch_location_(other.raw_touch_location_),
-      gesture_source_(other.gesture_source_),
-      ack_state_(other.ack_state_),
-      unique_touch_event_id_(other.unique_touch_event_id_) {}
+    const GestureEventDataPacket& other) = default;
 
-GestureEventDataPacket::~GestureEventDataPacket() {
-}
+GestureEventDataPacket::~GestureEventDataPacket() = default;
 
 GestureEventDataPacket& GestureEventDataPacket::operator=(
-    const GestureEventDataPacket& other) {
-  timestamp_ = other.timestamp_;
-  gesture_source_ = other.gesture_source_;
-  touch_location_ = other.touch_location_;
-  raw_touch_location_ = other.raw_touch_location_;
-  gestures_ = other.gestures_;
-  ack_state_ = other.ack_state_;
-  unique_touch_event_id_ = other.unique_touch_event_id_;
-  return *this;
-}
+    const GestureEventDataPacket& other) = default;
 
 void GestureEventDataPacket::Push(const GestureEventData& original_gesture) {
-  DCHECK_NE(ET_UNKNOWN, original_gesture.type());
+  CHECK_NE(EventType::kUnknown, original_gesture.type(),
+           base::NotFatalUntil::M163);
   GestureEventData gesture(original_gesture);
   gesture.unique_touch_event_id = unique_touch_event_id_;
-  gestures_->push_back(gesture);
+  gestures_.push_back(gesture);
 }
 
 GestureEventDataPacket GestureEventDataPacket::FromTouch(
     const ui::MotionEvent& touch) {
   return GestureEventDataPacket(touch.GetEventTime(), ToGestureSource(touch),
+                                touch.GetToolType(),
                                 gfx::PointF(touch.GetX(), touch.GetY()),
                                 gfx::PointF(touch.GetRawX(), touch.GetRawY()),
-                                touch.GetUniqueEventId());
+                                touch.GetUniqueEventId(), touch.GetFlags());
 }
 
 GestureEventDataPacket GestureEventDataPacket::FromTouchTimeout(
     const GestureEventData& gesture) {
   GestureEventDataPacket packet(gesture.time, TOUCH_TIMEOUT,
+                                gesture.primary_tool_type,
                                 gfx::PointF(gesture.x, gesture.y),
                                 gfx::PointF(gesture.raw_x, gesture.raw_y),
-                                gesture.unique_touch_event_id);
+                                gesture.unique_touch_event_id, gesture.flags);
   packet.Push(gesture);
   return packet;
 }
 
 void GestureEventDataPacket::Ack(bool event_consumed,
                                  bool is_source_touch_event_set_blocking) {
-  DCHECK_EQ(static_cast<int>(ack_state_), static_cast<int>(AckState::PENDING));
+  CHECK_EQ(static_cast<int>(ack_state_), static_cast<int>(AckState::PENDING),
+           base::NotFatalUntil::M163);
   ack_state_ = event_consumed ? AckState::CONSUMED : AckState::UNCONSUMED;
-  for (auto& gesture : gestures_.container()) {
+  for (auto& gesture : gestures_) {
     gesture.details.set_is_source_touch_event_set_blocking(
         is_source_touch_event_set_blocking);
+  }
+}
+
+void GestureEventDataPacket::AddEventLatencyMetadataToGestures(
+    const EventLatencyMetadata& event_latency_metadata,
+    const base::RepeatingCallback<bool(const ui::GestureEventData&)>& filter) {
+  for (auto& gesture : gestures_) {
+    if (filter.Run(gesture)) {
+      gesture.details.GetModifiableEventLatencyMetadata() =
+          event_latency_metadata;
+    }
   }
 }
 

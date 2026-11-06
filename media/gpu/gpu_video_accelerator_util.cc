@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,9 +33,31 @@ STATIC_ASSERT_ENUM_MATCH(VP9PROFILE_PROFILE3);
 STATIC_ASSERT_ENUM_MATCH(HEVCPROFILE_MAIN);
 STATIC_ASSERT_ENUM_MATCH(HEVCPROFILE_MAIN10);
 STATIC_ASSERT_ENUM_MATCH(HEVCPROFILE_MAIN_STILL_PICTURE);
+STATIC_ASSERT_ENUM_MATCH(HEVCPROFILE_REXT);
+STATIC_ASSERT_ENUM_MATCH(HEVCPROFILE_HIGH_THROUGHPUT);
+STATIC_ASSERT_ENUM_MATCH(HEVCPROFILE_MULTIVIEW_MAIN);
+STATIC_ASSERT_ENUM_MATCH(HEVCPROFILE_SCALABLE_MAIN);
+STATIC_ASSERT_ENUM_MATCH(HEVCPROFILE_3D_MAIN);
+STATIC_ASSERT_ENUM_MATCH(HEVCPROFILE_SCREEN_EXTENDED);
+STATIC_ASSERT_ENUM_MATCH(HEVCPROFILE_SCALABLE_REXT);
+STATIC_ASSERT_ENUM_MATCH(HEVCPROFILE_HIGH_THROUGHPUT_SCREEN_EXTENDED);
+STATIC_ASSERT_ENUM_MATCH(DOLBYVISION_PROFILE0);
+STATIC_ASSERT_ENUM_MATCH(DOLBYVISION_PROFILE5);
+STATIC_ASSERT_ENUM_MATCH(DOLBYVISION_PROFILE7);
+STATIC_ASSERT_ENUM_MATCH(DOLBYVISION_PROFILE8);
+STATIC_ASSERT_ENUM_MATCH(DOLBYVISION_PROFILE9);
+STATIC_ASSERT_ENUM_MATCH(DOLBYVISION_PROFILE10);
+STATIC_ASSERT_ENUM_MATCH(DOLBYVISION_PROFILE20);
 STATIC_ASSERT_ENUM_MATCH(AV1PROFILE_PROFILE_MAIN);
 STATIC_ASSERT_ENUM_MATCH(AV1PROFILE_PROFILE_HIGH);
 STATIC_ASSERT_ENUM_MATCH(AV1PROFILE_PROFILE_PRO);
+STATIC_ASSERT_ENUM_MATCH(AV2PROFILE_MAIN_420_10_IP0);
+STATIC_ASSERT_ENUM_MATCH(AV2PROFILE_MAIN_420_10_IP1);
+STATIC_ASSERT_ENUM_MATCH(AV2PROFILE_MAIN_420_10_IP2);
+STATIC_ASSERT_ENUM_MATCH(AV2PROFILE_MAIN_422_10_IP1);
+STATIC_ASSERT_ENUM_MATCH(AV2PROFILE_MAIN_444_10_IP1);
+STATIC_ASSERT_ENUM_MATCH(AV2PROFILE_MAIN_444C_12_IP2);
+STATIC_ASSERT_ENUM_MATCH(AV2PROFILE_CONFIGURABLE);
 STATIC_ASSERT_ENUM_MATCH(VIDEO_CODEC_PROFILE_MAX);
 
 // static
@@ -94,6 +116,24 @@ GpuVideoAcceleratorUtil::ConvertMediaToGpuDecodeProfiles(
 }
 
 // static
+gpu::VideoDecodeAcceleratorSupportedProfiles
+GpuVideoAcceleratorUtil::ConvertMediaConfigsToGpuDecodeProfiles(
+    const SupportedVideoDecoderConfigs& configs) {
+  gpu::VideoDecodeAcceleratorSupportedProfiles profiles;
+  for (const auto& config : configs) {
+    for (int i = config.profile_min; i <= config.profile_max; i++) {
+      gpu::VideoDecodeAcceleratorSupportedProfile profile;
+      profile.profile = static_cast<gpu::VideoCodecProfile>(i);
+      profile.min_resolution = config.coded_size_min;
+      profile.max_resolution = config.coded_size_max;
+      profile.encrypted_only = config.require_encrypted;
+      profiles.push_back(profile);
+    }
+  }
+  return profiles;
+}
+
+// static
 VideoEncodeAccelerator::SupportedProfiles
 GpuVideoAcceleratorUtil::ConvertGpuToMediaEncodeProfiles(
     const gpu::VideoEncodeAcceleratorSupportedProfiles& gpu_profiles) {
@@ -105,6 +145,14 @@ GpuVideoAcceleratorUtil::ConvertGpuToMediaEncodeProfiles(
     profile.max_resolution = gpu_profile.max_resolution;
     profile.max_framerate_numerator = gpu_profile.max_framerate_numerator;
     profile.max_framerate_denominator = gpu_profile.max_framerate_denominator;
+    // If VBR is supported in the future, remove this hard-coding of CBR.
+    profile.rate_control_modes = media::VideoEncodeAccelerator::kConstantMode;
+    profile.is_software_codec = gpu_profile.is_software_codec;
+    if (gpu_profile.chroma_sampling.has_value()) {
+      profile.chroma_sampling =
+          static_cast<VideoChromaSampling>(gpu_profile.chroma_sampling.value());
+    }
+    profile.bit_depth = gpu_profile.bit_depth;
     profiles.push_back(profile);
   }
   return profiles;
@@ -123,6 +171,12 @@ GpuVideoAcceleratorUtil::ConvertMediaToGpuEncodeProfiles(
     profile.max_resolution = media_profile.max_resolution;
     profile.max_framerate_numerator = media_profile.max_framerate_numerator;
     profile.max_framerate_denominator = media_profile.max_framerate_denominator;
+    profile.is_software_codec = media_profile.is_software_codec;
+    if (media_profile.chroma_sampling.has_value()) {
+      profile.chroma_sampling =
+          static_cast<uint8_t>(media_profile.chroma_sampling.value());
+    }
+    profile.bit_depth = media_profile.bit_depth;
     profiles.push_back(profile);
   }
   return profiles;
@@ -152,7 +206,7 @@ void GpuVideoAcceleratorUtil::InsertUniqueEncodeProfiles(
   for (const auto& profile : new_profiles) {
     bool duplicate = false;
     for (const auto& media_profile : *media_profiles) {
-      if (media_profile.profile == profile.profile) {
+      if (media_profile == profile) {
         duplicate = true;
         break;
       }

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,16 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
+#include "components/download/internal/background_service/constants.h"
 #include "components/download/internal/background_service/log_sink.h"
 #include "components/download/public/background_service/download_params.h"
 #include "components/download/public/background_service/logger.h"
 
 namespace base {
-class Value;
+class DictValue;
+class ListValue;
 }
 
 namespace download {
@@ -28,6 +30,10 @@ struct Entry;
 class LoggerImpl : public Logger, public LogSink {
  public:
   LoggerImpl();
+
+  LoggerImpl(const LoggerImpl&) = delete;
+  LoggerImpl& operator=(const LoggerImpl&) = delete;
+
   ~LoggerImpl() override;
 
   void SetLogSource(LogSource* log_source);
@@ -36,8 +42,8 @@ class LoggerImpl : public Logger, public LogSink {
   // Logger implementation.
   void AddObserver(Observer* observer) override;
   void RemoveObserver(Observer* observer) override;
-  base::Value GetServiceStatus() override;
-  base::Value GetServiceDownloads() override;
+  base::DictValue GetServiceStatus() override;
+  base::ListValue GetServiceDownloads() override;
 
   // LogSink implementation.
   void OnServiceStatusChanged() override;
@@ -49,10 +55,8 @@ class LoggerImpl : public Logger, public LogSink {
                             const std::string& guid,
                             DownloadParams::StartResult start_result) override;
 
-  LogSource* log_source_;
+  raw_ptr<LogSource> log_source_;
   base::ObserverList<Observer>::Unchecked observers_;
-
-  DISALLOW_COPY_AND_ASSIGN(LoggerImpl);
 };
 
 }  // namespace download

@@ -1,20 +1,19 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SECURITY_INTERSTITIALS_CONTENT_INSECURE_FORM_NAVIGATION_THROTTLE_H_
 #define COMPONENTS_SECURITY_INTERSTITIALS_CONTENT_INSECURE_FORM_NAVIGATION_THROTTLE_H_
 
+#include "base/feature_list.h"
 #include "components/security_interstitials/content/security_blocking_page_factory.h"
 #include "content/public/browser/navigation_throttle.h"
-
-namespace content {
-class NavigationHandle;
-}  // namespace content
 
 class PrefService;
 
 namespace security_interstitials {
+
+BASE_DECLARE_FEATURE(kBlockMixedFormsGetRedirects);
 
 class InsecureFormNavigationThrottle : public content::NavigationThrottle {
  public:
@@ -29,7 +28,7 @@ class InsecureFormNavigationThrottle : public content::NavigationThrottle {
   };
 
   InsecureFormNavigationThrottle(
-      content::NavigationHandle* navigation_handle,
+      content::NavigationThrottleRegistry& registry,
       std::unique_ptr<SecurityBlockingPageFactory> blocking_page_factory);
   ~InsecureFormNavigationThrottle() override;
 
@@ -39,9 +38,8 @@ class InsecureFormNavigationThrottle : public content::NavigationThrottle {
   ThrottleCheckResult WillProcessResponse() override;
   const char* GetNameForLogging() override;
 
-  static std::unique_ptr<InsecureFormNavigationThrottle>
-  MaybeCreateNavigationThrottle(
-      content::NavigationHandle* navigation_handle,
+  static void MaybeCreateAndAdd(
+      content::NavigationThrottleRegistry& registry,
       std::unique_ptr<SecurityBlockingPageFactory> blocking_page_factory,
       PrefService* prefs);
 

@@ -1,17 +1,18 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ash/test/ui_controls_factory_ash.h"
+#include "ash/test/ui_controls_ash.h"
 #include "base/command_line.h"
-#include "base/test/launcher/test_launcher.h"
 #include "chrome/test/base/chrome_test_launcher.h"
 #include "chrome/test/base/chrome_test_suite.h"
+#include "content/public/test/test_launcher.h"
+#include "services/tracing/public/cpp/perfetto/perfetto_traced_process.h"
 #include "ui/base/test/ui_controls.h"
 
 // This class is introduced to provide ui_controls since some test cases use
 // it. Ideally such tests should be moved into interactive_ui_tests.
-// TODO(mukai): remove this after moving such tests.
+// TODO(crbug.com/40268116): remove this after moving such tests.
 class BrowserTestSuiteChromeOS : public ChromeTestSuite {
  public:
   BrowserTestSuiteChromeOS(int argc, char** argv)
@@ -22,7 +23,7 @@ class BrowserTestSuiteChromeOS : public ChromeTestSuite {
   // ChromeTestSuite overrides:
   void Initialize() override {
     ChromeTestSuite::Initialize();
-    ui_controls::InstallUIControlsAura(ash::test::CreateAshUIControls());
+    ash::test::EnableUIControlsAsh();
   }
 };
 
@@ -38,11 +39,12 @@ class BrowserTestSuiteRunnerChromeOS : public ChromeTestSuiteRunner {
 
 int main(int argc, char** argv) {
   base::CommandLine::Init(argc, argv);
-  size_t parallel_jobs = base::NumParallelJobs(/*cores_per_job=*/2);
+  size_t parallel_jobs = content::NumParallelJobsForBrowserTests();
   if (parallel_jobs == 0U)
     return 1;
 
   BrowserTestSuiteRunnerChromeOS runner;
   ChromeTestLauncherDelegate delegate(&runner);
+
   return LaunchChromeTests(parallel_jobs, &delegate, argc, argv);
 }

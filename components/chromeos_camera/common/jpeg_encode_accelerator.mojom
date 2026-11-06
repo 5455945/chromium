@@ -1,7 +1,8 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// Next min version: 2
 module chromeos_camera.mojom;
 
 import "components/chromeos_camera/common/dmabuf.mojom";
@@ -41,10 +42,15 @@ interface JpegEncodeAccelerator {
   // Returns |task_id| and |error| in a callback to notify the
   // encode status. |status| is the status code. |encoded_buffer_size| is the
   // actual size of the encoded JPEG.
-  EncodeWithFD(int32 task_id, handle input_fd, uint32 input_buffer_size,
-               int32 coded_size_width, int32 coded_size_height,
-               handle exif_fd, uint32 exif_buffer_size,
-               handle output_fd, uint32 output_buffer_size)
+  EncodeWithFD(int32 task_id,
+               handle<platform> input_fd,
+               uint32 input_buffer_size,
+               int32 coded_size_width,
+               int32 coded_size_height,
+               handle<platform> exif_fd,
+               uint32 exif_buffer_size,
+               handle<platform> output_fd,
+               uint32 output_buffer_size)
       => (int32 task_id, uint32 encoded_buffer_size, EncodeStatus status);
 
   // Encodes the given DMA-buf. |task_id| is used to distinguish different
@@ -56,17 +62,22 @@ interface JpegEncodeAccelerator {
   // amount of plane information |input_planes| and |output_planes| should be
   // same as the number of planes. |exif_handle| is the shared memory buffer,
   // with |exif_buffer_size| as size, containing Exif data which will be put
-  // onto APP1 segment in the output JPEG image. When the task ends, it returns
-  // |status| as the status code and |encoded_buffer_size| is the actual size of
-  // the encoded JPEG.
-  EncodeWithDmaBuf(
-      int32 task_id,
-      uint32 input_format,
-      array<DmaBufPlane> input_planes,
-      array<DmaBufPlane> output_planes,
-      handle exif_handle,
-      uint32 exif_buffer_size,
-      int32 coded_size_width,
-      int32 coded_size_height)
+  // onto APP1 segment in the output JPEG image. |quality| is the quality of
+  // JPEG image. The range is from 1~100. High value means high quality. When
+  // the task ends, it returns |status| as the status code and
+  // |encoded_buffer_size| is the actual size of the encoded JPEG. The
+  // |input_modifier| of input buffer is valid only if |has_input_modifier| is
+  // true.
+  EncodeWithDmaBuf(int32 task_id,
+                   uint32 input_format,
+                   array<DmaBufPlane> input_planes,
+                   array<DmaBufPlane> output_planes,
+                   handle<platform> exif_handle,
+                   uint32 exif_buffer_size,
+                   int32 coded_size_width,
+                   int32 coded_size_height,
+                   int32 quality,
+                   [MinVersion=1] bool has_input_modifier,
+                   [MinVersion=1] uint64 input_modifier)
       => (uint32 encoded_buffer_size, EncodeStatus status);
 };

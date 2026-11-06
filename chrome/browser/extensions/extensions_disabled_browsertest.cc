@@ -1,16 +1,23 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/macros.h"
+#include "base/command_line.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_switches.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/extensions_browser_client.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/manifest.h"
+#include "extensions/common/switches.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -22,6 +29,11 @@ constexpr char kSimpleWithKeyExtensionId[] = "iegclhlplifhodhkoafiokenjoapiobj";
 class ExtensionsDisabledBrowserTest : public ExtensionBrowserTest {
  public:
   ExtensionsDisabledBrowserTest() = default;
+
+  ExtensionsDisabledBrowserTest(const ExtensionsDisabledBrowserTest&) = delete;
+  ExtensionsDisabledBrowserTest& operator=(
+      const ExtensionsDisabledBrowserTest&) = delete;
+
   ~ExtensionsDisabledBrowserTest() override = default;
   void SetUpCommandLine(base::CommandLine* command_line) override {
     // A little tricky: we disable extensions (via the commandline) on the
@@ -31,16 +43,13 @@ class ExtensionsDisabledBrowserTest : public ExtensionBrowserTest {
     const char* test_name =
         testing::UnitTest::GetInstance()->current_test_info()->name();
     if (!base::StartsWith(test_name, "PRE_", base::CompareCase::SENSITIVE)) {
-      command_line->AppendSwitch(::switches::kDisableExtensions);
+      command_line->AppendSwitch(switches::kDisableExtensions);
     }
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ExtensionsDisabledBrowserTest);
 };
 
 // Tests installing a number of extensions, and then restarting Chrome with the
-// --disable-extensions switch. Regression test for https://crbug.com/836624.
+// --disable-extensions switch. Regression test for https://crbug.com/41385385.
 IN_PROC_BROWSER_TEST_F(ExtensionsDisabledBrowserTest,
                        PRE_TestStartupWithInstalledExtensions) {
   const Extension* unpacked_extension =
@@ -62,6 +71,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsDisabledBrowserTest,
   EXPECT_TRUE(prefs->GetInstalledExtensionInfo(kGoodExtensionId));
   EXPECT_TRUE(prefs->GetInstalledExtensionInfo(kSimpleWithKeyExtensionId));
 }
+
 IN_PROC_BROWSER_TEST_F(ExtensionsDisabledBrowserTest,
                        TestStartupWithInstalledExtensions) {
   EXPECT_TRUE(ExtensionsBrowserClient::Get()->AreExtensionsDisabled(

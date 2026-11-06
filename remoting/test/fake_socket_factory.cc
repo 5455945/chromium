@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,20 +8,22 @@
 #include <cstddef>
 #include <cstdlib>
 #include <memory>
+#include <numbers>
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
-#include "base/macros.h"
-#include "base/numerics/math_constants.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/memory/raw_ptr.h"
+#include "base/notimplemented.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "net/base/io_buffer.h"
 #include "remoting/base/leaky_bucket.h"
-#include "third_party/webrtc/media/base/rtp_utils.h"
+#include "third_party/webrtc/api/units/timestamp.h"
 #include "third_party/webrtc/rtc_base/async_packet_socket.h"
+#include "third_party/webrtc/rtc_base/network/received_packet.h"
 #include "third_party/webrtc/rtc_base/socket.h"
 #include "third_party/webrtc/rtc_base/time_utils.h"
 
@@ -40,93 +42,92 @@ double GetNormalRandom(double average, double stddev) {
   // Based on Box-Muller transform, see
   // http://en.wikipedia.org/wiki/Box_Muller_transform .
   return average + stddev * sqrt(-2.0 * log(1.0 - RandDouble())) *
-                       cos(RandDouble() * 2.0 * base::kPiDouble);
+                       cos(RandDouble() * 2.0 * std::numbers::pi);
 }
 
-class FakeUdpSocket : public rtc::AsyncPacketSocket {
+class FakeUdpSocket : public webrtc::AsyncPacketSocket {
  public:
   FakeUdpSocket(FakePacketSocketFactory* factory,
                 scoped_refptr<FakeNetworkDispatcher> dispatcher,
-                const rtc::SocketAddress& local_address);
+                const webrtc::SocketAddress& local_address);
+
+  FakeUdpSocket(const FakeUdpSocket&) = delete;
+  FakeUdpSocket& operator=(const FakeUdpSocket&) = delete;
+
   ~FakeUdpSocket() override;
 
-  void ReceivePacket(const rtc::SocketAddress& from,
-                     const rtc::SocketAddress& to,
+  void ReceivePacket(const webrtc::SocketAddress& from,
+                     const webrtc::SocketAddress& to,
                      const scoped_refptr<net::IOBuffer>& data,
                      int data_size);
 
-  // rtc::AsyncPacketSocket interface.
-  rtc::SocketAddress GetLocalAddress() const override;
-  rtc::SocketAddress GetRemoteAddress() const override;
+  // webrtc::AsyncPacketSocket interface.
+  webrtc::SocketAddress GetLocalAddress() const override;
+  webrtc::SocketAddress GetRemoteAddress() const override;
   int Send(const void* data,
            size_t data_size,
-           const rtc::PacketOptions& options) override;
+           const webrtc::AsyncSocketPacketOptions& options) override;
   int SendTo(const void* data,
              size_t data_size,
-             const rtc::SocketAddress& address,
-             const rtc::PacketOptions& options) override;
+             const webrtc::SocketAddress& address,
+             const webrtc::AsyncSocketPacketOptions& options) override;
   int Close() override;
   State GetState() const override;
-  int GetOption(rtc::Socket::Option option, int* value) override;
-  int SetOption(rtc::Socket::Option option, int value) override;
+  int GetOption(webrtc::Socket::Option option, int* value) override;
+  int SetOption(webrtc::Socket::Option option, int value) override;
   int GetError() const override;
   void SetError(int error) override;
 
  private:
-  FakePacketSocketFactory* factory_;
+  raw_ptr<FakePacketSocketFactory> factory_;
   scoped_refptr<FakeNetworkDispatcher> dispatcher_;
-  rtc::SocketAddress local_address_;
+  webrtc::SocketAddress local_address_;
   State state_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeUdpSocket);
 };
 
 FakeUdpSocket::FakeUdpSocket(FakePacketSocketFactory* factory,
                              scoped_refptr<FakeNetworkDispatcher> dispatcher,
-                             const rtc::SocketAddress& local_address)
+                             const webrtc::SocketAddress& local_address)
     : factory_(factory),
       dispatcher_(dispatcher),
       local_address_(local_address),
-      state_(STATE_BOUND) {
-}
+      state_(STATE_BOUND) {}
 
 FakeUdpSocket::~FakeUdpSocket() {
   factory_->OnSocketDestroyed(local_address_.port());
 }
 
-void FakeUdpSocket::ReceivePacket(const rtc::SocketAddress& from,
-                                  const rtc::SocketAddress& to,
+void FakeUdpSocket::ReceivePacket(const webrtc::SocketAddress& from,
+                                  const webrtc::SocketAddress& to,
                                   const scoped_refptr<net::IOBuffer>& data,
                                   int data_size) {
-  SignalReadPacket(this, data->data(), data_size, from, rtc::TimeMicros());
+  NotifyPacketReceived(webrtc::ReceivedIpPacket(
+      data->span().first(static_cast<size_t>(data_size)), from,
+      webrtc::Timestamp::Micros(webrtc::TimeMicros())));
 }
 
-rtc::SocketAddress FakeUdpSocket::GetLocalAddress() const {
+webrtc::SocketAddress FakeUdpSocket::GetLocalAddress() const {
   return local_address_;
 }
 
-rtc::SocketAddress FakeUdpSocket::GetRemoteAddress() const {
+webrtc::SocketAddress FakeUdpSocket::GetRemoteAddress() const {
   NOTREACHED();
-  return rtc::SocketAddress();
 }
 
-int FakeUdpSocket::Send(const void* data, size_t data_size,
-                        const rtc::PacketOptions& options) {
+int FakeUdpSocket::Send(const void* data,
+                        size_t data_size,
+                        const webrtc::AsyncSocketPacketOptions& options) {
   NOTREACHED();
-  return EINVAL;
 }
 
-int FakeUdpSocket::SendTo(const void* data, size_t data_size,
-                          const rtc::SocketAddress& address,
-                          const rtc::PacketOptions& options) {
-  scoped_refptr<net::IOBuffer> buffer =
-      base::MakeRefCounted<net::IOBuffer>(data_size);
-  memcpy(buffer->data(), data, data_size);
-  base::TimeTicks now = base::TimeTicks::Now();
-  cricket::ApplyPacketOptions(reinterpret_cast<uint8_t*>(buffer->data()),
-                              data_size, options.packet_time_params,
-                              (now - base::TimeTicks()).InMicroseconds());
-  SignalSentPacket(this, rtc::SentPacket(options.packet_id, rtc::TimeMillis()));
+int FakeUdpSocket::SendTo(const void* data,
+                          size_t data_size,
+                          const webrtc::SocketAddress& address,
+                          const webrtc::AsyncSocketPacketOptions& options) {
+  auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(data_size);
+  UNSAFE_TODO(memcpy(buffer->data(), data, data_size));
+  NotifySentPacket(
+      this, webrtc::SentPacketInfo(options.packet_id, webrtc::TimeMillis()));
   dispatcher_->DeliverPacket(local_address_, address, buffer, data_size);
   return data_size;
 }
@@ -136,16 +137,16 @@ int FakeUdpSocket::Close() {
   return 0;
 }
 
-rtc::AsyncPacketSocket::State FakeUdpSocket::GetState() const {
+webrtc::AsyncPacketSocket::State FakeUdpSocket::GetState() const {
   return state_;
 }
 
-int FakeUdpSocket::GetOption(rtc::Socket::Option option, int* value) {
+int FakeUdpSocket::GetOption(webrtc::Socket::Option option, int* value) {
   NOTIMPLEMENTED();
   return -1;
 }
 
-int FakeUdpSocket::SetOption(rtc::Socket::Option option, int value) {
+int FakeUdpSocket::SetOption(webrtc::Socket::Option option, int value) {
   // All options are currently ignored.
   return 0;
 }
@@ -160,17 +161,14 @@ void FakeUdpSocket::SetError(int error) {
 
 }  // namespace
 
-FakePacketSocketFactory::PendingPacket::PendingPacket()
-    : data_size(0) {
-}
+FakePacketSocketFactory::PendingPacket::PendingPacket() : data_size(0) {}
 
 FakePacketSocketFactory::PendingPacket::PendingPacket(
-    const rtc::SocketAddress& from,
-    const rtc::SocketAddress& to,
+    const webrtc::SocketAddress& from,
+    const webrtc::SocketAddress& to,
     const scoped_refptr<net::IOBuffer>& data,
     int data_size)
-    : from(from), to(to), data(data), data_size(data_size) {
-}
+    : from(from), to(to), data(data), data_size(data_size) {}
 
 FakePacketSocketFactory::PendingPacket::PendingPacket(
     const PendingPacket& other) = default;
@@ -179,7 +177,7 @@ FakePacketSocketFactory::PendingPacket::~PendingPacket() = default;
 
 FakePacketSocketFactory::FakePacketSocketFactory(
     FakeNetworkDispatcher* dispatcher)
-    : task_runner_(base::ThreadTaskRunnerHandle::Get()),
+    : task_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()),
       dispatcher_(dispatcher),
       address_(dispatcher_->AllocateAddress()),
       out_of_order_rate_(0.0),
@@ -213,8 +211,10 @@ void FakePacketSocketFactory::SetLatency(base::TimeDelta average,
   latency_stddev_ = stddev;
 }
 
-rtc::AsyncPacketSocket* FakePacketSocketFactory::CreateUdpSocket(
-    const rtc::SocketAddress& local_address,
+std::unique_ptr<webrtc::AsyncPacketSocket>
+FakePacketSocketFactory::CreateUdpSocket(
+    const webrtc::Environment& /*env*/,
+    const webrtc::SocketAddress& local_address,
     uint16_t min_port,
     uint16_t max_port) {
   DCHECK(task_runner_->BelongsToCurrentThread());
@@ -222,52 +222,54 @@ rtc::AsyncPacketSocket* FakePacketSocketFactory::CreateUdpSocket(
   int port = -1;
   if (min_port > 0 && max_port > 0) {
     for (uint16_t i = min_port; i <= max_port; ++i) {
-      if (udp_sockets_.find(i) == udp_sockets_.end()) {
+      if (!udp_sockets_.contains(i)) {
         port = i;
         break;
       }
     }
-    if (port < 0)
+    if (port < 0) {
       return nullptr;
+    }
   } else {
     do {
       port = next_port_;
       next_port_ =
           (next_port_ >= kPortRangeEnd) ? kPortRangeStart : (next_port_ + 1);
-    } while (udp_sockets_.find(port) != udp_sockets_.end());
+    } while (udp_sockets_.contains(port));
   }
 
   CHECK(local_address.ipaddr() == address_);
 
-  FakeUdpSocket* result =
-      new FakeUdpSocket(this, dispatcher_,
-                        rtc::SocketAddress(local_address.ipaddr(), port));
+  auto result = std::make_unique<FakeUdpSocket>(
+      this, dispatcher_, webrtc::SocketAddress(local_address.ipaddr(), port));
 
   udp_sockets_[port] = base::BindRepeating(&FakeUdpSocket::ReceivePacket,
-                                           base::Unretained(result));
+                                           base::Unretained(result.get()));
 
   return result;
 }
 
-rtc::AsyncPacketSocket* FakePacketSocketFactory::CreateServerTcpSocket(
-    const rtc::SocketAddress& local_address,
+std::unique_ptr<webrtc::AsyncListenSocket>
+FakePacketSocketFactory::CreateServerTcpSocket(
+    const webrtc::Environment& env,
+    const webrtc::SocketAddress& local_address,
     uint16_t min_port,
     uint16_t max_port,
     int opts) {
   return nullptr;
 }
 
-rtc::AsyncPacketSocket* FakePacketSocketFactory::CreateClientTcpSocket(
-    const rtc::SocketAddress& local_address,
-    const rtc::SocketAddress& remote_address,
-    const rtc::ProxyInfo& proxy_info,
-    const std::string& user_agent,
-    const rtc::PacketSocketTcpOptions& opts) {
+std::unique_ptr<webrtc::AsyncPacketSocket>
+FakePacketSocketFactory::CreateClientTcpSocket(
+    const webrtc::Environment& env,
+    const webrtc::SocketAddress& local_address,
+    const webrtc::SocketAddress& remote_address,
+    const webrtc::PacketSocketTcpOptions& opts) {
   return nullptr;
 }
 
-rtc::AsyncResolverInterface*
-FakePacketSocketFactory::CreateAsyncResolver() {
+std::unique_ptr<webrtc::AsyncDnsResolverInterface>
+FakePacketSocketFactory::CreateAsyncDnsResolver() {
   return nullptr;
 }
 
@@ -276,13 +278,13 @@ FakePacketSocketFactory::GetThread() const {
   return task_runner_;
 }
 
-const rtc::IPAddress& FakePacketSocketFactory::GetAddress() const {
+const webrtc::IPAddress& FakePacketSocketFactory::GetAddress() const {
   return address_;
 }
 
 void FakePacketSocketFactory::ReceivePacket(
-    const rtc::SocketAddress& from,
-    const rtc::SocketAddress& to,
+    const webrtc::SocketAddress& from,
+    const webrtc::SocketAddress& to,
     const scoped_refptr<net::IOBuffer>& data,
     int data_size) {
   DCHECK(task_runner_->BelongsToCurrentThread());
@@ -301,17 +303,18 @@ void FakePacketSocketFactory::ReceivePacket(
   }
 
   total_buffer_delay_ += delay;
-  if (delay > max_buffer_delay_)
+  if (delay > max_buffer_delay_) {
     max_buffer_delay_ = delay;
+  }
   ++total_packets_received_;
 
-  if (latency_average_ > base::TimeDelta()) {
-    delay += base::TimeDelta::FromMillisecondsD(
-        GetNormalRandom(latency_average_.InMillisecondsF(),
-                        latency_stddev_.InMillisecondsF()));
+  if (latency_average_.is_positive()) {
+    delay += base::Milliseconds(GetNormalRandom(
+        latency_average_.InMillisecondsF(), latency_stddev_.InMillisecondsF()));
   }
-  if (delay < base::TimeDelta())
+  if (delay.is_negative()) {
     delay = base::TimeDelta();
+  }
 
   // Put the packet to the |pending_packets_| and post a task for
   // DoReceivePackets(). Note that the DoReceivePackets() task posted here may

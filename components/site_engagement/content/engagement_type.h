@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,16 +13,16 @@ namespace site_engagement {
 // tools/metrics/histograms/enums.xml.
 // TODO(calamity): Document each of these engagement types.
 enum class EngagementType {
-  kNavigation,
-  kKeypress,
-  kMouse,
-  kTouchGesture,
-  kScroll,
-  kMediaHidden,
-  kMediaVisible,
-  kWebappShortcutLaunch,
-  kFirstDailyEngagement,
-  kNotificationInteraction,
+  kNavigation = 0,
+  kKeypress = 1,
+  kMouse = 2,
+  kTouchGesture = 3,
+  kScroll = 4,
+  kMediaHidden = 5,
+  kMediaVisible = 6,
+  kWebappShortcutLaunch = 7,
+  kFirstDailyEngagement = 8,
+  kNotificationInteraction = 9,
   kLast,
 };
 

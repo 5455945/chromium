@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,11 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/macros.h"
+#include "base/observer_list.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/local_discovery/service_discovery_client_impl.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -37,12 +37,15 @@ class ServiceDiscoveryClientMdns::Proxy {
   using WeakPtr = base::WeakPtr<Proxy>;
 
   explicit Proxy(ServiceDiscoveryClientMdns* client) : client_(client) {
-    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
     client_->proxies_.AddObserver(this);
   }
 
+  Proxy(const Proxy&) = delete;
+  Proxy& operator=(const Proxy&) = delete;
+
   virtual ~Proxy() {
-    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
     client_->proxies_.RemoveObserver(this);
   }
 
@@ -54,7 +57,7 @@ class ServiceDiscoveryClientMdns::Proxy {
 
   // Notifies proxies that new mDNS instance is ready.
   virtual void OnNewMdnsReady() {
-    DCHECK(!client_->need_delay_mdns_tasks_);
+    CHECK(!client_->need_delay_mdns_tasks_, base::NotFatalUntil::M161);
     if (IsValid()) {
       for (auto& task : delayed_tasks_)
         client_->mdns_runner_->PostTask(FROM_HERE, std::move(task));
@@ -65,13 +68,13 @@ class ServiceDiscoveryClientMdns::Proxy {
   // Runs callback using this method to abort callback if instance of |Proxy|
   // is deleted.
   void RunCallback(base::OnceClosure callback) {
-    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
     std::move(callback).Run();
   }
 
  protected:
   void PostToMdnsThread(base::OnceClosure task) {
-    DCHECK(IsValid());
+    CHECK(IsValid(), base::NotFatalUntil::M161);
     // The first task on the IO thread for each |mdns_| instance must be
     // InitMdns(). OnInterfaceListReady() could be delayed by
     // GetMDnsInterfacesToBind() running on a background task runner, so
@@ -101,8 +104,9 @@ class ServiceDiscoveryClientMdns::Proxy {
   void DeleteOnMdnsThread(T* t) {
     if (!t)
       return;
-    if (!client_->mdns_runner_->DeleteSoon(FROM_HERE, t))
-      delete t;
+    // If DeleteSoon fails to run `t` will be leaked as it is unsafe to
+    // delete t on the current thread.
+    client_->mdns_runner_->DeleteSoon(FROM_HERE, t);
   }
 
  private:
@@ -110,8 +114,6 @@ class ServiceDiscoveryClientMdns::Proxy {
   // Delayed |mdns_runner_| tasks.
   std::vector<base::OnceClosure> delayed_tasks_;
   base::WeakPtrFactory<Proxy> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(Proxy);
 };
 
 namespace {
@@ -126,12 +128,16 @@ class SocketFactory : public net::MDnsSocketFactory {
   explicit SocketFactory(const net::InterfaceIndexFamilyList& interfaces)
       : interfaces_(interfaces) {}
 
+  SocketFactory(const SocketFactory&) = delete;
+  SocketFactory& operator=(const SocketFactory&) = delete;
+
   // net::MDnsSocketFactory implementation:
   void CreateSockets(std::vector<std::unique_ptr<net::DatagramServerSocket>>*
                          sockets) override {
     for (size_t i = 0; i < interfaces_.size(); ++i) {
-      DCHECK(interfaces_[i].second == net::ADDRESS_FAMILY_IPV4 ||
-             interfaces_[i].second == net::ADDRESS_FAMILY_IPV6);
+      CHECK(interfaces_[i].second == net::ADDRESS_FAMILY_IPV4 ||
+                interfaces_[i].second == net::ADDRESS_FAMILY_IPV6,
+            base::NotFatalUntil::M161);
       std::unique_ptr<net::DatagramServerSocket> socket(CreateAndBindMDnsSocket(
           interfaces_[i].second, interfaces_[i].first, nullptr /* net_log */));
       if (socket)
@@ -141,8 +147,6 @@ class SocketFactory : public net::MDnsSocketFactory {
 
  private:
   net::InterfaceIndexFamilyList interfaces_;
-
-  DISALLOW_COPY_AND_ASSIGN(SocketFactory);
 };
 
 void InitMdns(MdnsInitCallback on_initialized,
@@ -162,6 +166,9 @@ class ProxyBase : public ServiceDiscoveryClientMdns::Proxy, public T {
   explicit ProxyBase(ServiceDiscoveryClientMdns* client)
       : Proxy(client) {
   }
+
+  ProxyBase(const ProxyBase&) = delete;
+  ProxyBase& operator=(const ProxyBase&) = delete;
 
   ~ProxyBase() override {
     DeleteOnMdnsThread(implementation_.release());
@@ -186,8 +193,6 @@ class ProxyBase : public ServiceDiscoveryClientMdns::Proxy, public T {
 
  private:
   std::unique_ptr<T> implementation_;
-
-  DISALLOW_COPY_AND_ASSIGN(ProxyBase);
 };
 
 class ServiceWatcherProxy : public ProxyBase<ServiceWatcher> {
@@ -204,6 +209,9 @@ class ServiceWatcherProxy : public ProxyBase<ServiceWatcher> {
         service_type, base::BindRepeating(&ServiceWatcherProxy::OnCallback,
                                           GetWeakPtr(), std::move(callback))));
   }
+
+  ServiceWatcherProxy(const ServiceWatcherProxy&) = delete;
+  ServiceWatcherProxy& operator=(const ServiceWatcherProxy&) = delete;
 
   // ServiceWatcher methods.
   void Start() override {
@@ -241,14 +249,13 @@ class ServiceWatcherProxy : public ProxyBase<ServiceWatcher> {
                          ServiceWatcher::UpdatedCallback callback,
                          UpdateType a1,
                          const std::string& a2) {
-    DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::UI));
+    CHECK(!BrowserThread::CurrentlyOn(BrowserThread::UI),
+          base::NotFatalUntil::M161);
     PostToUIThread(base::BindOnce(&Base::RunCallback, proxy,
                                   base::BindOnce(std::move(callback), a1, a2)));
   }
   std::string service_type_;
   ServiceWatcher::UpdatedCallback callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(ServiceWatcherProxy);
 };
 
 class ServiceResolverProxy : public ProxyBase<ServiceResolver> {
@@ -263,6 +270,9 @@ class ServiceResolverProxy : public ProxyBase<ServiceResolver> {
         service_name, base::BindOnce(&ServiceResolverProxy::OnCallback,
                                      GetWeakPtr(), std::move(callback))));
   }
+
+  ServiceResolverProxy(const ServiceResolverProxy&) = delete;
+  ServiceResolverProxy& operator=(const ServiceResolverProxy&) = delete;
 
   // ServiceResolver methods.
   void StartResolving() override {
@@ -279,14 +289,13 @@ class ServiceResolverProxy : public ProxyBase<ServiceResolver> {
                          ServiceResolver::ResolveCompleteCallback callback,
                          RequestStatus a1,
                          const ServiceDescription& a2) {
-    DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::UI));
+    CHECK(!BrowserThread::CurrentlyOn(BrowserThread::UI),
+          base::NotFatalUntil::M161);
     PostToUIThread(base::BindOnce(&Base::RunCallback, proxy,
                                   base::BindOnce(std::move(callback), a1, a2)));
   }
 
   std::string service_name_;
-
-  DISALLOW_COPY_AND_ASSIGN(ServiceResolverProxy);
 };
 
 class LocalDomainResolverProxy : public ProxyBase<LocalDomainResolver> {
@@ -304,6 +313,9 @@ class LocalDomainResolverProxy : public ProxyBase<LocalDomainResolver> {
                        std::move(callback))));
   }
 
+  LocalDomainResolverProxy(const LocalDomainResolverProxy&) = delete;
+  LocalDomainResolverProxy& operator=(const LocalDomainResolverProxy&) = delete;
+
   // LocalDomainResolver methods.
   void Start() override {
     if (implementation()) {
@@ -318,20 +330,19 @@ class LocalDomainResolverProxy : public ProxyBase<LocalDomainResolver> {
                          bool a1,
                          const net::IPAddress& a2,
                          const net::IPAddress& a3) {
-    DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::UI));
+    CHECK(!BrowserThread::CurrentlyOn(BrowserThread::UI),
+          base::NotFatalUntil::M161);
     PostToUIThread(
         base::BindOnce(&Base::RunCallback, proxy,
                        base::BindOnce(std::move(callback), a1, a2, a3)));
   }
-
-  DISALLOW_COPY_AND_ASSIGN(LocalDomainResolverProxy);
 };
 
 }  // namespace
 
 ServiceDiscoveryClientMdns::ServiceDiscoveryClientMdns()
     : mdns_runner_(content::GetIOThreadTaskRunner({})) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   content::GetNetworkConnectionTracker()->AddNetworkConnectionObserver(this);
   StartNewClient();
 }
@@ -340,7 +351,7 @@ std::unique_ptr<ServiceWatcher>
 ServiceDiscoveryClientMdns::CreateServiceWatcher(
     const std::string& service_type,
     ServiceWatcher::UpdatedCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   return std::make_unique<ServiceWatcherProxy>(this, service_type,
                                                std::move(callback));
 }
@@ -349,7 +360,7 @@ std::unique_ptr<ServiceResolver>
 ServiceDiscoveryClientMdns::CreateServiceResolver(
     const std::string& service_name,
     ServiceResolver::ResolveCompleteCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   return std::make_unique<ServiceResolverProxy>(this, service_name,
                                                 std::move(callback));
 }
@@ -359,41 +370,41 @@ ServiceDiscoveryClientMdns::CreateLocalDomainResolver(
     const std::string& domain,
     net::AddressFamily address_family,
     LocalDomainResolver::IPAddressCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   return std::make_unique<LocalDomainResolverProxy>(
       this, domain, address_family, std::move(callback));
 }
 
 ServiceDiscoveryClientMdns::~ServiceDiscoveryClientMdns() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   content::GetNetworkConnectionTracker()->RemoveNetworkConnectionObserver(this);
   DestroyMdns();
 }
 
 void ServiceDiscoveryClientMdns::OnConnectionChanged(
-    network::mojom::ConnectionType type) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    net::NetworkChangeNotifier::ConnectionType type) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   // Only network changes resets counter.
   restart_attempts_ = 0;
   ScheduleStartNewClient();
 }
 
 void ServiceDiscoveryClientMdns::ScheduleStartNewClient() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   OnBeforeMdnsDestroy();
   if (restart_attempts_ >= kMaxRestartAttempts)
     return;
 
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&ServiceDiscoveryClientMdns::StartNewClient,
                      weak_ptr_factory_.GetWeakPtr()),
-      base::TimeDelta::FromSeconds(kRestartDelayOnNetworkChangeSeconds *
-                                   (1 << restart_attempts_)));
+      base::Seconds(kRestartDelayOnNetworkChangeSeconds *
+                    (1 << restart_attempts_)));
 }
 
 void ServiceDiscoveryClientMdns::StartNewClient() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   ++restart_attempts_;
   DestroyMdns();
   mdns_ = net::MDnsClient::CreateDefault();
@@ -407,7 +418,7 @@ void ServiceDiscoveryClientMdns::StartNewClient() {
 
 void ServiceDiscoveryClientMdns::OnInterfaceListReady(
     const net::InterfaceIndexFamilyList& interfaces) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   mdns_runner_->PostTask(
       FROM_HERE,
       base::BindOnce(
@@ -418,7 +429,7 @@ void ServiceDiscoveryClientMdns::OnInterfaceListReady(
 }
 
 void ServiceDiscoveryClientMdns::OnMdnsInitialized(int net_error) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   if (net_error != net::OK) {
     ScheduleStartNewClient();
     return;

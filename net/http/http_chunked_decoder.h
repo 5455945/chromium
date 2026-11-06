@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -48,8 +48,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 
+#include "base/containers/span.h"
 #include "net/base/net_export.h"
 
 namespace net {
@@ -85,48 +87,60 @@ class NET_EXPORT_PRIVATE HttpChunkedDecoder {
   static const size_t kMaxLineBufLen;
 
   HttpChunkedDecoder();
+  HttpChunkedDecoder(const HttpChunkedDecoder&) = delete;
+  HttpChunkedDecoder& operator=(const HttpChunkedDecoder&) = delete;
+  ~HttpChunkedDecoder();
+
+  static HttpChunkedDecoder CreateForTesting(bool use_rust);
 
   // Indicates that a previous call to FilterBuf encountered the final CRLF.
-  bool reached_eof() const { return reached_eof_; }
+  bool reached_eof() const;
 
   // Returns the number of bytes after the final CRLF.
-  int bytes_after_eof() const { return bytes_after_eof_; }
+  int bytes_after_eof() const;
 
   // Called to filter out the chunk markers from buf and to check for end-of-
   // file.  This method modifies |buf| inline if necessary to remove chunk
   // markers.  The return value indicates the final size of decoded data stored
   // in |buf|.  Call reached_eof() after this method to check if end-of-file
   // was encountered.
-  int FilterBuf(char* buf, int buf_len);
+  int FilterBuf(base::span<uint8_t> buf);
 
  private:
+  struct Impl;
+
+  explicit HttpChunkedDecoder(bool use_rust);
+
   // Scans |buf| for the next chunk delimiter.  This method returns the number
   // of bytes consumed from |buf|.  If found, |chunk_remaining_| holds the
   // value for the next chunk size.
-  int ScanForChunkRemaining(const char* buf, int buf_len);
+  int ScanForChunkRemaining(base::span<const uint8_t> buf);
 
-  // Converts string |start| of length |len| to a numeric value.
-  // |start| is a string of type "chunk-size" (hex string).
+  // Converts the buffer |buf| to a numeric value.
+  // |buf| is a buffer containing a "chunk-size" (hex string).
   // If the conversion succeeds, returns true and places the result in |out|.
-  static bool ParseChunkSize(const char* start, int len, int64_t* out);
+  static bool ParseChunkSize(base::span<const uint8_t> buf, uint64_t* out);
+
+  std::unique_ptr<Impl> impl_;
 
   // Indicates the number of bytes remaining for the current chunk.
-  int64_t chunk_remaining_;
+  // Using uint64_t as it can exceed size_t.
+  uint64_t chunk_remaining_ = 0;
 
   // A small buffer used to store a partial chunk marker.
   std::string line_buf_;
 
   // True if waiting for the terminal CRLF of a chunk's data.
-  bool chunk_terminator_remaining_;
+  bool chunk_terminator_remaining_ = false;
 
   // Set to true when FilterBuf encounters the last-chunk.
-  bool reached_last_chunk_;
+  bool reached_last_chunk_ = false;
 
   // Set to true when FilterBuf encounters the final CRLF.
-  bool reached_eof_;
+  bool reached_eof_ = false;
 
   // The number of extraneous unfiltered bytes after the final CRLF.
-  int bytes_after_eof_;
+  int bytes_after_eof_ = 0;
 };
 
 }  // namespace net

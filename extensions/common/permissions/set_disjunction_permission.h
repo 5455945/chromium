@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,23 +7,23 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
 
 #include "base/json/json_writer.h"
-#include "base/ranges/algorithm.h"
 #include "base/stl_util.h"
 #include "base/values.h"
-#include "extensions/common/extension_messages.h"
 #include "extensions/common/permissions/api_permission.h"
 
 namespace extensions {
 
 // An abstract base class for permissions that are represented by the
 // disjunction of a set of conditions.  Each condition is represented by a
-// |PermissionDataType| (e.g. SocketPermissionData).  If an
+// `PermissionDataType` (e.g. SocketPermissionData).  If an
 // APIPermission::CheckParam matches any of the conditions in the set, the
 // permission is granted.
 //
@@ -34,15 +34,12 @@ class SetDisjunctionPermission : public APIPermission {
   explicit SetDisjunctionPermission(const APIPermissionInfo* info)
       : APIPermission(info) {}
 
-  ~SetDisjunctionPermission() override {}
+  ~SetDisjunctionPermission() override = default;
 
   // APIPermission overrides
   bool Check(const APIPermission::CheckParam* param) const override {
-    for (typename std::set<PermissionDataType>::const_iterator i =
-             data_set_.begin();
-         i != data_set_.end();
-         ++i) {
-      if (i->Check(param))
+    for (const auto& item : data_set_) {
+      if (item.Check(param))
         return true;
     }
     return false;
@@ -52,7 +49,7 @@ class SetDisjunctionPermission : public APIPermission {
     CHECK(rhs->info() == info());
     const SetDisjunctionPermission* perm =
         static_cast<const SetDisjunctionPermission*>(rhs);
-    return base::ranges::includes(data_set_, perm->data_set_);
+    return std::ranges::includes(data_set_, perm->data_set_);
   }
 
   bool Equal(const APIPermission* rhs) const override {
@@ -105,31 +102,25 @@ class SetDisjunctionPermission : public APIPermission {
       std::string* error,
       std::vector<std::string>* unhandled_permissions) override {
     data_set_.clear();
-    const base::ListValue* list = NULL;
 
     if (!value) {
       // treat null as an empty list.
       return true;
     }
 
-    if (!value->GetAsList(&list)) {
+    if (!value->is_list()) {
       if (error)
         *error = "Cannot parse the permission list. It's not a list.";
       return false;
     }
 
-    for (size_t i = 0; i < list->GetSize(); ++i) {
-      const base::Value* item_value = NULL;
-      bool got_item = list->Get(i, &item_value);
-      DCHECK(got_item);
-      DCHECK(item_value);
-
+    for (const base::Value& item_value : value->GetList()) {
       PermissionDataType data;
       if (data.FromValue(item_value)) {
         data_set_.insert(data);
       } else {
-        std::string unknown_permission;
-        base::JSONWriter::Write(*item_value, &unknown_permission);
+        std::string unknown_permission =
+            base::WriteJson(item_value).value_or("");
         if (unhandled_permissions) {
           unhandled_permissions->push_back(unknown_permission);
         } else {
@@ -144,14 +135,12 @@ class SetDisjunctionPermission : public APIPermission {
     return true;
   }
 
-  std::unique_ptr<base::Value> ToValue() const override {
-    base::ListValue* list = new base::ListValue();
-    typename std::set<PermissionDataType>::const_iterator i;
-    for (i = data_set_.begin(); i != data_set_.end(); ++i) {
-      std::unique_ptr<base::Value> item_value(i->ToValue());
-      list->Append(std::move(item_value));
+  std::optional<base::Value> ToValue() const override {
+    base::ListValue list;
+    for (const auto& item : data_set_) {
+      list.Append(item.ToValue());
     }
-    return std::unique_ptr<base::Value>(list);
+    return base::Value(std::move(list));
   }
 
  protected:

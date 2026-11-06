@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,6 +15,7 @@
 #include "third_party/blink/renderer/core/layout/layout_theme.h"
 #include "third_party/blink/renderer/core/page/focus_controller.h"
 #include "third_party/blink/renderer/platform/scheduler/test/fake_task_runner.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/web_test_support.h"
 
 namespace blink {
@@ -25,13 +26,17 @@ class FrameCaretTest : public EditingTestBase {
     return caret.ShouldShowCaret();
   }
 
+  static bool IsVisibleIfActive(const FrameCaret& caret) {
+    return caret.IsVisibleIfActive();
+  }
+
  private:
   // The caret blink timer doesn't work if IsRunningWebTest() because
   // LayoutTheme::CaretBlinkInterval() returns 0.
   ScopedWebTestMode web_test_mode_{false};
 };
 
-#if defined(OS_MAC) && defined(ARCH_CPU_ARM64)
+#if BUILDFLAG(IS_MAC) && defined(ARCH_CPU_ARM64)
 // https://crbug.com/1222649
 #define MAYBE_BlinkAfterTyping DISABLED_BlinkAfterTyping
 #else
@@ -42,38 +47,37 @@ TEST_F(FrameCaretTest, MAYBE_BlinkAfterTyping) {
   scoped_refptr<scheduler::FakeTaskRunner> task_runner =
       base::MakeRefCounted<scheduler::FakeTaskRunner>();
   task_runner->SetTime(0);
-  caret.RecreateCaretBlinkTimerForTesting(task_runner.get());
+  caret.RecreateCaretBlinkTimerForTesting(task_runner.get(),
+                                          task_runner->GetMockTickClock());
   const double kInterval = 10;
-  LayoutTheme::GetTheme().SetCaretBlinkInterval(
-      base::TimeDelta::FromSecondsD(kInterval));
+  LayoutTheme::GetTheme().SetCaretBlinkInterval(base::Seconds(kInterval));
   GetDocument().GetPage()->GetFocusController().SetActive(true);
   GetDocument().GetPage()->GetFocusController().SetFocused(true);
-  GetDocument().body()->setInnerHTML("<textarea>");
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes("<textarea>");
   auto* editor = To<Element>(GetDocument().body()->firstChild());
-  editor->focus();
+  editor->Focus();
   UpdateAllLifecyclePhasesForTest();
 
   EXPECT_TRUE(caret.IsActive());
-  EXPECT_TRUE(caret.IsVisibleIfActiveForTesting())
+  EXPECT_TRUE(IsVisibleIfActive(caret))
       << "Initially a caret should be in visible cycle.";
 
   task_runner->AdvanceTimeAndRun(kInterval);
-  EXPECT_FALSE(caret.IsVisibleIfActiveForTesting())
-      << "The caret blinks normally.";
+  EXPECT_FALSE(IsVisibleIfActive(caret)) << "The caret blinks normally.";
 
   TypingCommand::InsertLineBreak(GetDocument());
   UpdateAllLifecyclePhasesForTest();
-  EXPECT_TRUE(caret.IsVisibleIfActiveForTesting())
+  EXPECT_TRUE(IsVisibleIfActive(caret))
       << "The caret should be in visible cycle just after a typing command.";
 
   task_runner->AdvanceTimeAndRun(kInterval - 1);
   UpdateAllLifecyclePhasesForTest();
-  EXPECT_TRUE(caret.IsVisibleIfActiveForTesting())
+  EXPECT_TRUE(IsVisibleIfActive(caret))
       << "The typing command reset the timer. The caret is still visible.";
 
   task_runner->AdvanceTimeAndRun(1);
   UpdateAllLifecyclePhasesForTest();
-  EXPECT_FALSE(caret.IsVisibleIfActiveForTesting())
+  EXPECT_FALSE(IsVisibleIfActive(caret))
       << "The caret should blink after the typing command.";
 }
 
@@ -81,17 +85,17 @@ TEST_F(FrameCaretTest, ShouldNotBlinkWhenSelectionLooseFocus) {
   FrameCaret& caret = Selection().FrameCaretForTesting();
   GetDocument().GetPage()->GetFocusController().SetActive(true);
   GetDocument().GetPage()->GetFocusController().SetFocused(true);
-  GetDocument().body()->setInnerHTML(
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(
       "<div id='outer' tabindex='-1'>"
       "<div id='input' contenteditable>foo</div>"
       "</div>");
-  Element* input = GetDocument().QuerySelector("#input");
-  input->focus();
-  Element* outer = GetDocument().QuerySelector("#outer");
-  outer->focus();
+  Element* input = QuerySelector("#input");
+  input->Focus();
+  QuerySelector("#outer")->Focus();
   UpdateAllLifecyclePhasesForTest();
-  const SelectionInDOMTree& selection = Selection().GetSelectionInDOMTree();
-  EXPECT_EQ(selection.Base(), Position::FirstPositionInNode(*input));
+  const SelectionInDomTree& selection = Selection().GetSelectionInDomTree();
+  EXPECT_EQ(selection.Anchor(),
+            Position::FirstPositionInNode(*(input->firstChild())));
   EXPECT_FALSE(ShouldShowCaret(caret));
 }
 
@@ -104,6 +108,207 @@ TEST_F(FrameCaretTest, ShouldBlinkCaretWhileCaretBrowsing) {
   GetDocument().GetFrame()->GetSettings()->SetCaretBrowsingEnabled(true);
   UpdateAllLifecyclePhasesForTest();
   EXPECT_TRUE(ShouldShowCaret(caret));
+}
+
+TEST_F(FrameCaretTest, ShouldShowCaretInReadOnlyInputAndTextarea) {
+  FrameCaret& caret = Selection().FrameCaretForTesting();
+  scoped_refptr<scheduler::FakeTaskRunner> task_runner =
+      base::MakeRefCounted<scheduler::FakeTaskRunner>();
+  task_runner->SetTime(0);
+  caret.RecreateCaretBlinkTimerForTesting(task_runner.get(),
+                                          task_runner->GetMockTickClock());
+  const double kInterval = 1;
+  LayoutTheme::GetTheme().SetCaretBlinkInterval(base::Seconds(kInterval));
+  GetDocument().GetPage()->GetFocusController().SetActive(true);
+  GetDocument().GetPage()->GetFocusController().SetFocused(true);
+
+  SetBodyContent(
+      "<input id='inp' readonly value='test'><textarea id='ta' "
+      "readonly>hello</textarea>");
+  Element* inp = QuerySelector("#inp");
+  Element* ta = QuerySelector("#ta");
+
+  inp->Focus();
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_TRUE(ShouldShowCaret(caret));
+  EXPECT_TRUE(IsVisibleIfActive(caret));
+
+  task_runner->AdvanceTimeAndRun(kInterval + 0.1);
+  EXPECT_TRUE(IsVisibleIfActive(caret))
+      << "Caret should not blink off in readonly input.";
+
+  ta->Focus();
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_TRUE(ShouldShowCaret(caret));
+  EXPECT_TRUE(IsVisibleIfActive(caret));
+
+  task_runner->AdvanceTimeAndRun(kInterval + 0.1);
+  EXPECT_TRUE(IsVisibleIfActive(caret))
+      << "Caret should not blink off in readonly textarea.";
+
+  // Removing readonly should re-enable blinking.
+  inp->Focus();
+  inp->removeAttribute(html_names::kReadonlyAttr);
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_TRUE(IsVisibleIfActive(caret));
+
+  task_runner->AdvanceTimeAndRun(kInterval + 0.1);
+  EXPECT_FALSE(IsVisibleIfActive(caret))
+      << "Caret should blink off when readonly attribute is removed.";
+
+  task_runner->AdvanceTimeAndRun(kInterval + 0.1);
+  EXPECT_TRUE(IsVisibleIfActive(caret))
+      << "Caret should blink on again when readonly attribute is removed.";
+
+  // Re-adding readonly should disable blinking again.
+  inp->setAttribute(html_names::kReadonlyAttr, AtomicString(""));
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_TRUE(IsVisibleIfActive(caret));
+
+  task_runner->AdvanceTimeAndRun(kInterval + 0.1);
+  EXPECT_TRUE(IsVisibleIfActive(caret))
+      << "Caret should not blink off when readonly is re-added.";
+}
+
+TEST_F(FrameCaretTest, CaretAnimationNone) {
+  ScopedCSSCaretAnimationForTest css_caret_animation_enabled(true);
+  FrameCaret& caret = Selection().FrameCaretForTesting();
+  scoped_refptr<scheduler::FakeTaskRunner> task_runner =
+      base::MakeRefCounted<scheduler::FakeTaskRunner>();
+  task_runner->SetTime(0);
+  caret.RecreateCaretBlinkTimerForTesting(task_runner.get(),
+                                          task_runner->GetMockTickClock());
+  const double kInterval = 1;
+  LayoutTheme::GetTheme().SetCaretBlinkInterval(base::Seconds(kInterval));
+  GetDocument().GetPage()->GetFocusController().SetActive(true);
+  GetDocument().GetPage()->GetFocusController().SetFocused(true);
+
+  InsertStyleElement("body { caret-animation: auto; }");
+  SetBodyContent("<textarea>");
+  auto* editor = To<Element>(GetDocument().body()->firstChild());
+  editor->Focus();
+  UpdateAllLifecyclePhasesForTest();
+
+  EXPECT_TRUE(caret.IsActive());
+  EXPECT_TRUE(IsVisibleIfActive(caret))
+      << "Initially a caret should be in visible cycle.";
+
+  task_runner->AdvanceTimeAndRun(kInterval + 0.1);
+  EXPECT_FALSE(IsVisibleIfActive(caret)) << "The caret blinks off normally.";
+
+  task_runner->AdvanceTimeAndRun(kInterval + 0.1);
+  EXPECT_TRUE(IsVisibleIfActive(caret)) << "The caret blinks on normally.";
+}
+
+TEST_F(FrameCaretTest, BlinkingDisabledByFeature) {
+  ScopedCaretBlinkingForTest caret_blinking(false);
+  FrameCaret& caret = Selection().FrameCaretForTesting();
+  scoped_refptr<scheduler::FakeTaskRunner> task_runner =
+      base::MakeRefCounted<scheduler::FakeTaskRunner>();
+  task_runner->SetTime(0);
+  caret.RecreateCaretBlinkTimerForTesting(task_runner.get(),
+                                          task_runner->GetMockTickClock());
+  const double kInterval = 1;
+  LayoutTheme::GetTheme().SetCaretBlinkInterval(base::Seconds(kInterval));
+  GetFocusController().SetActive(true);
+  GetFocusController().SetFocused(true);
+
+  SetBodyContent("<textarea>");
+  auto* editor = To<Element>(GetDocument().body()->firstChild());
+  editor->Focus();
+  UpdateAllLifecyclePhasesForTest();
+
+  EXPECT_TRUE(caret.IsActive());
+  EXPECT_TRUE(IsVisibleIfActive(caret))
+      << "Initially a caret should be in visible cycle.";
+
+  task_runner->AdvanceTimeAndRun(kInterval + 0.1);
+  EXPECT_TRUE(IsVisibleIfActive(caret)) << "The caret stays on.";
+
+  task_runner->AdvanceTimeAndRun(kInterval + 0.1);
+  EXPECT_TRUE(IsVisibleIfActive(caret)) << "The caret is still on.";
+}
+
+TEST_F(FrameCaretTest, CaretAnimationManual) {
+  ScopedCSSCaretAnimationForTest css_caret_animation_enabled(true);
+  FrameCaret& caret = Selection().FrameCaretForTesting();
+  scoped_refptr<scheduler::FakeTaskRunner> task_runner =
+      base::MakeRefCounted<scheduler::FakeTaskRunner>();
+  task_runner->SetTime(0);
+  caret.RecreateCaretBlinkTimerForTesting(task_runner.get(),
+                                          task_runner->GetMockTickClock());
+  const double kInterval = 1;
+  LayoutTheme::GetTheme().SetCaretBlinkInterval(base::Seconds(kInterval));
+  GetDocument().GetPage()->GetFocusController().SetActive(true);
+  GetDocument().GetPage()->GetFocusController().SetFocused(true);
+
+  InsertStyleElement("body { caret-animation: manual; }");
+  SetBodyContent("<textarea>");
+  auto* editor = To<Element>(GetDocument().body()->firstChild());
+  editor->Focus();
+  UpdateAllLifecyclePhasesForTest();
+
+  EXPECT_TRUE(caret.IsActive());
+  EXPECT_TRUE(IsVisibleIfActive(caret))
+      << "Initially a caret should be in visible cycle.";
+
+  task_runner->AdvanceTimeAndRun(kInterval + 0.1);
+  EXPECT_TRUE(IsVisibleIfActive(caret)) << "The caret stays on.";
+
+  task_runner->AdvanceTimeAndRun(kInterval + 0.1);
+  EXPECT_TRUE(IsVisibleIfActive(caret)) << "The caret is still on.";
+
+  editor->SetInlineStyleProperty(CSSPropertyID::kCaretAnimation,
+                                 CSSValueID::kAuto);
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_TRUE(IsVisibleIfActive(caret)) << "The caret starts on again.";
+
+  task_runner->AdvanceTimeAndRun(kInterval + 0.1);
+  EXPECT_FALSE(IsVisibleIfActive(caret)) << "The caret blinks off normally.";
+}
+
+TEST_F(FrameCaretTest, CaretAnimationInvalidation) {
+  ScopedCSSCaretAnimationForTest css_caret_animation_enabled(true);
+  FrameCaret& caret = Selection().FrameCaretForTesting();
+  scoped_refptr<scheduler::FakeTaskRunner> task_runner =
+      base::MakeRefCounted<scheduler::FakeTaskRunner>();
+  task_runner->SetTime(0);
+  caret.RecreateCaretBlinkTimerForTesting(task_runner.get(),
+                                          task_runner->GetMockTickClock());
+  const double kInterval = 1;
+  LayoutTheme::GetTheme().SetCaretBlinkInterval(base::Seconds(kInterval));
+  GetDocument().GetPage()->GetFocusController().SetActive(true);
+  GetDocument().GetPage()->GetFocusController().SetFocused(true);
+
+  InsertStyleElement("body { caret-animation: auto; }");
+  SetBodyContent("<textarea>");
+  auto* editor = To<Element>(GetDocument().body()->firstChild());
+  editor->Focus();
+  UpdateAllLifecyclePhasesForTest();
+
+  EXPECT_TRUE(caret.IsActive());
+  EXPECT_TRUE(IsVisibleIfActive(caret))
+      << "Initially a caret should be in visible cycle.";
+
+  task_runner->AdvanceTimeAndRun(kInterval + 0.1);
+  EXPECT_FALSE(IsVisibleIfActive(caret)) << "The caret blinks off normally.";
+
+  editor->SetInlineStyleProperty(CSSPropertyID::kCaretAnimation,
+                                 CSSValueID::kManual);
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_TRUE(IsVisibleIfActive(caret))
+      << "The caret turns on when manual again.";
+
+  task_runner->AdvanceTimeAndRun(kInterval + 0.1);
+  EXPECT_TRUE(IsVisibleIfActive(caret)) << "The caret should stay on.";
+
+  editor->RemoveInlineStyleProperty(CSSPropertyID::kCaretAnimation);
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_TRUE(IsVisibleIfActive(caret))
+      << "The caret initially on when auto again.";
+
+  task_runner->AdvanceTimeAndRun(kInterval + 0.1);
+  EXPECT_FALSE(IsVisibleIfActive(caret)) << "The caret blinks off normally.";
 }
 
 }  // namespace blink

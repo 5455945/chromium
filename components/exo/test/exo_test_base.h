@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,16 @@
 #include <memory>
 
 #include "ash/test/ash_test_base.h"
-#include "base/macros.h"
 #include "components/exo/test/exo_test_helper.h"
+#include "components/exo/window_occlusion_manager.h"
 
 namespace viz {
 class SurfaceManager;
 }
 
 namespace exo {
-class WMHelper;
 class ShellSurfaceBase;
+class WMHelper;
 
 namespace test {
 class ExoTestHelper;
@@ -31,6 +31,9 @@ class ExoTestBase : public ash::AshTestBase {
   template <typename... TaskEnvironmentTraits>
   NOINLINE explicit ExoTestBase(TaskEnvironmentTraits&&... traits)
       : AshTestBase(std::forward<TaskEnvironmentTraits>(traits)...) {}
+
+  ExoTestBase(const ExoTestBase&) = delete;
+  ExoTestBase& operator=(const ExoTestBase&) = delete;
 
   ~ExoTestBase() override;
 
@@ -48,8 +51,7 @@ class ExoTestBase : public ash::AshTestBase {
  private:
   ExoTestHelper exo_test_helper_;
   std::unique_ptr<WMHelper> wm_helper_;
-
-  DISALLOW_COPY_AND_ASSIGN(ExoTestBase);
+  std::unique_ptr<WindowOcclusionManager> window_occlusion_manager_;
 };
 
 }  // namespace test

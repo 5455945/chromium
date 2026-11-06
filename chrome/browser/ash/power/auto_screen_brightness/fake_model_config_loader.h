@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,6 +20,10 @@ namespace auto_screen_brightness {
 class FakeModelConfigLoader : public ModelConfigLoader {
  public:
   FakeModelConfigLoader();
+
+  FakeModelConfigLoader(const FakeModelConfigLoader&) = delete;
+  FakeModelConfigLoader& operator=(const FakeModelConfigLoader&) = delete;
+
   ~FakeModelConfigLoader() override;
 
   void set_model_config(const ModelConfig& model_config) {
@@ -45,8 +49,6 @@ class FakeModelConfigLoader : public ModelConfigLoader {
   ModelConfig model_config_;
   base::ObserverList<Observer> observers_;
   base::WeakPtrFactory<FakeModelConfigLoader> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(FakeModelConfigLoader);
 };
 
 }  // namespace auto_screen_brightness

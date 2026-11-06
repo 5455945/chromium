@@ -1,18 +1,20 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 // https://github.com/WICG/web-codecs
 
+enum VideoEncoderBitrateMode { "constant", "variable", "quantizer" };
+
 // NOTE: Keep this structure in sync with CopyConfig() defined in
 // video_encoder.cc.
 dictionary VideoEncoderConfig {
   required DOMString codec;
-  HardwarePreference hardwareAcceleration = "allow";
+  HardwarePreference hardwareAcceleration = "no-preference";
   AlphaOption alpha = "discard";
 
   [EnforceRange] unsigned long long bitrate;
-  BitrateMode bitrateMode = "variable";
+  VideoEncoderBitrateMode bitrateMode = "variable";
 
   double framerate;
 
@@ -24,9 +26,13 @@ dictionary VideoEncoderConfig {
   [EnforceRange] unsigned long displayHeight;
 
   AvcEncoderConfig avc;
+  HevcEncoderConfig hevc;
 
   // Same as in WebRTC SVC (https://w3c.github.io/webrtc-svc/)
   DOMString scalabilityMode;
 
   LatencyMode latencyMode = "quality";
+
+  // MediaStreamTrack Content Hints (https://www.w3.org/TR/mst-content-hint/)
+  DOMString contentHint = "";
 };

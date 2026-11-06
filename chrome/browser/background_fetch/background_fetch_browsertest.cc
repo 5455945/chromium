@@ -1,14 +1,23 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <atomic>
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check_op.h"
+#include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "chrome/browser/background_fetch/background_fetch_delegate_impl.h"
 #include "chrome/browser/browser_process.h"
@@ -18,7 +27,7 @@
 #include "chrome/browser/offline_items_collection/offline_content_aggregator_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -26,12 +35,18 @@
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/download/public/background_service/background_download_service.h"
+#include "components/download/public/background_service/features.h"
 #include "components/download/public/background_service/logger.h"
+#include "components/download/public/common/download_item.h"
+#include "components/metrics/content/subprocess_metrics_provider.h"
 #include "components/offline_items_collection/core/offline_content_aggregator.h"
 #include "components/offline_items_collection/core/offline_content_provider.h"
 #include "components/offline_items_collection/core/offline_item.h"
 #include "components/ukm/test_ukm_recorder.h"
+#include "content/public/browser/download_manager.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -40,6 +55,9 @@
 #include "net/test/embedded_test_server/http_response.h"
 #include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
+#include "services/network/public/cpp/features.h"
+#include "services/network/public/cpp/ip_address_space_overrides_test_utils.h"
+#include "third_party/blink/public/common/features.h"
 #include "url/origin.h"
 
 using offline_items_collection::ContentId;
@@ -102,6 +120,12 @@ class WaitableDownloadLoggerObserver : public download::Logger::Observer {
       base::OnceCallback<void(const std::string& guid)>;
 
   WaitableDownloadLoggerObserver() = default;
+
+  WaitableDownloadLoggerObserver(const WaitableDownloadLoggerObserver&) =
+      delete;
+  WaitableDownloadLoggerObserver& operator=(
+      const WaitableDownloadLoggerObserver&) = delete;
+
   ~WaitableDownloadLoggerObserver() override = default;
 
   // Sets the |callback| to be invoked when a download has been accepted.
@@ -110,27 +134,27 @@ class WaitableDownloadLoggerObserver : public download::Logger::Observer {
   }
 
   // download::Logger::Observer implementation:
-  void OnServiceStatusChanged(const base::Value& service_status) override {}
+  void OnServiceStatusChanged(const base::DictValue& service_status) override {}
   void OnServiceDownloadsAvailable(
-      const base::Value& service_downloads) override {}
-  void OnServiceDownloadChanged(const base::Value& service_download) override {}
-  void OnServiceDownloadFailed(const base::Value& service_download) override {}
-  void OnServiceRequestMade(const base::Value& service_request) override {
-    const std::string& client = service_request.FindKey("client")->GetString();
-    const std::string& guid = service_request.FindKey("guid")->GetString();
-    const std::string& result = service_request.FindKey("result")->GetString();
+      const base::ListValue& service_downloads) override {}
+  void OnServiceDownloadChanged(
+      const base::DictValue& service_download) override {}
+  void OnServiceDownloadFailed(
+      const base::DictValue& service_download) override {}
+  void OnServiceRequestMade(const base::DictValue& service_request) override {
+    const std::string* client = service_request.FindString("client");
+    const std::string* guid = service_request.FindString("guid");
+    const std::string* result = service_request.FindString("result");
 
-    if (client != kBackgroundFetchClient)
+    if (*client != kBackgroundFetchClient)
       return;  // This event is not targeted to us.
 
-    if (result == kResultAccepted && download_accepted_callback_)
-      std::move(download_accepted_callback_).Run(guid);
+    if (*result == kResultAccepted && download_accepted_callback_)
+      std::move(download_accepted_callback_).Run(*guid);
   }
 
  private:
   DownloadAcceptedCallback download_accepted_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(WaitableDownloadLoggerObserver);
 };
 
 // Observes the offline item collection's content provider and then invokes the
@@ -145,6 +169,12 @@ class OfflineContentProviderObserver final
       base::OnceCallback<void(const OfflineItem&)>;
 
   OfflineContentProviderObserver() = default;
+
+  OfflineContentProviderObserver(const OfflineContentProviderObserver&) =
+      delete;
+  OfflineContentProviderObserver& operator=(
+      const OfflineContentProviderObserver&) = delete;
+
   ~OfflineContentProviderObserver() final = default;
 
   void set_items_added_callback(ItemsAddedCallback callback) {
@@ -178,10 +208,9 @@ class OfflineContentProviderObserver final
   }
 
   void OnItemRemoved(const ContentId& id) override {}
-  void OnItemUpdated(
-      const OfflineItem& item,
-      const absl::optional<offline_items_collection::UpdateDelta>& update_delta)
-      override {
+  void OnItemUpdated(const OfflineItem& item,
+                     const std::optional<offline_items_collection::UpdateDelta>&
+                         update_delta) override {
     if (item.state != offline_items_collection::OfflineItemState::IN_PROGRESS &&
         item.state != offline_items_collection::OfflineItemState::PENDING &&
         item.state != offline_items_collection::OfflineItemState::PAUSED &&
@@ -211,21 +240,19 @@ class OfflineContentProviderObserver final
   void OnContentProviderGoingDown() override {}
 
   const OfflineItem& latest_item() const { return latest_item_; }
+  void Reset() { latest_item_ = OfflineItem(); }
 
  private:
-  void Resume(const ContentId& id) {
-    delegate_->ResumeDownload(id, false /* has_user_gesture */);
-  }
+  void Resume(const ContentId& id) { delegate_->ResumeDownload(id); }
 
   ItemsAddedCallback items_added_callback_;
   FinishedProcessingItemCallback finished_processing_item_callback_;
-  BackgroundFetchDelegateImpl* delegate_ = nullptr;
+  raw_ptr<BackgroundFetchDelegateImpl> delegate_ =
+      nullptr;
   bool pause_ = false;
   bool resume_ = false;
 
   OfflineItem latest_item_;
-
-  DISALLOW_COPY_AND_ASSIGN(OfflineContentProviderObserver);
 };
 
 }  // namespace
@@ -235,17 +262,24 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
   BackgroundFetchBrowserTest()
       : offline_content_provider_observer_(
             std::make_unique<OfflineContentProviderObserver>()) {}
+
+  BackgroundFetchBrowserTest(const BackgroundFetchBrowserTest&) = delete;
+  BackgroundFetchBrowserTest& operator=(const BackgroundFetchBrowserTest&) =
+      delete;
+
   ~BackgroundFetchBrowserTest() override = default;
 
   void SetUpOnMainThread() override {
+    Profile* profile = browser()->GetProfile();
+
     https_server_ = std::make_unique<net::EmbeddedTestServer>(
         net::EmbeddedTestServer::TYPE_HTTPS);
     https_server_->RegisterRequestHandler(base::BindRepeating(
         &BackgroundFetchBrowserTest::HandleRequest, base::Unretained(this)));
     https_server_->AddDefaultHandlers(GetChromeTestDataDir());
-    ASSERT_TRUE(https_server_->Start());
-
-    Profile* profile = browser()->profile();
+    ASSERT_TRUE(StartServerWithPersistedPort(
+        https_server_.get(),
+        profile->GetPath().AppendASCII("https_server_port.txt")));
 
     download_observer_ = std::make_unique<WaitableDownloadLoggerObserver>();
 
@@ -261,42 +295,43 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
     SetUpBrowser(browser());
 
     delegate_ = static_cast<BackgroundFetchDelegateImpl*>(
-        active_browser_->profile()->GetBackgroundFetchDelegate());
+        active_browser_->GetProfile()->GetBackgroundFetchDelegate());
     DCHECK(delegate_);
 
     offline_content_provider_observer_->set_delegate(delegate_);
   }
 
-  void SetUpBrowser(Browser* browser) {
-    active_browser_ = browser;
+  virtual void SetUpBrowser(BrowserWindowInterface* browser) {
+    set_active_browser(browser);
     // Load the helper page that helps drive these tests.
-    ui_test_utils::NavigateToURL(browser, https_server_->GetURL(kHelperPage));
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(
+        browser, https_server_->GetURL(kHelperPage)));
 
     // Register the Service Worker that's required for Background Fetch. The
     // behaviour without an activated worker is covered by layout tests.
-    {
-      std::string script_result;
-      ASSERT_TRUE(RunScript("RegisterServiceWorker()", &script_result));
-      ASSERT_EQ("ok - service worker registered", script_result);
-    }
+    ASSERT_EQ("ok - service worker registered",
+              RunScript("RegisterServiceWorker()"));
 
     test_ukm_recorder_ = std::make_unique<ukm::TestAutoSetUkmRecorder>();
   }
 
   void TearDownOnMainThread() override {
     OfflineContentAggregatorFactory::GetInstance()
-        ->GetForKey(active_browser_->profile()->GetProfileKey())
+        ->GetForKey(active_browser_->GetProfile()->GetProfileKey())
         ->RemoveObserver(offline_content_provider_observer_.get());
 
     download_service_->GetLogger()->RemoveObserver(download_observer_.get());
     download_service_ = nullptr;
+    delegate_ = nullptr;
+    active_browser_ = nullptr;
+    offline_content_provider_observer_->set_delegate(nullptr);
   }
 
   // ---------------------------------------------------------------------------
   // Test execution functions.
 
   // Runs the |script| and waits for one or more items to have been added to the
-  // offline items collection. Wrap in ASSERT_NO_FATAL_FAILURE().
+  // offline items collection.
   void RunScriptAndWaitForOfflineItems(const std::string& script,
                                        std::vector<OfflineItem>* items) {
     DCHECK(items);
@@ -306,20 +341,16 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
         base::BindOnce(&BackgroundFetchBrowserTest::DidAddItems,
                        base::Unretained(this), run_loop.QuitClosure(), items));
 
-    std::string result;
-    ASSERT_NO_FATAL_FAILURE(RunScript(script, &result));
-    ASSERT_EQ("ok", result);
+    ASSERT_EQ("ok", RunScript(script));
 
     run_loop.Run();
   }
 
-  // Runs the |script| and waits for a message.
-  // Wrap in ASSERT_NO_FATAL_FAILURE().
+  // Runs the |script| and checks the result.
   void RunScriptAndCheckResultingMessage(const std::string& script,
                                          const std::string& expected_message) {
-    std::string result;
-    ASSERT_NO_FATAL_FAILURE(RunScript(script, &result));
-    ASSERT_EQ(expected_message, result);
+    offline_content_provider_observer_->Reset();
+    ASSERT_EQ(expected_message, RunScript(script));
   }
 
   void GetVisualsForOfflineItemSync(
@@ -339,25 +370,22 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
   // Helper functions.
 
   // Runs the |script| in the current tab and writes the output to |*result|.
-  bool RunScript(const std::string& script, std::string* result) {
-    return content::ExecuteScriptAndExtractString(
-        active_browser_->tab_strip_model()
-            ->GetActiveWebContents()
-            ->GetMainFrame(),
-        script, result);
+  content::EvalJsResult RunScript(const std::string& script) {
+    return content::EvalJs(active_browser_->GetTabStripModel()
+                               ->GetActiveWebContents()
+                               ->GetPrimaryMainFrame(),
+                           script);
   }
 
   // Runs the given |function| and asserts that it responds with "ok".
   // Must be wrapped with ASSERT_NO_FATAL_FAILURE().
   void RunScriptFunction(const std::string& function) {
-    std::string result;
-    ASSERT_TRUE(RunScript(function, &result));
-    ASSERT_EQ("ok", result);
+    ASSERT_EQ("ok", RunScript(function));
   }
 
   // Intercepts all requests.
   std::unique_ptr<HttpResponse> HandleRequest(const HttpRequest& request) {
-    if (request.GetURL().path() == "/background_fetch/upload") {
+    if (request.GetURL().GetPath() == "/background_fetch/upload") {
       DCHECK(!request.content.empty());
       DCHECK(request_body_.empty());
       request_body_ = request.content;
@@ -367,8 +395,9 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
       return response;
     }
 
-    if (request.GetURL().query() == "clickevent")
+    if (request.GetURL().GetQuery() == "clickevent") {
       std::move(click_event_closure_).Run();
+    }
 
     // The default handlers will take care of this request.
     return nullptr;
@@ -378,7 +407,7 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
   gfx::Size GetIconDisplaySize() {
     gfx::Size out_display_size;
     base::RunLoop run_loop;
-    browser()->profile()->GetBackgroundFetchDelegate()->GetIconDisplaySize(
+    browser()->GetProfile()->GetBackgroundFetchDelegate()->GetIconDisplaySize(
         base::BindOnce(&BackgroundFetchBrowserTest::DidGetIconDisplaySize,
                        base::Unretained(this), run_loop.QuitClosure(),
                        &out_display_size));
@@ -417,10 +446,10 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
 
   void RevokeDownloadPermission() {
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     DownloadRequestLimiter::TabDownloadState* tab_download_state =
-        g_browser_process->download_request_limiter()->GetDownloadState(
-            web_contents, true /* create */);
+        g_browser_process->download_request_limiter()->GetOrCreateDownloadState(
+            web_contents);
     tab_download_state->set_download_seen();
     tab_download_state->SetDownloadStatusAndNotify(
         url::Origin::Create(web_contents->GetVisibleURL()),
@@ -429,7 +458,7 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
 
   void SetPermission(ContentSettingsType content_type, ContentSetting setting) {
     auto* settings_map =
-        HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+        HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
     DCHECK(settings_map);
 
     ContentSettingsPattern host_pattern =
@@ -447,9 +476,39 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
     std::move(quit_closure).Run();
   }
 
+  void set_active_browser(BrowserWindowInterface* browser) {
+    active_browser_ = browser;
+  }
+
+  net::EmbeddedTestServer* https_server() { return https_server_.get(); }
+
+  bool StartServerWithPersistedPort(net::EmbeddedTestServer* server,
+                                    const base::FilePath& port_file) {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    uint16_t port = 0;
+    std::string port_str;
+    if (base::ReadFileToString(port_file, &port_str)) {
+      unsigned int parsed_port = 0;
+      if (base::StringToUint(
+              base::TrimWhitespaceASCII(port_str, base::TRIM_ALL),
+              &parsed_port)) {
+        port = static_cast<uint16_t>(parsed_port);
+      }
+    }
+    if (!server->Start(port)) {
+      return false;
+    }
+    if (port == 0) {
+      base::WriteFile(port_file, base::NumberToString(server->port()));
+    }
+    return true;
+  }
+
  protected:
-  BackgroundFetchDelegateImpl* delegate_ = nullptr;
-  download::BackgroundDownloadService* download_service_ = nullptr;
+  raw_ptr<BackgroundFetchDelegateImpl> delegate_ =
+      nullptr;
+  raw_ptr<download::BackgroundDownloadService>
+      download_service_ = nullptr;
   base::OnceClosure click_event_closure_;
 
   std::unique_ptr<WaitableDownloadLoggerObserver> download_observer_;
@@ -478,9 +537,7 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
 
   std::unique_ptr<net::EmbeddedTestServer> https_server_;
 
-  Browser* active_browser_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(BackgroundFetchBrowserTest);
+  raw_ptr<BrowserWindowInterface> active_browser_ = nullptr;
 };
 
 IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest, DownloadService_Acceptance) {
@@ -501,8 +558,8 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest, DownloadService_Acceptance) {
   EXPECT_FALSE(guid.empty());
 }
 
-// Flaky on linux: crbug.com/1182296
-#if defined(OS_LINUX)
+// Flaky on linux: crbug.com/40751374
+#if BUILDFLAG(IS_LINUX)
 #define MAYBE_RecordBackgroundFetchUkmEvent \
   DISABLED_RecordBackgroundFetchUkmEvent
 #else
@@ -516,11 +573,11 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
   ASSERT_NO_FATAL_FAILURE(
       RunScriptFunction("StartSingleFileDownloadWithCorrectDownloadTotal()"));
 
-  std::vector<const ukm::mojom::UkmEntry*> entries =
+  auto entries =
       test_ukm_recorder_->GetEntriesByName(
           ukm::builders::BackgroundFetch::kEntryName);
   ASSERT_EQ(1u, entries.size());
-  const auto* entry = entries[0];
+  const auto* entry = entries[0].get();
   test_ukm_recorder_->ExpectEntryMetric(
       entry, ukm::builders::BackgroundFetch::kHasTitleName, 1);
   test_ukm_recorder_->ExpectEntryMetric(
@@ -544,8 +601,17 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
       -1);
 }
 
+#if BUILDFLAG(IS_MAC)
+// Flaky on Mac: https://crbug.com/40201535
+#define MAYBE_OfflineItemCollection_SingleFileMetadata \
+  DISABLED_OfflineItemCollection_SingleFileMetadata
+#else
+#define MAYBE_OfflineItemCollection_SingleFileMetadata \
+  OfflineItemCollection_SingleFileMetadata
+#endif
+
 IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
-                       OfflineItemCollection_SingleFileMetadata) {
+                       MAYBE_OfflineItemCollection_SingleFileMetadata) {
   // Starts a Background Fetch for a single to-be-downloaded file and waits for
   // the fetch to be registered with the offline items collection. We then
   // verify that all the appropriate values have been set.
@@ -576,8 +642,9 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
   EXPECT_FALSE(offline_item.is_off_the_record);
 }
 
+// Flaky on multiple platforms (b/323879025)/
 IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
-                       OfflineItemCollection_VerifyIconReceived) {
+                       DISABLED_OfflineItemCollection_VerifyIconReceived) {
   // Starts a Background Fetch for a single to-be-downloaded file and waits for
   // the fetch to be registered with the offline items collection. We then
   // verify that the expected icon is associated with the newly added offline
@@ -594,11 +661,12 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
   EXPECT_EQ(offline_item.progress.value, 0);
   EXPECT_EQ(offline_item.progress.max.value(), 1);
   EXPECT_EQ(offline_item.progress.unit, OfflineItemProgressUnit::PERCENTAGE);
+  EXPECT_FALSE(offline_item.creation_time.is_null());
 
   // Get visuals associated with the newly added offline item.
   std::unique_ptr<OfflineItemVisuals> out_visuals;
   GetVisualsForOfflineItemSync(offline_item.id, &out_visuals);
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   EXPECT_FALSE(out_visuals->icon.IsEmpty());
   EXPECT_EQ(out_visuals->icon.Size().width(), 100);
   EXPECT_EQ(out_visuals->icon.Size().height(), 100);
@@ -642,9 +710,10 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_EQ(offline_item.progress.max.value(), kDownloadedResourceSizeInBytes);
 }
 
+// The test is flaky on all platforms. https://crbug.com/40738789.
 IN_PROC_BROWSER_TEST_F(
     BackgroundFetchBrowserTest,
-    OfflineItemCollection_VerifyResourceDownloadedWhenDownloadTotalSmallerThanActualSize) {
+    DISABLED_OfflineItemCollection_VerifyResourceDownloadedWhenDownloadTotalSmallerThanActualSize) {
   // Starts a Background Fetch for a single to-be-downloaded file and waits for
   // the fetch to be registered with the offline items collection.
   std::vector<OfflineItem> items;
@@ -675,9 +744,10 @@ IN_PROC_BROWSER_TEST_F(
             offline_items_collection::OfflineItemState::CANCELLED);
 }
 
+// TODO(crbug.com/40842751): Fix flaky timeouts and re-enable.
 IN_PROC_BROWSER_TEST_F(
     BackgroundFetchBrowserTest,
-    OfflineItemCollection_VerifyResourceDownloadedWhenCorrectDownloadTotalSpecified) {
+    DISABLED_OfflineItemCollection_VerifyResourceDownloadedWhenCorrectDownloadTotalSpecified) {
   // Starts a Background Fetch for a single to-be-downloaded file and waits for
   // the fetch to be registered with the offline items collection.
 
@@ -708,16 +778,8 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
   ASSERT_TRUE(items[0].is_off_the_record);
 }
 
-// Flaky on Windows 7 (https://crbug.com/1039250)
-#if defined(OS_WIN)
-#define MAYBE_FetchesRunToCompletionAndUpdateTitle_Fetched \
-  DISABLED_FetchesRunToCompletionAndUpdateTitle_Fetched
-#else
-#define MAYBE_FetchesRunToCompletionAndUpdateTitle_Fetched \
-  FetchesRunToCompletionAndUpdateTitle_Fetched
-#endif
 IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
-                       MAYBE_FetchesRunToCompletionAndUpdateTitle_Fetched) {
+                       FetchesRunToCompletionAndUpdateTitle_Fetched) {
   ASSERT_NO_FATAL_FAILURE(RunScriptAndCheckResultingMessage(
       "RunFetchTillCompletion()", "backgroundfetchsuccess"));
   EXPECT_EQ(offline_content_provider_observer_->latest_item().state,
@@ -729,16 +791,8 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
                        "New Fetched Title!", base::CompareCase::SENSITIVE));
 }
 
-// Flaky on Windows 7 (https://crbug.com/1039250)
-#if defined(OS_WIN)
-#define MAYBE_FetchesRunToCompletionAndUpdateTitle_Failed \
-  DISABLED_FetchesRunToCompletionAndUpdateTitle_Failed
-#else
-#define MAYBE_FetchesRunToCompletionAndUpdateTitle_Failed \
-  FetchesRunToCompletionAndUpdateTitle_Failed
-#endif
 IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
-                       MAYBE_FetchesRunToCompletionAndUpdateTitle_Failed) {
+                       FetchesRunToCompletionAndUpdateTitle_Failed) {
   ASSERT_NO_FATAL_FAILURE(RunScriptAndCheckResultingMessage(
       "RunFetchTillCompletionWithMissingResource()", "backgroundfetchfail"));
   EXPECT_EQ(offline_content_provider_observer_->latest_item().state,
@@ -796,7 +850,7 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest, ClickEventIsDispatched) {
   }
 }
 
-// TODO(crbug.com/1056096): Re-enable this test.
+// TODO(crbug.com/40120187): Re-enable this test.
 IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest, DISABLED_AbortFromUI) {
   std::vector<OfflineItem> items;
   // Creates a registration with more than one request.
@@ -831,40 +885,11 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
       "This origin does not have permission to start a fetch."));
 }
 
-// Flaky on Windows 7 (https://crbug.com/1039250)
-#if defined(OS_WIN)
-#define MAYBE_FetchFromServiceWorker DISABLED_FetchFromServiceWorker
-#else
-#define MAYBE_FetchFromServiceWorker FetchFromServiceWorker
-#endif
+// TODO(crbug.com/40805915): Flaky on many platforms.
 IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
-                       MAYBE_FetchFromServiceWorker) {
+                       DISABLED_FetchFromServiceWorkerWithAsk) {
   auto* settings_map =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
-  DCHECK(settings_map);
-
-  // Give the needed permissions.
-  SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
-                CONTENT_SETTING_ALLOW);
-
-  // The fetch should succeed.
-  offline_content_provider_observer_->ResumeOnNextUpdate();
-  ASSERT_NO_FATAL_FAILURE(RunScriptAndCheckResultingMessage(
-      "StartFetchFromServiceWorker()", "backgroundfetchsuccess"));
-
-  // Revoke Automatic Downloads permission.
-  SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
-                CONTENT_SETTING_BLOCK);
-
-  // This should fail without the Automatic Downloads permission.
-  ASSERT_NO_FATAL_FAILURE(RunScriptAndCheckResultingMessage(
-      "StartFetchFromServiceWorker()", "permissionerror"));
-}
-
-IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
-                       FetchFromServiceWorkerWithAsk) {
-  auto* settings_map =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
   DCHECK(settings_map);
 
   SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS, CONTENT_SETTING_ASK);
@@ -878,8 +903,9 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
             offline_items_collection::OfflineItemState::PAUSED);
 }
 
+// TODO(crbug.com/40805915): Flaky on many platforms.
 IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
-                       FetchFromChildFrameWithPermissions) {
+                       DISABLED_FetchFromChildFrameWithPermissions) {
   // Give the needed permissions. The fetch should still start in a paused
   // state.
   SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
@@ -894,7 +920,9 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
             offline_items_collection::OfflineItemState::PAUSED);
 }
 
-IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest, FetchFromChildFrameWithAsk) {
+// TODO(crbug.com/40805915): Flaky on many platforms.
+IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
+                       DISABLED_FetchFromChildFrameWithAsk) {
   SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS, CONTENT_SETTING_ASK);
 
   // The fetch starts in a paused state.
@@ -912,4 +940,580 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
                 CONTENT_SETTING_BLOCK);
   ASSERT_NO_FATAL_FAILURE(RunScriptAndCheckResultingMessage(
       "StartFetchFromIframe()", "permissionerror"));
+}
+
+class BackgroundFetchKillswitchBrowserTest
+    : public BackgroundFetchBrowserTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  BackgroundFetchKillswitchBrowserTest() {
+    if (IsRestrictBackgroundFetchFromServiceWorkerEnabled()) {
+      scoped_feature_list_.InitAndEnableFeature(
+          blink::features::kRestrictBackgroundFetchFromServiceWorker);
+    } else {
+      scoped_feature_list_.InitAndDisableFeature(
+          blink::features::kRestrictBackgroundFetchFromServiceWorker);
+    }
+  }
+
+ protected:
+  bool IsRestrictBackgroundFetchFromServiceWorkerEnabled() {
+    return GetParam();
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         BackgroundFetchKillswitchBrowserTest,
+                         testing::Bool());
+
+IN_PROC_BROWSER_TEST_P(BackgroundFetchKillswitchBrowserTest,
+                       FetchFromServiceWorker) {
+  SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
+                CONTENT_SETTING_ALLOW);
+  base::HistogramTester histogram_tester;
+  if (IsRestrictBackgroundFetchFromServiceWorkerEnabled()) {
+    // If killswitch is enabled, the fetch should fail with a permission error.
+    ASSERT_NO_FATAL_FAILURE(RunScriptAndCheckResultingMessage(
+        "StartFetchFromServiceWorker()", "permissionerror"));
+    content::FetchHistogramsFromChildProcesses();
+    metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
+    histogram_tester.ExpectUniqueSample(
+        "ServiceWorker.BackgroundFetch.FetchStatus", 1 /* kDisallowed */, 1);
+  } else {
+    // If killswitch is disabled, the fetch should succeed.
+    offline_content_provider_observer_->ResumeOnNextUpdate();
+    ASSERT_NO_FATAL_FAILURE(RunScriptAndCheckResultingMessage(
+        "StartFetchFromServiceWorker()", "backgroundfetchsuccess"));
+    content::FetchHistogramsFromChildProcesses();
+    metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
+    histogram_tester.ExpectUniqueSample(
+        "ServiceWorker.BackgroundFetch.FetchStatus",
+        2 /* kAllowedByFeatureFlag */, 1);
+
+    // Revoke Automatic Downloads permission.
+    SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
+                  CONTENT_SETTING_BLOCK);
+
+    // This should fail without the Automatic Downloads permission.
+    ASSERT_NO_FATAL_FAILURE(RunScriptAndCheckResultingMessage(
+        "StartFetchFromServiceWorker()", "permissionerror"));
+  }
+}
+
+class BackgroundFetchLocalNetworkAccessBrowserTest
+    : public BackgroundFetchBrowserTest {
+ public:
+  BackgroundFetchLocalNetworkAccessBrowserTest() {
+    base::FieldTrialParams lna_params;
+    lna_params["LocalNetworkAccessChecksWarn"] = "false";
+
+    base::FieldTrialParams download_params;
+    // Set the DownloadService retry delay to 0 to prevent a 20-second timeout
+    // delay when a background fetch correctly fails due to Local Network Access
+    // restrictions.
+    download_params["retry_delay_ms"] = "0";
+
+    feature_list_.InitWithFeaturesAndParameters(
+        {{network::features::kLocalNetworkAccessChecks, lna_params},
+         {download::kDownloadServiceFeature, download_params},
+         {features::kBackgroundFetchLocalNetworkAccess, {}}},
+        {blink::features::kRestrictBackgroundFetchFromServiceWorker});
+  }
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    BackgroundFetchBrowserTest::SetUpCommandLine(command_line);
+
+    public_server_ = std::make_unique<net::EmbeddedTestServer>(
+        net::EmbeddedTestServer::TYPE_HTTPS);
+    public_server_->AddDefaultHandlers(GetChromeTestDataDir());
+    public_server_->RegisterRequestHandler(base::BindRepeating(
+        &BackgroundFetchBrowserTest::HandleRequest, base::Unretained(this)));
+    ASSERT_TRUE(public_server_->Start());
+
+    loopback_server_ = std::make_unique<net::EmbeddedTestServer>(
+        net::EmbeddedTestServer::TYPE_HTTPS);
+    loopback_server_->AddDefaultHandlers(GetChromeTestDataDir());
+    ASSERT_TRUE(loopback_server_->Start());
+
+    network::AddIpAddressSpaceOverridesToCommandLine(
+        {network::GenerateIpAddressSpaceOverride(
+             *public_server_, network::mojom::IPAddressSpace::kPublic),
+         network::GenerateIpAddressSpaceOverride(
+             *loopback_server_, network::mojom::IPAddressSpace::kLoopback)},
+        *command_line);
+  }
+
+  void SetUpBrowser(BrowserWindowInterface* browser) override {
+    set_active_browser(browser);
+    // Load the helper page that helps drive these tests.
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(
+        browser, public_server_->GetURL(kHelperPage)));
+
+    // Register the Service Worker that's required for Background Fetch. The
+    // behavior without an activated worker is covered by WPTs.
+    ASSERT_EQ("ok - service worker registered",
+              RunScript("RegisterServiceWorker()"));
+
+    test_ukm_recorder_ = std::make_unique<ukm::TestAutoSetUkmRecorder>();
+  }
+
+  void SetPermissionForOrigin(ContentSettingsType content_type,
+                              ContentSetting setting,
+                              const GURL& origin) {
+    auto* settings_map =
+        HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
+    DCHECK(settings_map);
+
+    ContentSettingsPattern host_pattern =
+        ContentSettingsPattern::FromURL(origin);
+
+    settings_map->SetContentSettingCustomScope(
+        host_pattern, ContentSettingsPattern::Wildcard(), content_type,
+        setting);
+  }
+
+ protected:
+  std::unique_ptr<net::EmbeddedTestServer> public_server_;
+  std::unique_ptr<net::EmbeddedTestServer> loopback_server_;
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(BackgroundFetchLocalNetworkAccessBrowserTest, Fetch) {
+  SetPermissionForOrigin(ContentSettingsType::AUTOMATIC_DOWNLOADS,
+                         CONTENT_SETTING_ALLOW, public_server_->base_url());
+
+  GURL loopback_url =
+      loopback_server_->GetURL("/background_fetch/types_of_cheese_cors.txt");
+  std::string script =
+      "StartFetchFromWindowWithUrl('" + loopback_url.spec() + "');";
+
+  // The fetch should fail because of Local Network Access restrictions.
+  offline_content_provider_observer_->ResumeOnNextUpdate();
+  ASSERT_NO_FATAL_FAILURE(
+      RunScriptAndCheckResultingMessage(script, "backgroundfetchfail"));
+
+  // Give the needed Local Network Access permission.
+  SetPermissionForOrigin(ContentSettingsType::LOOPBACK_NETWORK,
+                         CONTENT_SETTING_ALLOW, public_server_->base_url());
+
+  // Now the fetch should succeed.
+  offline_content_provider_observer_->ResumeOnNextUpdate();
+  ASSERT_NO_FATAL_FAILURE(
+      RunScriptAndCheckResultingMessage(script, "backgroundfetchsuccess"));
+}
+
+class BackgroundFetchCorsBrowserTest : public BackgroundFetchBrowserTest {
+ public:
+  BackgroundFetchCorsBrowserTest() {
+    base::FieldTrialParams download_params;
+    // Set a minimal DownloadService retry delay to prevent a 20-second timeout
+    // delay when a background fetch correctly fails due to CORS
+    // restrictions.
+    download_params["retry_delay_ms"] = "20";
+
+    feature_list_.InitWithFeaturesAndParameters(
+        {{download::kDownloadServiceFeature, download_params}}, {});
+  }
+
+  void SetUpOnMainThread() override {
+    cross_origin_server_ = std::make_unique<net::EmbeddedTestServer>(
+        net::EmbeddedTestServer::TYPE_HTTPS);
+    cross_origin_server_->RegisterRequestHandler(base::BindRepeating(
+        &BackgroundFetchCorsBrowserTest::HandleCrossOriginRequest,
+        base::Unretained(this)));
+    cross_origin_server_->AddDefaultHandlers(GetChromeTestDataDir());
+    ASSERT_TRUE(StartServerWithPersistedPort(
+        cross_origin_server_.get(),
+        browser()->GetProfile()->GetPath().AppendASCII(
+            "cross_origin_server_port.txt")));
+
+    BackgroundFetchBrowserTest::SetUpOnMainThread();
+  }
+
+ protected:
+  std::unique_ptr<net::test_server::HttpResponse> HandleCrossOriginRequest(
+      const net::test_server::HttpRequest& request) {
+    if (request.relative_url != "/resumable_cors") {
+      return nullptr;
+    }
+    if (interrupt_resumable_cors_request_.load()) {
+      std::string headers =
+          "HTTP/1.1 200 OK\r\n"
+          "Access-Control-Allow-Origin: *\r\n"
+          "ETag: \"12345\"\r\n"
+          "Accept-Ranges: bytes\r\n"
+          "Content-Length: 82\r\n\r\n";
+      return std::make_unique<net::test_server::RawHttpResponse>(headers,
+                                                                 "0123456789");
+    }
+    auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+    response->set_code(net::HTTP_OK);
+    response->AddCustomHeader("Access-Control-Allow-Origin", "*");
+    response->AddCustomHeader("ETag", "\"12345\"");
+    response->set_content(std::string(82, 'a'));
+    return response;
+  }
+
+  std::atomic<bool> interrupt_resumable_cors_request_{false};
+  std::unique_ptr<net::EmbeddedTestServer> cross_origin_server_;
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(BackgroundFetchCorsBrowserTest,
+                       FailsWithoutCorsHeaders) {
+  SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
+                CONTENT_SETTING_ALLOW);
+
+  GURL cross_origin_url =
+      cross_origin_server_->GetURL("/background_fetch/types_of_cheese.txt");
+  std::string script =
+      "StartFetchFromWindowWithUrl('" + cross_origin_url.spec() + "')";
+
+  // The fetch should fail because of CORS restrictions.
+  offline_content_provider_observer_->ResumeOnNextUpdate();
+  ASSERT_NO_FATAL_FAILURE(
+      RunScriptAndCheckResultingMessage(script, "backgroundfetchfail"));
+}
+
+IN_PROC_BROWSER_TEST_F(BackgroundFetchCorsBrowserTest,
+                       SucceedsWithCorsHeaders) {
+  SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
+                CONTENT_SETTING_ALLOW);
+
+  GURL cross_origin_url = cross_origin_server_->GetURL(
+      "/background_fetch/types_of_cheese_cors.txt");
+  std::string script =
+      "StartFetchFromWindowWithUrl('" + cross_origin_url.spec() + "')";
+
+  // The fetch should succeed because the response has CORS headers.
+  offline_content_provider_observer_->ResumeOnNextUpdate();
+  ASSERT_NO_FATAL_FAILURE(
+      RunScriptAndCheckResultingMessage(script, "backgroundfetchsuccess"));
+}
+
+IN_PROC_BROWSER_TEST_F(BackgroundFetchCorsBrowserTest,
+                       FailsOnCrossOriginRedirectWithoutCorsHeaders) {
+  SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
+                CONTENT_SETTING_ALLOW);
+
+  GURL cross_origin_url =
+      cross_origin_server_->GetURL("/background_fetch/types_of_cheese.txt");
+  GURL redirect_url =
+      https_server()->GetURL("/server-redirect?" + cross_origin_url.spec());
+  std::string script =
+      "StartFetchFromWindowWithUrl('" + redirect_url.spec() + "')";
+
+  offline_content_provider_observer_->ResumeOnNextUpdate();
+  ASSERT_NO_FATAL_FAILURE(
+      RunScriptAndCheckResultingMessage(script, "backgroundfetchfail"));
+}
+
+IN_PROC_BROWSER_TEST_F(BackgroundFetchCorsBrowserTest,
+                       SucceedsOnCrossOriginRedirectWithCorsHeaders) {
+  SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
+                CONTENT_SETTING_ALLOW);
+
+  GURL cross_origin_url = cross_origin_server_->GetURL(
+      "/background_fetch/types_of_cheese_cors.txt");
+  GURL redirect_url =
+      https_server()->GetURL("/server-redirect?" + cross_origin_url.spec());
+  std::string script =
+      "StartFetchFromWindowWithUrl('" + redirect_url.spec() + "')";
+
+  offline_content_provider_observer_->ResumeOnNextUpdate();
+  ASSERT_NO_FATAL_FAILURE(
+      RunScriptAndCheckResultingMessage(script, "backgroundfetchsuccess"));
+}
+
+IN_PROC_BROWSER_TEST_F(BackgroundFetchCorsBrowserTest,
+                       FailsWithCustomHeaderWithoutPreflight) {
+  SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
+                CONTENT_SETTING_ALLOW);
+
+  GURL cross_origin_url = cross_origin_server_->GetURL(
+      "/background_fetch/types_of_cheese_cors.txt");
+  std::string script = "StartFetchFromWindowWithCustomHeader('" +
+                       cross_origin_url.spec() +
+                       "', 'X-Custom-Header', 'SecretValue')";
+
+  // The preflight OPTIONS request will not authorize X-Custom-Header, so the
+  // cross-origin fetch must fail.
+  offline_content_provider_observer_->ResumeOnNextUpdate();
+  ASSERT_NO_FATAL_FAILURE(
+      RunScriptAndCheckResultingMessage(script, "backgroundfetchfail"));
+}
+
+IN_PROC_BROWSER_TEST_F(BackgroundFetchCorsBrowserTest,
+                       FailsWithCredentialsIncludeAgainstWildcardOrigin) {
+  SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
+                CONTENT_SETTING_ALLOW);
+
+  GURL cross_origin_url = cross_origin_server_->GetURL(
+      "/background_fetch/types_of_cheese_cors.txt");
+  std::string script = "StartFetchFromWindowWithOptions('" +
+                       cross_origin_url.spec() + "', {credentials: 'include'})";
+
+  // A cross-origin request with credentials mode 'include' against an endpoint
+  // returning Access-Control-Allow-Origin: * must be blocked by CORS rules.
+  offline_content_provider_observer_->ResumeOnNextUpdate();
+  ASSERT_NO_FATAL_FAILURE(
+      RunScriptAndCheckResultingMessage(script, "backgroundfetchfail"));
+}
+
+IN_PROC_BROWSER_TEST_F(BackgroundFetchCorsBrowserTest,
+                       SucceedsWithCredentialsOmitAgainstWildcardOrigin) {
+  SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
+                CONTENT_SETTING_ALLOW);
+
+  GURL cross_origin_url = cross_origin_server_->GetURL(
+      "/background_fetch/types_of_cheese_cors.txt");
+  std::string script = "StartFetchFromWindowWithOptions('" +
+                       cross_origin_url.spec() + "', {credentials: 'omit'})";
+
+  // When credentials mode is explicitly 'omit', the request succeeds against
+  // an endpoint returning Access-Control-Allow-Origin: *.
+  offline_content_provider_observer_->ResumeOnNextUpdate();
+  ASSERT_NO_FATAL_FAILURE(
+      RunScriptAndCheckResultingMessage(script, "backgroundfetchsuccess"));
+}
+
+IN_PROC_BROWSER_TEST_F(BackgroundFetchCorsBrowserTest,
+                       CrossOriginResponseTypeIsCors) {
+  SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
+                CONTENT_SETTING_ALLOW);
+
+  GURL cross_origin_url = cross_origin_server_->GetURL(
+      "/background_fetch/types_of_cheese_cors.txt");
+  std::string script = "StartFetchFromWindowAndCheckResponseType('" +
+                       cross_origin_url.spec() + "')";
+
+  // Verify that cross-origin fetched resources have response.type == 'cors',
+  // rather than 'default' or 'basic', preventing non-CORS header exposure.
+  offline_content_provider_observer_->ResumeOnNextUpdate();
+  ASSERT_NO_FATAL_FAILURE(RunScriptAndCheckResultingMessage(script, "cors"));
+}
+
+IN_PROC_BROWSER_TEST_F(BackgroundFetchCorsBrowserTest,
+                       NonCorsExposedHeaderNotExposed) {
+  SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
+                CONTENT_SETTING_ALLOW);
+
+  GURL cross_origin_url = cross_origin_server_->GetURL(
+      "/background_fetch/types_of_cheese_cors.txt");
+  std::string script = "StartFetchFromWindowAndCheckSecretHeader('" +
+                       cross_origin_url.spec() + "')";
+
+  // Verify that X-Secret-Server-Header, which is not in the CORS safelist or
+  // Access-Control-Expose-Headers, is filtered out and inaccessible in JS.
+  offline_content_provider_observer_->ResumeOnNextUpdate();
+  ASSERT_NO_FATAL_FAILURE(RunScriptAndCheckResultingMessage(script, "null"));
+}
+
+// Regression test for crbug.com/574059465: Ensure that when a cross-origin
+// Background Fetch with a small downloadTotal fails CORS on the initial
+// attempt, subsequent retries preserve the CORS request mode and do not
+// download the response body or crash when cancelling the job.
+IN_PROC_BROWSER_TEST_F(BackgroundFetchCorsBrowserTest,
+                       FailsWithoutCorsHeadersAndSmallDownloadTotal) {
+  SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
+                CONTENT_SETTING_ALLOW);
+
+  GURL cross_origin_url =
+      cross_origin_server_->GetURL("/background_fetch/types_of_cheese.txt");
+  std::string script = "StartFetchFromWindowWithFetchOptions('" +
+                       cross_origin_url.spec() + "', {downloadTotal: 4})";
+
+  offline_content_provider_observer_->ResumeOnNextUpdate();
+  ASSERT_NO_FATAL_FAILURE(
+      RunScriptAndCheckResultingMessage(script, "backgroundfetchfail"));
+}
+
+// Regression test for crbug.com/574059465: Ensure that if an initial download
+// attempt fails before receiving response headers and a subsequent retry
+// exceeds downloadTotal, cancelling the job with a null response does not
+// crash in BackgroundFetchRequestInfo::SetResult.
+IN_PROC_BROWSER_TEST_F(
+    BackgroundFetchCorsBrowserTest,
+    FailsWhenRetryExceedsDownloadTotalAfterInitialFailureWithoutHeaders) {
+  SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
+                CONTENT_SETTING_ALLOW);
+
+  std::atomic<int> request_count{0};
+  net::EmbeddedTestServer retry_server(net::EmbeddedTestServer::TYPE_HTTPS);
+  retry_server.RegisterRequestHandler(base::BindLambdaForTesting(
+      [&](const net::test_server::HttpRequest& request)
+          -> std::unique_ptr<net::test_server::HttpResponse> {
+        if (request.relative_url != "/retry_exceeds_total") {
+          return nullptr;
+        }
+        if (request_count.fetch_add(1) == 0) {
+          // Close the socket without sending headers on the first attempt so
+          // the download is interrupted with empty response_headers_.
+          return std::make_unique<net::test_server::RawHttpResponse>("", "");
+        }
+        auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+        response->set_code(net::HTTP_OK);
+        response->AddCustomHeader("Access-Control-Allow-Origin", "*");
+        response->set_content("Response body larger than downloadTotal");
+        return response;
+      }));
+  ASSERT_TRUE(retry_server.Start());
+
+  GURL url = retry_server.GetURL("/retry_exceeds_total");
+  std::string script = "StartFetchFromWindowWithFetchOptions('" + url.spec() +
+                       "', {downloadTotal: 4})";
+
+  offline_content_provider_observer_->ResumeOnNextUpdate();
+  ASSERT_NO_FATAL_FAILURE(
+      RunScriptAndCheckResultingMessage(script, "backgroundfetchfail"));
+  EXPECT_GE(request_count.load(), 2);
+}
+
+namespace {
+
+class InterruptAndPauseDownloadObserver
+    : public content::DownloadManager::Observer,
+      public download::DownloadItem::Observer {
+ public:
+  InterruptAndPauseDownloadObserver(content::DownloadManager* manager,
+                                    BackgroundFetchDelegateImpl* delegate)
+      : manager_(manager), delegate_(delegate) {
+    manager_->AddObserver(this);
+  }
+
+  ~InterruptAndPauseDownloadObserver() override {
+    if (download_item_) {
+      download_item_->RemoveObserver(this);
+    }
+    if (manager_) {
+      manager_->RemoveObserver(this);
+    }
+  }
+
+  void set_offline_item_id(const ContentId& id) {
+    offline_item_id_ = id;
+    MaybePauseAndQuit();
+  }
+
+  void Wait() { run_loop_.Run(); }
+
+  // content::DownloadManager::Observer:
+  void OnDownloadCreated(content::DownloadManager* manager,
+                         download::DownloadItem* item) override {
+    if (!download_item_) {
+      download_item_ = item;
+      download_item_->AddObserver(this);
+      MaybePauseAndQuit();
+    }
+  }
+
+  void ManagerGoingDown(content::DownloadManager* manager) override {
+    manager_->RemoveObserver(this);
+    manager_ = nullptr;
+  }
+
+  // download::DownloadItem::Observer:
+  void OnDownloadUpdated(download::DownloadItem* item) override {
+    MaybePauseAndQuit();
+  }
+
+  void OnDownloadDestroyed(download::DownloadItem* item) override {
+    download_item_->RemoveObserver(this);
+    download_item_ = nullptr;
+  }
+
+ private:
+  void MaybePauseAndQuit() {
+    if (!download_item_ || offline_item_id_.id.empty()) {
+      return;
+    }
+    if (download_item_->GetState() == download::DownloadItem::INTERRUPTED) {
+      if (!paused_called_) {
+        paused_called_ = true;
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE,
+            base::BindOnce(&BackgroundFetchDelegateImpl::PauseDownload,
+                           base::Unretained(delegate_), offline_item_id_));
+      }
+      if (download_item_->IsPaused()) {
+        run_loop_.Quit();
+      }
+    }
+  }
+
+  raw_ptr<content::DownloadManager> manager_ = nullptr;
+  raw_ptr<BackgroundFetchDelegateImpl> delegate_ = nullptr;
+  raw_ptr<download::DownloadItem> download_item_ = nullptr;
+  ContentId offline_item_id_;
+  bool paused_called_ = false;
+  base::RunLoop run_loop_;
+};
+
+}  // namespace
+
+IN_PROC_BROWSER_TEST_F(BackgroundFetchCorsBrowserTest,
+                       PRE_ResumesAfterRestartWithCorsHeaders) {
+  interrupt_resumable_cors_request_.store(true);
+  SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
+                CONTENT_SETTING_ALLOW);
+
+  InterruptAndPauseDownloadObserver observer(
+      browser()->GetProfile()->GetDownloadManager(), delegate_);
+
+  GURL cross_origin_url = cross_origin_server_->GetURL("/resumable_cors");
+  std::vector<OfflineItem> items;
+  std::string script =
+      "navigator.serviceWorker.ready.then(reg => "
+      "reg.backgroundFetch.fetch('bg-fetch-id', '" +
+      cross_origin_url.spec() + "')).then(() => 'ok')";
+  ASSERT_NO_FATAL_FAILURE(RunScriptAndWaitForOfflineItems(script, &items));
+  ASSERT_EQ(items.size(), 1u);
+
+  observer.set_offline_item_id(items[0].id);
+  observer.Wait();
+
+  content::RunAllTasksUntilIdle();
+}
+
+IN_PROC_BROWSER_TEST_F(BackgroundFetchCorsBrowserTest,
+                       ResumesAfterRestartWithCorsHeaders) {
+  SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
+                CONTENT_SETTING_ALLOW);
+
+  offline_items_collection::OfflineContentAggregator* aggregator =
+      OfflineContentAggregatorFactory::GetInstance()->GetForKey(
+          browser()->GetProfile()->GetProfileKey());
+
+  ContentId bg_fetch_id;
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    std::vector<OfflineItem> items;
+    base::RunLoop run_loop;
+    aggregator->GetAllItems(base::BindLambdaForTesting(
+        [&](const std::vector<OfflineItem>& all_items) {
+          items = all_items;
+          run_loop.Quit();
+        }));
+    run_loop.Run();
+    for (const auto& item : items) {
+      if (item.id.name_space == "background_fetch" &&
+          item.state == offline_items_collection::OfflineItemState::PAUSED) {
+        bg_fetch_id = item.id;
+        return true;
+      }
+    }
+    return false;
+  }));
+
+  ASSERT_EQ("ok",
+            RunScript("window.resumeResultPromise = new Promise(resolve => {"
+                      "  navigator.serviceWorker.addEventListener('message', "
+                      "    e => resolve(e.data), {once: true});"
+                      "}); 'ok'"));
+
+  delegate_->ResumeDownload(bg_fetch_id);
+
+  EXPECT_EQ("backgroundfetchsuccess", RunScript("window.resumeResultPromise"));
 }

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,7 @@ DocumentMarker::MarkerType ActiveSuggestionMarkerListImpl::MarkerType() const {
 }
 
 bool ActiveSuggestionMarkerListImpl::IsEmpty() const {
-  return markers_.IsEmpty();
+  return markers_.empty();
 }
 
 void ActiveSuggestionMarkerListImpl::Add(DocumentMarker* marker) {
@@ -32,37 +32,37 @@ ActiveSuggestionMarkerListImpl::GetMarkers() const {
 }
 
 DocumentMarker* ActiveSuggestionMarkerListImpl::FirstMarkerIntersectingRange(
-    unsigned start_offset,
-    unsigned end_offset) const {
+    wtf_size_t start_offset,
+    wtf_size_t end_offset) const {
   return SortedDocumentMarkerListEditor::FirstMarkerIntersectingRange(
       markers_, start_offset, end_offset);
 }
 
 HeapVector<Member<DocumentMarker>>
 ActiveSuggestionMarkerListImpl::MarkersIntersectingRange(
-    unsigned start_offset,
-    unsigned end_offset) const {
+    wtf_size_t start_offset,
+    wtf_size_t end_offset) const {
   return SortedDocumentMarkerListEditor::MarkersIntersectingRange(
       markers_, start_offset, end_offset);
 }
 
 bool ActiveSuggestionMarkerListImpl::MoveMarkers(
-    int length,
+    wtf_size_t length,
     DocumentMarkerList* dst_markers_) {
   return SortedDocumentMarkerListEditor::MoveMarkers(&markers_, length,
                                                      dst_markers_);
 }
 
-bool ActiveSuggestionMarkerListImpl::RemoveMarkers(unsigned start_offset,
-                                                   int length) {
+bool ActiveSuggestionMarkerListImpl::RemoveMarkers(wtf_size_t start_offset,
+                                                   wtf_size_t length) {
   return SortedDocumentMarkerListEditor::RemoveMarkers(&markers_, start_offset,
                                                        length);
 }
 
 bool ActiveSuggestionMarkerListImpl::ShiftMarkers(const String&,
-                                                  unsigned offset,
-                                                  unsigned old_length,
-                                                  unsigned new_length) {
+                                                  wtf_size_t offset,
+                                                  wtf_size_t old_length,
+                                                  wtf_size_t new_length) {
   return SortedDocumentMarkerListEditor::ShiftMarkersContentIndependent(
       &markers_, offset, old_length, new_length);
 }

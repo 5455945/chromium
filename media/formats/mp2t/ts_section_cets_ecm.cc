@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,19 +18,17 @@ TsSectionCetsEcm::TsSectionCetsEcm(
 TsSectionCetsEcm::~TsSectionCetsEcm() {}
 
 bool TsSectionCetsEcm::Parse(bool payload_unit_start_indicator,
-                             const uint8_t* buf,
-                             int size) {
-  DCHECK(buf);
-  BitReader bit_reader(buf, size);
-  int num_states;
+                             base::span<const uint8_t> buf) {
+  BitReader bit_reader(buf);
+  uint8_t num_states;
   bool next_key_id_flag;
   bool no_byte_align;
-  int iv_size;
+  uint8_t iv_size;
   std::string key_id;
-  int transport_scrambling_control;
-  int num_au;
+  uint8_t transport_scrambling_control;
+  uint8_t num_au;
   bool key_id_flag;
-  int au_byte_offset_size;
+  uint8_t au_byte_offset_size;
   std::string iv;
   // TODO(dougsteed). Currently we allow only a subset of the possible values.
   // When we flesh out this implementation to cover all of ISO/IEC 23001-9 we

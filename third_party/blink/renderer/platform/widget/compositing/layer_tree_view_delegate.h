@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,14 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
-#include "cc/trees/layer_tree_host_client.h"
+#include "cc/trees/layer_tree_host_delegate.h"
+#include "cc/trees/paint_holding_reason.h"
 
 namespace cc {
 class LayerTreeFrameSink;
 struct BeginMainFrameMetrics;
-struct WebVitalMetrics;
 class RenderFrameMetadataObserver;
 }  // namespace cc
 
@@ -36,11 +36,16 @@ class LayerTreeViewDelegate {
   virtual void UpdateCompositorScrollState(
       const cc::CompositorCommitData& commit_data) = 0;
 
+  virtual void UpdateAnimatedImageState(
+      const cc::CompositorCommitData& commit_data) = 0;
+
   // Notifies that the compositor has issued a BeginMainFrame.
-  virtual void BeginMainFrame(base::TimeTicks frame_time) = 0;
+  virtual void BeginMainFrame(const viz::BeginFrameArgs& args) = 0;
 
   virtual void OnDeferMainFrameUpdatesChanged(bool) = 0;
-  virtual void OnDeferCommitsChanged(bool) = 0;
+  virtual void OnDeferCommitsChanged(bool defer_status,
+                                     cc::PaintHoldingReason reason) = 0;
+  virtual void OnCommitRequested() = 0;
 
   // Notifies that the layer tree host has completed a call to
   // RequestMainFrameUpdate in response to a BeginMainFrame.
@@ -63,7 +68,8 @@ class LayerTreeViewDelegate {
   // Notifies about a compositor frame commit operation having finished.
   // The commit_start_time is the time that the impl thread started processing
   // the commit.
-  virtual void DidCommitCompositorFrame(base::TimeTicks commit_start_time) = 0;
+  virtual void DidCommitCompositorFrame(base::TimeTicks commit_start_time,
+                                        base::TimeTicks commit_finish_time) = 0;
 
   // Called by the compositor when page scale animation completed.
   virtual void DidCompletePageScaleAnimation() = 0;
@@ -89,8 +95,6 @@ class LayerTreeViewDelegate {
   virtual std::unique_ptr<cc::BeginMainFrameMetrics>
   GetBeginMainFrameMetrics() = 0;
 
-  virtual std::unique_ptr<cc::WebVitalMetrics> GetWebVitalMetrics() = 0;
-
   // Notification of the beginning and end of LayerTreeHost::UpdateLayers, for
   // metrics collection.
   virtual void BeginUpdateLayers() = 0;
@@ -111,6 +115,13 @@ class LayerTreeViewDelegate {
   // Used in web tests without threaded compositing, to indicate that a new
   // commit needs to be scheduled. Has no effect in any other mode.
   virtual void ScheduleAnimationForWebTests() = 0;
+
+  // Creates a RenderFrameMetadataObserver to track frame production in the
+  // compositor. Generally this is supplied with the LayerTreeFrameSink. This
+  // API is used if the compositor attaches to a new delegate, which requires a
+  // new observer bound to the new delegate.
+  virtual std::unique_ptr<cc::RenderFrameMetadataObserver>
+  CreateRenderFrameObserver() = 0;
 
  protected:
   virtual ~LayerTreeViewDelegate() {}

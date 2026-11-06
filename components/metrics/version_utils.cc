@@ -1,22 +1,24 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/metrics/version_utils.h"
 
 #include "base/notreached.h"
+#include "base/system/sys_info.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "components/version_info/version_info.h"
 
-#if defined(OS_ANDROID)
-#include "base/android/build_info.h"
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/apk_info.h"
+#include "base/android/device_info.h"
 #endif
 
 namespace metrics {
 
 std::string GetVersionString() {
-  std::string version = version_info::GetVersionNumber();
+  std::string version(version_info::GetVersionNumber());
 #if defined(ARCH_CPU_64_BITS)
   version += "-64";
 #endif  // defined(ARCH_CPU_64_BITS)
@@ -45,14 +47,27 @@ SystemProfileProto::Channel AsProtobufChannel(version_info::Channel channel) {
       return SystemProfileProto::CHANNEL_STABLE;
   }
   NOTREACHED();
-  return SystemProfileProto::CHANNEL_UNKNOWN;
 }
 
 std::string GetAppPackageName() {
-#if defined(OS_ANDROID)
-  return base::android::BuildInfo::GetInstance()->package_name();
-#endif
+#if BUILDFLAG(IS_ANDROID)
+  return base::android::apk_info::package_name();
+#else
   return std::string();
+#endif
+}
+
+std::string GetOperatingSystemName() {
+#if BUILDFLAG(IS_CHROMEOS)
+  return "CrOS";
+#elif BUILDFLAG(IS_ANDROID)
+  if (base::android::device_info::is_desktop()) {
+    return "Android Desktop";
+  }
+  return base::SysInfo::OperatingSystemName();
+#else
+  return base::SysInfo::OperatingSystemName();
+#endif
 }
 
 }  // namespace metrics

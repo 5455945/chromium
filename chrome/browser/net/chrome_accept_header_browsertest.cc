@@ -1,8 +1,8 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/macros.h"
+#include "base/feature_list.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -16,22 +16,20 @@
 
 using ChromeAcceptHeaderTest = InProcessBrowserTest;
 
-#if BUILDFLAG(ENABLE_AV1_DECODER) || BUILDFLAG(ENABLE_JXL_DECODER)
 namespace {
 std::string GetOptionalImageCodecs() {
   std::string result;
 #if BUILDFLAG(ENABLE_JXL_DECODER)
-  if (base::FeatureList::IsEnabled(blink::features::kJXL)) {
+  if (base::FeatureList::IsEnabled(blink::features::kJXLImageFormat)) {
     result.append("image/jxl,");
   }
 #endif
-#if BUILDFLAG(ENABLE_AV1_DECODER)
+#if BUILDFLAG(ENABLE_DAV1D_DECODER)
   result.append("image/avif,");
 #endif
   return result;
 }
 }  // namespace
-#endif  // BUILDFLAG(ENABLE_AV1_DECODER) || BUILDFLAG(ENABLE_JXL_DECODER)
 
 IN_PROC_BROWSER_TEST_F(ChromeAcceptHeaderTest, Check) {
   net::EmbeddedTestServer server(net::EmbeddedTestServer::TYPE_HTTP);
@@ -54,7 +52,7 @@ IN_PROC_BROWSER_TEST_F(ChromeAcceptHeaderTest, Check) {
       }));
   ASSERT_TRUE(server.Start());
   GURL url = server.GetURL("/pdf/pdf_embed.html");
-  ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   plugin_loop.Run();
   favicon_loop.Run();
@@ -62,24 +60,15 @@ IN_PROC_BROWSER_TEST_F(ChromeAcceptHeaderTest, Check) {
   // With MimeHandlerViewInCrossProcessFrame, embedded PDF will go through the
   // navigation code path and behaves similarly to PDF loaded inside <iframe>.
   std::string expected_plugin_accept_header =
-      "text/html,application/xhtml+xml,application/xml;q=0.9,image/"
-      "webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9";
-#if BUILDFLAG(ENABLE_AV1_DECODER) || BUILDFLAG(ENABLE_JXL_DECODER)
-  expected_plugin_accept_header =
       "text/html,application/xhtml+xml,application/xml;q=0.9," +
       GetOptionalImageCodecs() +
       "image/webp,image/apng,*/*;q=0.8,"
-      "application/signed-exchange;v=b3;q=0.9";
-#endif
+      "application/signed-exchange;v=b3;q=0.7";
   ASSERT_EQ(expected_plugin_accept_header, plugin_accept_header);
 
   std::string expected_favicon_accept_header =
-      "image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
-#if BUILDFLAG(ENABLE_AV1_DECODER) || BUILDFLAG(ENABLE_JXL_DECODER)
-  expected_favicon_accept_header =
       GetOptionalImageCodecs() +
       "image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
-#endif
   ASSERT_EQ(expected_favicon_accept_header, favicon_accept_header);
 
   // Since the server uses local variables.

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,12 +12,14 @@ import android.graphics.drawable.Drawable;
 import android.view.View;
 import android.view.View.OnAttachStateChangeListener;
 import android.view.View.OnLayoutChangeListener;
-import android.view.ViewGroup;
-import android.view.ViewParent;
 import android.widget.ImageView;
 
 import androidx.core.graphics.drawable.DrawableCompat;
 import androidx.core.view.ViewCompat;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.ui.base.ViewUtils;
 
 /**
  * A helper class to simulate {@link View#getForeground()} on older versions of Android.  This class
@@ -25,9 +27,10 @@ import androidx.core.view.ViewCompat;
  * from the underly {@link View}:
  *
  * 1) {@link View#draw(Canvas)}.
- * 2) {@link View#onVisibilityChanged(View,boolean)}
- * 3) {@link View#drawableStateChanged()}.
- * 4) {@link View#verifyDrawable(Drawable)}.
+ * 2) {@link View#onVisibilityChanged(View, int)}
+ * 3) {@link View#onWindowVisibilityChanged(int)}
+ * 4) {@link View#drawableStateChanged()}.
+ * 5) {@link View#verifyDrawable(Drawable)}.
  *
  * Here is a rough example of how to use this below to extend an ImageView (replace with any View):
  *
@@ -59,6 +62,12 @@ import androidx.core.view.ViewCompat;
  *     }
  *
  *     @Override
+ *     protected void onWindowVisibilityChanged(int visibility) {
+ *         super.onWindowVisibilityChanged(visibility);
+ *         mCompat.onWindowVisibilityChanged(visibility);
+ *     }
+ *
+ *     @Override
  *     protected void drawableStateChanged() {
  *         super.drawableStateChanged();
  *         mCompat.drawableStateChanged();
@@ -70,6 +79,7 @@ import androidx.core.view.ViewCompat;
  *     }
  * }
  */
+@NullMarked
 public class ForegroundDrawableCompat
         implements OnAttachStateChangeListener, OnLayoutChangeListener {
     private final RectF mTempSrc = new RectF();
@@ -79,7 +89,7 @@ public class ForegroundDrawableCompat
     private final View mView;
 
     private boolean mOnBoundsChanged;
-    private Drawable mDrawable;
+    private @Nullable Drawable mDrawable;
 
     private ImageView.ScaleType mScaleType = ImageView.ScaleType.FIT_CENTER;
 
@@ -99,11 +109,11 @@ public class ForegroundDrawableCompat
      * @param drawable The {@link Drawable} to set as a foreground {@link Drawable} on the
      *                 {@link View}.
      */
-    public void setDrawable(Drawable drawable) {
+    public void setDrawable(@Nullable Drawable drawable) {
         if (mDrawable == drawable) return;
 
         if (mDrawable != null) {
-            if (ViewCompat.isAttachedToWindow(mView)) mDrawable.setVisible(false, false);
+            mDrawable.setVisible(false, false);
             mDrawable.setCallback(null);
             mView.unscheduleDrawable(mDrawable);
             mDrawable = null;
@@ -119,18 +129,15 @@ public class ForegroundDrawableCompat
 
             // TODO(dtrainor): Support tint?
 
-            if (ViewCompat.isAttachedToWindow(mView)) {
-                mDrawable.setVisible(
-                        mView.getWindowVisibility() == View.VISIBLE && mView.isShown(), false);
-            }
             mDrawable.setCallback(mView);
+            updateDrawableVisibility();
         }
-        mView.requestLayout();
+        ViewUtils.requestLayout(mView, "ForegroundDrawableCompat.setDrawable");
         mView.invalidate();
     }
 
     /** @return The currently set foreground {@link Drawable}. */
-    public Drawable getDrawable() {
+    public @Nullable Drawable getDrawable() {
         return mDrawable;
     }
 
@@ -138,9 +145,10 @@ public class ForegroundDrawableCompat
      * Determines how the foreground {@code Drawable} will be drawn in front of the {@link View}.
      * Right now the only supported types are FIT_* types and the CENTER type.
      *
-     * TODO(dtrainor): Add support for more scale types.
+     * <p>TODO(dtrainor): Add support for more scale types.
      *
-     * @param type The type of scale to apply to the {@Drawable} (see {@link ImageView.ScaleType}).
+     * @param type The type of scale to apply to the {@link Drawable} (see {@link
+     *     ImageView.ScaleType}).
      */
     public void setScaleType(ImageView.ScaleType type) {
         if (mScaleType == type) return;
@@ -169,15 +177,12 @@ public class ForegroundDrawableCompat
 
     /** Meant to be called from {@link View#onVisibilityChanged(View,visibility)}. */
     public void onVisibilityChanged(View view, int visibility) {
-        if (mView != view || mDrawable == null) return;
+        updateDrawableVisibility();
+    }
 
-        ViewParent parent = mView.getParent();
-        boolean parentVisible = parent != null
-                && (!(parent instanceof ViewGroup) || ((ViewGroup) parent).isShown());
-
-        if (parentVisible && mView.getWindowVisibility() == View.VISIBLE) {
-            mDrawable.setVisible(visibility == View.VISIBLE, false);
-        }
+    /** Meant to be called from {@link View#onWindowVisibilityChanged(int)}. */
+    public void onWindowVisibilityChanged(int visibility) {
+        updateDrawableVisibility(visibility);
     }
 
     /** Meant to be called from {@link View#drawableStateChanged()}. */
@@ -194,24 +199,38 @@ public class ForegroundDrawableCompat
     // OnAttachStateChangeListener implementation.
     @Override
     public void onViewAttachedToWindow(View v) {
-        if (mDrawable == null) return;
-        if (mView.isShown() && mView.getWindowVisibility() != View.GONE) {
-            mDrawable.setVisible(mView.getVisibility() == View.VISIBLE, false);
-        }
+        updateDrawableVisibility();
     }
 
     @Override
     public void onViewDetachedFromWindow(View v) {
         if (mDrawable == null) return;
-        if (mView.isShown() && mView.getWindowVisibility() != View.GONE) {
-            mDrawable.setVisible(false, false);
+        mDrawable.setVisible(false, false);
+    }
+
+    private void updateDrawableVisibility() {
+        updateDrawableVisibility(mView.getWindowVisibility());
+    }
+
+    private void updateDrawableVisibility(int windowVisibility) {
+        if (mDrawable == null) return;
+        if (ViewCompat.isAttachedToWindow(mView)) {
+            mDrawable.setVisible(windowVisibility == View.VISIBLE && mView.isShown(), false);
         }
     }
 
     // OnLayoutChangeListener implementation.
     @Override
-    public void onLayoutChange(View v, int left, int top, int right, int bottom, int oldLeft,
-            int oldTop, int oldRight, int oldBottom) {
+    public void onLayoutChange(
+            View v,
+            int left,
+            int top,
+            int right,
+            int bottom,
+            int oldLeft,
+            int oldTop,
+            int oldRight,
+            int oldBottom) {
         if (mDrawable == null) return;
 
         int width = right - left;
@@ -236,21 +255,26 @@ public class ForegroundDrawableCompat
         mTempSrc.set(0, 0, drawableWidth, drawableHeight);
         mTempDst.set(0, 0, viewWidth, viewHeight);
 
-        if (mScaleType == ImageView.ScaleType.FIT_START) {
-            mDrawMatrix.setRectToRect(mTempSrc, mTempDst, ScaleToFit.START);
-            mDrawable.setBounds(0, 0, drawableWidth, drawableHeight);
-        } else if (mScaleType == ImageView.ScaleType.FIT_CENTER) {
-            mDrawMatrix.setRectToRect(mTempSrc, mTempDst, ScaleToFit.CENTER);
-            mDrawable.setBounds(0, 0, drawableWidth, drawableHeight);
-        } else if (mScaleType == ImageView.ScaleType.FIT_END) {
-            mDrawMatrix.setRectToRect(mTempSrc, mTempDst, ScaleToFit.END);
-            mDrawable.setBounds(0, 0, drawableWidth, drawableHeight);
-        } else if (mScaleType == ImageView.ScaleType.CENTER) {
-            mDrawMatrix.setTranslate(Math.round((viewWidth - drawableWidth) * 0.5f),
-                    Math.round((viewHeight - drawableHeight) * 0.5f));
-            mDrawable.setBounds(0, 0, drawableWidth, drawableHeight);
-        } else {
-            mDrawable.setBounds(0, 0, viewWidth, viewHeight);
+        switch (mScaleType) {
+            case FIT_START -> {
+                mDrawMatrix.setRectToRect(mTempSrc, mTempDst, ScaleToFit.START);
+                mDrawable.setBounds(0, 0, drawableWidth, drawableHeight);
+            }
+            case FIT_CENTER -> {
+                mDrawMatrix.setRectToRect(mTempSrc, mTempDst, ScaleToFit.CENTER);
+                mDrawable.setBounds(0, 0, drawableWidth, drawableHeight);
+            }
+            case FIT_END -> {
+                mDrawMatrix.setRectToRect(mTempSrc, mTempDst, ScaleToFit.END);
+                mDrawable.setBounds(0, 0, drawableWidth, drawableHeight);
+            }
+            case CENTER -> {
+                mDrawMatrix.setTranslate(
+                        Math.round((viewWidth - drawableWidth) * 0.5f),
+                        Math.round((viewHeight - drawableHeight) * 0.5f));
+                mDrawable.setBounds(0, 0, drawableWidth, drawableHeight);
+            }
+            default -> mDrawable.setBounds(0, 0, viewWidth, viewHeight);
         }
 
         mOnBoundsChanged = false;

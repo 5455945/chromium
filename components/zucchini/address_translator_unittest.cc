@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -54,11 +54,11 @@ class TestAddressTranslator : public AddressTranslator {
 
       auto first_non_blank = [](const std::string& t) {
         auto is_blank = [](char ch) { return ch == '.'; };
-        return std::find_if_not(t.begin(), t.end(), is_blank) - t.begin();
+        return std::ranges::find_if_not(t, is_blank) - t.begin();
       };
       auto count_non_special = [](const std::string& t) {
         auto is_special = [](char ch) { return ch == '.' || ch == '!'; };
-        return t.size() - std::count_if(t.begin(), t.end(), is_special);
+        return t.size() - std::ranges::count_if(t, is_special);
       };
       units.push_back({static_cast<offset_t>(first_non_blank(s1)),
                        static_cast<offset_t>(count_non_special(s1)),

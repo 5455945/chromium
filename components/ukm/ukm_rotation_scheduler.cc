@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,12 @@ namespace ukm {
 
 UkmRotationScheduler::UkmRotationScheduler(
     const base::RepeatingClosure& upload_callback,
-    bool fast_startup_for_testing,
+    bool fast_startup,
     const base::RepeatingCallback<base::TimeDelta(void)>&
         upload_interval_callback)
     : metrics::MetricsRotationScheduler(upload_callback,
                                         upload_interval_callback,
-                                        fast_startup_for_testing) {}
+                                        fast_startup) {}
 
 UkmRotationScheduler::~UkmRotationScheduler() = default;
 

@@ -1,14 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_NOTIFICATIONS_NOTIFICATION_PLATFORM_BRIDGE_LINUX_H_
 #define CHROME_BROWSER_NOTIFICATIONS_NOTIFICATION_PLATFORM_BRIDGE_LINUX_H_
 
+#include <memory>
 #include <string>
 
-#include "base/callback_forward.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
 #include "chrome/browser/notifications/notification_platform_bridge.h"
 
 class NotificationPlatformBridgeLinuxImpl;
@@ -34,6 +34,10 @@ class NotificationPlatformBridgeLinux : public NotificationPlatformBridge {
   void Close(Profile* profile, const std::string& notification_id) override;
   void GetDisplayed(Profile* profile,
                     GetDisplayedNotificationsCallback callback) const override;
+  void GetDisplayedForOrigin(
+      Profile* profile,
+      const GURL& origin,
+      GetDisplayedNotificationsCallback callback) const override;
   void SetReadyCallback(NotificationBridgeReadyCallback callback) override;
   void DisplayServiceShutDown(Profile* profile) override;
 
@@ -45,7 +49,7 @@ class NotificationPlatformBridgeLinux : public NotificationPlatformBridge {
 
   void CleanUp();
 
-  scoped_refptr<NotificationPlatformBridgeLinuxImpl> impl_;
+  std::unique_ptr<NotificationPlatformBridgeLinuxImpl> impl_;
 };
 
 #endif  // CHROME_BROWSER_NOTIFICATIONS_NOTIFICATION_PLATFORM_BRIDGE_LINUX_H_

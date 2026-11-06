@@ -27,6 +27,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_IME_INPUT_METHOD_CONTROLLER_H_
 
 #include "base/gtest_prod_util.h"
+#include "third_party/blink/public/mojom/input/input_handler.mojom-blink.h"
 #include "third_party/blink/public/platform/web_text_input_info.h"
 #include "third_party/blink/public/platform/web_text_input_type.h"
 #include "third_party/blink/renderer/core/core_export.h"
@@ -39,13 +40,14 @@
 #include "third_party/blink/renderer/core/events/input_event.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
 
 class Editor;
 class EditContext;
+class FrameSelection;
 class LocalDOMWindow;
 class LocalFrame;
 class Range;
@@ -68,19 +70,21 @@ class CORE_EXPORT InputMethodController final
 
   // international text input composition
   bool HasComposition() const;
-  void SetComposition(const String& text,
-                      const Vector<ImeTextSpan>& ime_text_spans,
-                      int selection_start,
-                      int selection_end);
+  void SetComposition(
+      const String& text,
+      const Vector<ImeTextSpan>& ime_text_spans,
+      int selection_start,
+      int selection_end,
+      mojom::blink::ImeState ime_state = mojom::blink::ImeState::kNone);
   void SetCompositionFromExistingText(const Vector<ImeTextSpan>& ime_text_spans,
-                                      unsigned composition_start,
-                                      unsigned composition_end);
+                                      wtf_size_t composition_start,
+                                      wtf_size_t composition_end);
   void AddImeTextSpansToExistingText(const Vector<ImeTextSpan>& ime_text_spans,
-                                     unsigned text_start,
-                                     unsigned text_end);
+                                     wtf_size_t text_start,
+                                     wtf_size_t text_end);
   void ClearImeTextSpansByType(ImeTextSpan::Type type,
-                               unsigned text_start,
-                               unsigned text_end);
+                               wtf_size_t text_start,
+                               wtf_size_t text_end);
 
   // Deletes ongoing composing text if any, inserts specified text, and
   // changes the selection according to relativeCaretPosition, which is
@@ -89,8 +93,16 @@ class CORE_EXPORT InputMethodController final
                   const Vector<ImeTextSpan>& ime_text_spans,
                   int relative_caret_position);
 
-  // Replaces the text in the specified range without changing the selection.
-  bool ReplaceText(const String&, PlainTextRange);
+  // Replaces the text in the specified range and keep the current selection.
+  bool ReplaceTextAndKeepSelection(const String& text,
+                                   const Vector<ImeTextSpan>& ime_text_spans,
+                                   PlainTextRange range);
+
+  // Replaces the text in the specified range and move the caret position. The
+  // relative_caret_position is relative to the end of the text being replaced.
+  bool ReplaceTextAndMoveCaret(const String&,
+                               PlainTextRange,
+                               int relative_caret_position);
 
   // Inserts ongoing composing text; changes the selection to the end of
   // the inserting text if DoNotKeepSelection, or holds the selection if
@@ -106,14 +118,20 @@ class CORE_EXPORT InputMethodController final
 
   PlainTextRange GetSelectionOffsets() const;
   // Returns true if setting selection to specified offsets, otherwise false.
-  bool SetEditableSelectionOffsets(const PlainTextRange&);
+  bool SetEditableSelectionOffsets(const PlainTextRange&,
+                                   bool show_handle = false,
+                                   bool show_context_menu = false);
   void ExtendSelectionAndDelete(int before, int after);
+  void ExtendSelectionAndReplace(int before,
+                                 int after,
+                                 const String& replacement_text);
   PlainTextRange CreateRangeForSelection(int start,
                                          int end,
                                          size_t text_length) const;
   void DeleteSurroundingText(int before, int after);
   void DeleteSurroundingTextInCodePoints(int before, int after);
 
+  void DidChangeVisibility(const LayoutObject& layout_object);
   void DidLayoutSubtree(const LayoutObject& layout_object);
   void DidUpdateLayout(const LayoutObject& layout_object);
   void LayoutObjectWillBeDestroyed(const LayoutObject& layout_object);
@@ -123,13 +141,14 @@ class CORE_EXPORT InputMethodController final
   // operation, so making it specific whenever needed by splitting from
   // TextInputFlags()
   int ComputeWebTextInputNextPreviousFlags() const;
-  WebTextInputType TextInputType() const;
 
   // Call this when we will change focus.
   void WillChangeFocus();
 
   // Returns the |EditContext| that is currently active
-  EditContext* GetActiveEditContext() const { return active_edit_context_; }
+  EditContext* GetActiveEditContext() const {
+    return active_edit_context_.Get();
+  }
   void SetActiveEditContext(EditContext* edit_context) {
     active_edit_context_ = edit_context;
   }
@@ -154,6 +173,13 @@ class CORE_EXPORT InputMethodController final
 
   DOMNodeId NodeIdOfFocusedElement() const;
 
+  ui::TextInputAction InputActionOfFocusedElement() const;
+  WebTextInputMode InputModeOfFocusedElement() const;
+  ui::mojom::VirtualKeyboardPolicy VirtualKeyboardPolicyOfFocusedElement()
+      const;
+  WebTextInputType TextInputType() const;
+  int TextInputFlags() const;
+
  private:
   friend class InputMethodControllerTest;
 
@@ -165,11 +191,13 @@ class CORE_EXPORT InputMethodController final
   CachedTextInputInfo cached_text_input_info_;
   Member<Range> composition_range_;
   Member<EditContext> active_edit_context_;
-  bool has_composition_;
-  ui::mojom::VirtualKeyboardVisibilityRequest last_vk_visibility_request_;
+  bool has_composition_ = false;
+  ui::mojom::VirtualKeyboardVisibilityRequest last_vk_visibility_request_ =
+      ui::mojom::VirtualKeyboardVisibilityRequest::NONE;
 
   Editor& GetEditor() const;
   LocalFrame& GetFrame() const;
+  FrameSelection& Selection() const;
 
   String ComposingText() const;
   void SelectComposition() const;
@@ -181,7 +209,7 @@ class CORE_EXPORT InputMethodController final
 
   void AddImeTextSpans(const Vector<ImeTextSpan>& ime_text_spans,
                        ContainerNode* base_element,
-                       unsigned offset_in_plain_chars);
+                       wtf_size_t offset_in_plain_chars);
 
   bool InsertText(const String&);
   bool InsertTextAndMoveCaret(const String&,
@@ -190,7 +218,7 @@ class CORE_EXPORT InputMethodController final
 
   // Inserts the given text string in the place of the existing composition.
   // Returns true if did replace.
-  bool ReplaceComposition(const String& text) WARN_UNUSED_RESULT;
+  [[nodiscard]] bool ReplaceComposition(const String& text);
   // Inserts the given text string in the place of the existing composition
   // and moves caret. Returns true if did replace and moved caret successfully.
   bool ReplaceCompositionAndMoveCaret(
@@ -199,29 +227,24 @@ class CORE_EXPORT InputMethodController final
       const Vector<ImeTextSpan>& ime_text_spans);
 
   // Returns false if the frame was destroyed, true otherwise.
-  bool DeleteSelection() WARN_UNUSED_RESULT;
+  [[nodiscard]] bool DeleteSelection();
 
   // Returns false if the frame was destroyed, true otherwise.
   // The difference between this function and DeleteSelection() is that
   // DeleteSelection() code path may modify the selection to visible units,
   // which we don't want when deleting code point.
-  bool DeleteSelectionWithoutAdjustment() WARN_UNUSED_RESULT;
+  [[nodiscard]] bool DeleteSelectionWithoutAdjustment();
 
   // Returns true if moved caret successfully.
   bool MoveCaret(int new_caret_position);
 
   // Returns false if the frame is destroyed, true otherwise.
-  bool DispatchCompositionStartEvent(const String& text) WARN_UNUSED_RESULT;
+  [[nodiscard]] bool DispatchCompositionStartEvent(const String& text);
 
   PlainTextRange CreateSelectionRangeForSetComposition(
       int selection_start,
       int selection_end,
       size_t text_length) const;
-  int TextInputFlags() const;
-  ui::TextInputAction InputActionOfFocusedElement() const;
-  WebTextInputMode InputModeOfFocusedElement() const;
-  ui::mojom::VirtualKeyboardPolicy VirtualKeyboardPolicyOfFocusedElement()
-      const;
 
   // Implements |ExecutionContextLifecycleObserver|.
   void ContextDestroyed() final;
@@ -229,10 +252,16 @@ class CORE_EXPORT InputMethodController final
   enum class TypingContinuation;
 
   // Returns true if setting selection to specified offsets, otherwise false.
-  bool SetEditableSelectionOffsets(const PlainTextRange&, TypingContinuation);
+  bool SetEditableSelectionOffsets(const PlainTextRange&,
+                                   TypingContinuation,
+                                   bool show_handle = false,
+                                   bool show_context_menu = false);
 
   // Returns true if selection offsets were successfully set.
-  bool SetSelectionOffsets(const PlainTextRange&, TypingContinuation);
+  bool SetSelectionOffsets(const PlainTextRange&,
+                           TypingContinuation,
+                           bool show_handle = false,
+                           bool show_context_menu = false);
 
   // There are few cases we need to remove suggestion markers which are also in
   // composing range. (SuggestionSpan with FLAG_AUTO_CORRECTION and
@@ -253,12 +282,15 @@ class CORE_EXPORT InputMethodController final
       TypingCommand::TextCompositionType composition_type);
   void DispatchCompositionEndEvent(LocalFrame& frame, const String& text);
 
-  WebVector<ui::ImeTextSpan> GetImeTextSpans() const;
+  std::vector<ui::ImeTextSpan> GetImeTextSpans() const;
 
   FRIEND_TEST_ALL_PREFIXES(InputMethodControllerTest,
                            InputModeOfFocusedElement);
   FRIEND_TEST_ALL_PREFIXES(InputMethodControllerTest,
                            VirtualKeyboardPolicyOfFocusedElement);
+  FRIEND_TEST_ALL_PREFIXES(
+      InputMethodControllerTest,
+      DeleteSelectionAndBeforeInputEventHandlerChangingStyle);
 };
 
 }  // namespace blink

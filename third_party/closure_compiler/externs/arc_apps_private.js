@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,12 @@
 // NOTE: The format of types has changed. 'FooType' is now
 //   'chrome.arcAppsPrivate.FooType'.
 // Please run the closure compiler before committing changes.
-// See https://chromium.googlesource.com/chromium/src/+/master/docs/closure_compilation.md
+// See https://chromium.googlesource.com/chromium/src/+/main/docs/closure_compilation.md
 
-/** @fileoverview Externs generated from namespace: arcAppsPrivate */
+/**
+ * @fileoverview Externs generated from namespace: arcAppsPrivate
+ * @externs
+ */
 
 /** @const */
 chrome.arcAppsPrivate = {};
@@ -24,7 +27,7 @@ chrome.arcAppsPrivate.AppInfo;
 /**
  * Returns info of the installed ARC apps that are launchable, including ready
  * and non-ready apps.
- * @param {function(!Array<!chrome.arcAppsPrivate.AppInfo>): void} callback
+ * @param {function(!Array<!chrome.arcAppsPrivate.AppInfo>): void=} callback
  */
 chrome.arcAppsPrivate.getLaunchableApps = function(callback) {};
 

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,20 +10,18 @@
 #include <vector>
 
 #include "ash/public/cpp/shelf_types.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_multi_source_observation.h"
-#include "chrome/browser/apps/app_service/app_service_proxy.h"
+#include "base/scoped_observation.h"
+#include "chrome/browser/apps/app_service/app_service_proxy_forward.h"
 #include "chrome/browser/ui/ash/shelf/app_service/app_service_instance_registry_helper.h"
 #include "chrome/browser/ui/ash/shelf/app_window_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/arc_app_window_delegate.h"
+#include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/instance_registry.h"
 #include "ui/aura/env_observer.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
-
-namespace apps {
-class InstanceUpdate;
-}  // namespace apps
 
 class AppServiceAppWindowCrostiniTracker;
 class AppServiceAppWindowArcTracker;
@@ -42,9 +40,15 @@ class AppServiceAppWindowShelfController
       public apps::InstanceRegistry::Observer,
       public ArcAppWindowDelegate {
  public:
-  using ProfileList = std::vector<Profile*>;
+  using ProfileList = std::vector<raw_ptr<Profile, VectorExperimental>>;
 
   explicit AppServiceAppWindowShelfController(ChromeShelfController* owner);
+
+  AppServiceAppWindowShelfController(
+      const AppServiceAppWindowShelfController&) = delete;
+  AppServiceAppWindowShelfController& operator=(
+      const AppServiceAppWindowShelfController&) = delete;
+
   ~AppServiceAppWindowShelfController() override;
 
   // AppWindowShelfController:
@@ -93,6 +97,10 @@ class AppServiceAppWindowShelfController
     return app_service_instance_helper_.get();
   }
 
+  AppServiceAppWindowArcTracker* app_service_arc_tracker() {
+    return arc_tracker_.get();
+  }
+
   AppServiceAppWindowCrostiniTracker* app_service_crostini_tracker() {
     return crostini_tracker_.get();
   }
@@ -106,7 +114,7 @@ class AppServiceAppWindowShelfController
  private:
   using AuraWindowToAppWindow =
       std::map<aura::Window*, std::unique_ptr<AppWindowBase>>;
-  using WindowList = std::vector<aura::Window*>;
+  using WindowList = std::vector<raw_ptr<aura::Window, VectorExperimental>>;
 
   void SetWindowActivated(aura::Window* window, bool active);
 
@@ -129,7 +137,7 @@ class AppServiceAppWindowShelfController
   ash::ShelfID GetShelfId(aura::Window* window) const;
 
   // Returns the app type for the given |app_id|.
-  apps::mojom::AppType GetAppType(const std::string& app_id) const;
+  apps::AppType GetAppType(const std::string& app_id) const;
 
   // Register |window| if the owner of the given |window| has a window
   // teleported of the |window|'s application type to the current desktop.
@@ -140,8 +148,11 @@ class AppServiceAppWindowShelfController
   AuraWindowToAppWindow aura_window_to_app_window_;
   base::ScopedMultiSourceObservation<aura::Window, aura::WindowObserver>
       observed_windows_{this};
+  base::ScopedObservation<apps::InstanceRegistry,
+                          apps::InstanceRegistry::Observer>
+      instance_registry_observation_{this};
 
-  apps::AppServiceProxyChromeOs* proxy_ = nullptr;
+  raw_ptr<apps::AppServiceProxy> proxy_ = nullptr;
   std::unique_ptr<AppServiceInstanceRegistryHelper>
       app_service_instance_helper_;
   std::unique_ptr<AppServiceAppWindowArcTracker> arc_tracker_;
@@ -152,8 +163,6 @@ class AppServiceAppWindowShelfController
 
   // A list of windows added for users.
   WindowList window_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(AppServiceAppWindowShelfController);
 };
 
 #endif  // CHROME_BROWSER_UI_ASH_SHELF_APP_SERVICE_APP_SERVICE_APP_WINDOW_SHELF_CONTROLLER_H_

@@ -1,10 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/media_session/media_controller.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -27,6 +28,9 @@ namespace media_session {
 class MediaControllerTest : public testing::Test {
  public:
   MediaControllerTest() = default;
+
+  MediaControllerTest(const MediaControllerTest&) = delete;
+  MediaControllerTest& operator=(const MediaControllerTest&) = delete;
 
   void SetUp() override {
     // Create an instance of the MediaSessionService and bind some interfaces.
@@ -73,8 +77,6 @@ class MediaControllerTest : public testing::Test {
   mojo::Remote<mojom::AudioFocusManager> audio_focus_remote_;
   mojo::Remote<mojom::MediaController> media_controller_remote_;
   mojo::Remote<mojom::MediaControllerManager> controller_manager_remote_;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaControllerTest);
 };
 
 TEST_F(MediaControllerTest, ActiveController_Suspend) {
@@ -506,11 +508,29 @@ TEST_F(MediaControllerTest, ActiveController_Seek) {
     EXPECT_EQ(0, media_session.seek_count());
   }
 
-  controller()->Seek(
-      base::TimeDelta::FromSeconds(mojom::kDefaultSeekTimeSeconds));
+  controller()->Seek(base::Seconds(mojom::kDefaultSeekTimeSeconds));
   controller().FlushForTesting();
 
   EXPECT_EQ(1, media_session.seek_count());
+}
+
+TEST_F(MediaControllerTest, ActiveController_SkipAd) {
+  test::MockMediaSession media_session;
+  media_session.SetIsControllable(true);
+
+  EXPECT_EQ(0, media_session.skip_ad_count());
+
+  {
+    test::MockMediaSessionMojoObserver observer(media_session);
+    RequestAudioFocus(media_session, mojom::AudioFocusType::kGain);
+    observer.WaitForState(mojom::MediaSessionInfo::SessionState::kActive);
+    EXPECT_EQ(0, media_session.skip_ad_count());
+  }
+
+  controller()->SkipAd();
+  controller().FlushForTesting();
+
+  EXPECT_EQ(1, media_session.skip_ad_count());
 }
 
 TEST_F(MediaControllerTest, ActiveController_SeekTo) {
@@ -527,8 +547,7 @@ TEST_F(MediaControllerTest, ActiveController_SeekTo) {
     EXPECT_EQ(0, media_session.seek_to_count());
   }
 
-  controller()->SeekTo(
-      base::TimeDelta::FromSeconds(mojom::kDefaultSeekTimeSeconds));
+  controller()->SeekTo(base::Seconds(mojom::kDefaultSeekTimeSeconds));
   controller().FlushForTesting();
 
   EXPECT_EQ(1, media_session.seek_to_count());
@@ -550,22 +569,19 @@ TEST_F(MediaControllerTest, ActiveController_ScrubTo) {
     EXPECT_EQ(0, media_session.seek_to_count());
   }
 
-  controller()->ScrubTo(
-      base::TimeDelta::FromSeconds(mojom::kDefaultSeekTimeSeconds));
+  controller()->ScrubTo(base::Seconds(mojom::kDefaultSeekTimeSeconds));
   controller().FlushForTesting();
 
   EXPECT_TRUE(media_session.is_scrubbing());
   EXPECT_EQ(0, media_session.seek_to_count());
 
-  controller()->ScrubTo(
-      base::TimeDelta::FromSeconds(mojom::kDefaultSeekTimeSeconds));
+  controller()->ScrubTo(base::Seconds(mojom::kDefaultSeekTimeSeconds));
   controller().FlushForTesting();
 
   EXPECT_TRUE(media_session.is_scrubbing());
   EXPECT_EQ(0, media_session.seek_to_count());
 
-  controller()->SeekTo(
-      base::TimeDelta::FromSeconds(mojom::kDefaultSeekTimeSeconds));
+  controller()->SeekTo(base::Seconds(mojom::kDefaultSeekTimeSeconds));
   controller().FlushForTesting();
 
   EXPECT_FALSE(media_session.is_scrubbing());
@@ -581,7 +597,7 @@ TEST_F(MediaControllerTest, ActiveController_Metadata_Observer_Abandoned) {
   test::MockMediaSession media_session;
   media_session.SetIsControllable(true);
 
-  absl::optional<MediaMetadata> test_metadata(metadata);
+  std::optional<MediaMetadata> test_metadata(metadata);
 
   {
     test::MockMediaSessionMojoObserver observer(media_session);
@@ -602,7 +618,7 @@ TEST_F(MediaControllerTest, ActiveController_Metadata_Observer_Empty) {
   test::MockMediaSession media_session;
   media_session.SetIsControllable(true);
 
-  absl::optional<MediaMetadata> test_metadata;
+  std::optional<MediaMetadata> test_metadata;
 
   {
     test::MockMediaSessionMojoObserver observer(media_session);
@@ -618,15 +634,34 @@ TEST_F(MediaControllerTest, ActiveController_Metadata_Observer_Empty) {
 }
 
 TEST_F(MediaControllerTest, ActiveController_Metadata_Observer_WithInfo) {
+  std::vector<media_session::ChapterInformation> expected_chapters;
+
+  media_session::MediaImage test_image_1;
+  test_image_1.src = GURL("https://www.google.com");
+  media_session::MediaImage test_image_2;
+  test_image_2.src = GURL("https://www.example.org");
+
+  media_session::ChapterInformation test_chapter_1(
+      /*title=*/u"chapter1", /*start_time=*/base::Seconds(10),
+      /*artwork=*/{test_image_1});
+
+  media_session::ChapterInformation test_chapter_2(
+      /*title=*/u"chapter2", /*start_time=*/base::Seconds(20),
+      /*artwork=*/{test_image_2});
+
+  expected_chapters.push_back(test_chapter_1);
+  expected_chapters.push_back(test_chapter_2);
+
   MediaMetadata metadata;
   metadata.title = u"title";
   metadata.artist = u"artist";
   metadata.album = u"album";
+  metadata.chapters = expected_chapters;
 
   test::MockMediaSession media_session;
   media_session.SetIsControllable(true);
 
-  absl::optional<MediaMetadata> test_metadata(metadata);
+  std::optional<MediaMetadata> test_metadata(metadata);
 
   {
     test::MockMediaSessionMojoObserver observer(media_session);
@@ -645,7 +680,7 @@ TEST_F(MediaControllerTest, ActiveController_Metadata_AddObserver_Empty) {
   test::MockMediaSession media_session;
   media_session.SetIsControllable(true);
 
-  absl::optional<MediaMetadata> test_metadata;
+  std::optional<MediaMetadata> test_metadata;
 
   {
     test::MockMediaSessionMojoObserver observer(media_session);
@@ -662,15 +697,34 @@ TEST_F(MediaControllerTest, ActiveController_Metadata_AddObserver_Empty) {
 }
 
 TEST_F(MediaControllerTest, ActiveController_Metadata_AddObserver_WithInfo) {
+  std::vector<media_session::ChapterInformation> expected_chapters;
+
+  media_session::MediaImage test_image_1;
+  test_image_1.src = GURL("https://www.google.com");
+  media_session::MediaImage test_image_2;
+  test_image_2.src = GURL("https://www.example.org");
+
+  media_session::ChapterInformation test_chapter_1(
+      /*title=*/u"chapter1", /*start_time=*/base::Seconds(10),
+      /*artwork=*/{test_image_1});
+
+  media_session::ChapterInformation test_chapter_2(
+      /*title=*/u"chapter2", /*start_time=*/base::Seconds(20),
+      /*artwork=*/{test_image_2});
+
+  expected_chapters.push_back(test_chapter_1);
+  expected_chapters.push_back(test_chapter_2);
+
   MediaMetadata metadata;
   metadata.title = u"title";
   metadata.artist = u"artist";
   metadata.album = u"album";
+  metadata.chapters = expected_chapters;
 
   test::MockMediaSession media_session;
   media_session.SetIsControllable(true);
 
-  absl::optional<MediaMetadata> test_metadata(metadata);
+  std::optional<MediaMetadata> test_metadata(metadata);
 
   {
     test::MockMediaSessionMojoObserver observer(media_session);
@@ -898,7 +952,7 @@ TEST_F(MediaControllerTest, ActiveController_Position_Observer_Empty) {
   test::MockMediaSession media_session;
   media_session.SetIsControllable(true);
 
-  absl::optional<MediaPosition> test_position;
+  std::optional<MediaPosition> test_position;
 
   {
     test::MockMediaSessionMojoObserver observer(media_session);
@@ -916,14 +970,14 @@ TEST_F(MediaControllerTest, ActiveController_Position_Observer_Empty) {
 TEST_F(MediaControllerTest, ActiveController_Position_Observer_WithInfo) {
   MediaPosition position(
       /*playback_rate=*/1,
-      /*duration=*/base::TimeDelta::FromSeconds(600),
-      /*position=*/base::TimeDelta::FromSeconds(300),
+      /*duration=*/base::Seconds(600),
+      /*position=*/base::Seconds(300),
       /*end_of_media=*/false);
 
   test::MockMediaSession media_session;
   media_session.SetIsControllable(true);
 
-  absl::optional<MediaPosition> test_position(position);
+  std::optional<MediaPosition> test_position(position);
 
   {
     test::MockMediaSessionMojoObserver observer(media_session);
@@ -942,7 +996,7 @@ TEST_F(MediaControllerTest, ActiveController_Position_AddObserver_Empty) {
   test::MockMediaSession media_session;
   media_session.SetIsControllable(true);
 
-  absl::optional<MediaPosition> test_position;
+  std::optional<MediaPosition> test_position;
 
   {
     test::MockMediaSessionMojoObserver observer(media_session);
@@ -961,14 +1015,14 @@ TEST_F(MediaControllerTest, ActiveController_Position_AddObserver_Empty) {
 TEST_F(MediaControllerTest, ActiveController_Position_AddObserver_WithInfo) {
   MediaPosition position(
       /*playback_rate=*/1,
-      /*duration=*/base::TimeDelta::FromSeconds(600),
-      /*position=*/base::TimeDelta::FromSeconds(300),
+      /*duration=*/base::Seconds(600),
+      /*position=*/base::Seconds(300),
       /*end_of_media=*/false);
 
   test::MockMediaSession media_session;
   media_session.SetIsControllable(true);
 
-  absl::optional<MediaPosition> test_position(position);
+  std::optional<MediaPosition> test_position(position);
 
   {
     test::MockMediaSessionMojoObserver observer(media_session);
@@ -987,14 +1041,14 @@ TEST_F(MediaControllerTest, ActiveController_Position_AddObserver_WithInfo) {
 TEST_F(MediaControllerTest, ActiveController_Position_Observer_Abandoned) {
   MediaPosition position(
       /*playback_rate=*/1,
-      /*duration=*/base::TimeDelta::FromSeconds(600),
-      /*position=*/base::TimeDelta::FromSeconds(300),
+      /*duration=*/base::Seconds(600),
+      /*position=*/base::Seconds(300),
       /*end_of_media=*/false);
 
   test::MockMediaSession media_session;
   media_session.SetIsControllable(true);
 
-  absl::optional<MediaPosition> test_position(position);
+  std::optional<MediaPosition> test_position(position);
 
   {
     test::MockMediaSessionMojoObserver observer(media_session);
@@ -1067,10 +1121,10 @@ TEST_F(MediaControllerTest, ClearImageObserverOnError) {
 
   {
     test::TestMediaControllerImageObserver observer(controller_remote, 0, 0);
-    EXPECT_EQ(1u, GetImageObserverCount(controller));
+    EXPECT_EQ(2u, GetImageObserverCount(controller));
   }
 
-  EXPECT_EQ(1u, GetImageObserverCount(controller));
+  EXPECT_EQ(2u, GetImageObserverCount(controller));
 
   base::RunLoop().RunUntilIdle();
 
@@ -1284,7 +1338,7 @@ TEST_F(MediaControllerTest, ActiveController_Observer_SessionChanged) {
 
   {
     test::TestMediaControllerObserver observer(controller());
-    observer.WaitForSession(absl::nullopt);
+    observer.WaitForSession(std::nullopt);
   }
 
   {
@@ -1318,7 +1372,7 @@ TEST_F(MediaControllerTest, ActiveController_Observer_SessionChanged) {
   {
     test::TestMediaControllerObserver observer(controller());
     media_session_1.SetIsControllable(false);
-    observer.WaitForSession(absl::nullopt);
+    observer.WaitForSession(std::nullopt);
   }
 }
 
@@ -1369,6 +1423,92 @@ TEST_F(MediaControllerTest, Manager_SuspendAllSessions) {
   {
     test::MockMediaSessionMojoObserver observer(media_session_2);
     observer.WaitForPlaybackState(mojom::MediaPlaybackState::kPaused);
+  }
+}
+
+TEST_F(MediaControllerTest, ActiveController_SimulateChapterChanged) {
+  std::vector<media_session::ChapterInformation> expected_chapters;
+
+  media_session::MediaImage test_image_1;
+  test_image_1.src = GURL("https://www.google.com");
+  media_session::MediaImage test_image_2;
+  test_image_2.src = GURL("https://www.example.org");
+
+  media_session::ChapterInformation test_chapter_1(
+      /*title=*/u"chapter1", /*start_time=*/base::Seconds(10),
+      /*artwork=*/{test_image_1});
+
+  media_session::ChapterInformation test_chapter_2(
+      /*title=*/u"chapter2", /*start_time=*/base::Seconds(20),
+      /*artwork=*/{test_image_2});
+
+  expected_chapters.push_back(test_chapter_1);
+  expected_chapters.push_back(test_chapter_2);
+
+  MediaMetadata metadata;
+  metadata.title = u"title";
+  metadata.artist = u"artist";
+  metadata.album = u"album";
+  metadata.chapters = expected_chapters;
+
+  test::MockMediaSession media_session;
+  media_session.SetIsControllable(true);
+
+  std::optional<MediaMetadata> test_metadata(metadata);
+
+  {
+    test::MockMediaSessionMojoObserver observer(media_session);
+    RequestAudioFocus(media_session, mojom::AudioFocusType::kGain);
+    observer.WaitForState(mojom::MediaSessionInfo::SessionState::kActive);
+  }
+
+  {
+    test::TestMediaControllerImageObserver observer(controller(), 0, 0);
+
+    // By default, the image is empty but no notification should be received.
+    EXPECT_TRUE(media_session.last_image_src().is_empty());
+
+    // Checks that we receive the correct image and that it was requested from
+    // `media_session` by the controller.
+    media_session.SimulateMetadataChanged(test_metadata);
+    base::RunLoop().RunUntilIdle();
+    observer.WaitForExpectedChapterImage(0, /*expect_null_image=*/false);
+    observer.WaitForExpectedChapterImage(1, /*expect_null_image=*/false);
+    EXPECT_EQ(test_image_2.src, media_session.last_image_src());
+
+    MediaMetadata metadata1;
+    metadata1.title = u"title1";
+    metadata1.artist = u"artist1";
+    metadata1.album = u"album1";
+    std::optional<MediaMetadata> test_metadata1(metadata1);
+
+    // Checks that we receive the correct image and that it was requested from
+    // `media_session` by the controller after a media change with no chapter.
+    media_session.SimulateMetadataChanged(test_metadata1);
+    base::RunLoop().RunUntilIdle();
+    EXPECT_EQ(test_image_2.src, media_session.last_image_src());
+
+    media_session::MediaImage test_image_3;
+    test_image_3.src = GURL("https://www.chrome.com");
+    media_session::ChapterInformation test_chapter_3(
+        /*title=*/u"chapter3", /*start_time=*/base::Seconds(30),
+        /*artwork=*/{test_image_3});
+
+    MediaMetadata metadata2;
+    metadata2.title = u"title2";
+    metadata2.artist = u"artist2";
+    metadata2.album = u"album2";
+    metadata2.chapters = {test_chapter_1, test_chapter_2, test_chapter_3};
+    std::optional<MediaMetadata> test_metadata2(metadata2);
+
+    // Checks that we receive the correct image and that it was requested from
+    // `media_session` by the controller after a media change with 3 chapters.
+    media_session.SimulateMetadataChanged(test_metadata2);
+    base::RunLoop().RunUntilIdle();
+    observer.WaitForExpectedChapterImage(0, /*expect_null_image=*/false);
+    observer.WaitForExpectedChapterImage(1, /*expect_null_image=*/false);
+    observer.WaitForExpectedChapterImage(2, /*expect_null_image=*/false);
+    EXPECT_EQ(test_image_3.src, media_session.last_image_src());
   }
 }
 

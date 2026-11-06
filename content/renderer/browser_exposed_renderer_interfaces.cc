@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,28 +9,39 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/task/post_task.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/task/task_runner.h"
 #include "base/task/thread_pool.h"
-#include "base/task_runner.h"
 #include "base/time/time.h"
+#include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
+#include "components/vrp_flags/buildflags.h"
+#include "content/common/features.h"
 #include "content/common/frame.mojom.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/resource_usage_reporter.mojom.h"
 #include "content/public/common/resource_usage_reporter_type_converters.h"
 #include "content/public/renderer/content_renderer_client.h"
-#include "content/renderer/render_frame_impl.h"
 #include "content/renderer/render_thread_impl.h"
 #include "content/renderer/service_worker/embedded_worker_instance_client_impl.h"
 #include "content/renderer/worker/shared_worker_factory_impl.h"
 #include "mojo/public/cpp/bindings/binder_map.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
-#include "v8/include/v8.h"
+#include "v8/include/cppgc/heap-statistics.h"
+#include "v8/include/v8-cppgc.h"
+#include "v8/include/v8-isolate.h"
+#include "v8/include/v8-statistics.h"
+
+#if BUILDFLAG(ENABLE_VRP_FLAGS)
+#include "components/vrp_flags/vrp_flags.h"        // nogncheck
+#include "components/vrp_flags/vrp_flags.mojom.h"  // nogncheck
+#include "components/vrp_flags/vrp_flags_impl.h"   // nogncheck
+#endif
 
 namespace content {
 
@@ -54,21 +65,35 @@ class ResourceUsageReporterImpl : public content::mojom::ResourceUsageReporter {
       base::WeakPtr<ResourceUsageReporterImpl> impl) {
     size_t total_bytes = 0;
     size_t used_bytes = 0;
+    size_t cppgc_allocated_bytes = 0;
+    size_t cppgc_used_bytes = 0;
     v8::Isolate* isolate = v8::Isolate::GetCurrent();
     if (isolate) {
       v8::HeapStatistics heap_stats;
       isolate->GetHeapStatistics(&heap_stats);
       total_bytes = heap_stats.total_heap_size();
       used_bytes = heap_stats.used_heap_size();
+      if (v8::CppHeap* cpp_heap = isolate->GetCppHeap()) {
+        cppgc::HeapStatistics cppgc_stats =
+            cpp_heap->CollectStatistics(cppgc::HeapStatistics::kBrief);
+        cppgc_allocated_bytes = cppgc_stats.committed_size_bytes;
+        cppgc_used_bytes = cppgc_stats.used_size_bytes;
+      }
     }
     master->PostTask(FROM_HERE,
                      base::BindOnce(&ResourceUsageReporterImpl::ReceiveStats,
-                                    impl, total_bytes, used_bytes));
+                                    impl, total_bytes, used_bytes,
+                                    cppgc_allocated_bytes, cppgc_used_bytes));
   }
 
-  void ReceiveStats(size_t total_bytes, size_t used_bytes) {
+  void ReceiveStats(size_t total_bytes,
+                    size_t used_bytes,
+                    size_t cppgc_allocated_bytes,
+                    size_t cppgc_used_bytes) {
     usage_data_->v8_bytes_allocated += total_bytes;
     usage_data_->v8_bytes_used += used_bytes;
+    usage_data_->cppgc_bytes_allocated += cppgc_allocated_bytes;
+    usage_data_->cppgc_bytes_used += cppgc_used_bytes;
     workers_to_go_--;
     if (!workers_to_go_)
       SendResults();
@@ -87,6 +112,7 @@ class ResourceUsageReporterImpl : public content::mojom::ResourceUsageReporter {
     weak_factory_.InvalidateWeakPtrs();
     usage_data_ = mojom::ResourceUsageData::New();
     usage_data_->reports_v8_stats = true;
+    usage_data_->reports_cppgc_stats = true;
     callback_ = std::move(callback);
 
     // Since it is not safe to call any Blink or V8 functions until Blink has
@@ -107,20 +133,27 @@ class ResourceUsageReporterImpl : public content::mojom::ResourceUsageReporter {
       isolate->GetHeapStatistics(&heap_stats);
       usage_data_->v8_bytes_allocated = heap_stats.total_heap_size();
       usage_data_->v8_bytes_used = heap_stats.used_heap_size();
+      if (v8::CppHeap* cpp_heap = isolate->GetCppHeap()) {
+        cppgc::HeapStatistics cppgc_stats =
+            cpp_heap->CollectStatistics(cppgc::HeapStatistics::kBrief);
+        usage_data_->cppgc_bytes_allocated = cppgc_stats.committed_size_bytes;
+        usage_data_->cppgc_bytes_used = cppgc_stats.used_size_bytes;
+      }
     }
-    base::RepeatingClosure collect = base::BindRepeating(
-        &ResourceUsageReporterImpl::CollectOnWorkerThread,
-        base::ThreadTaskRunnerHandle::Get(), weak_factory_.GetWeakPtr());
+    base::RepeatingClosure collect =
+        base::BindRepeating(&ResourceUsageReporterImpl::CollectOnWorkerThread,
+                            base::SingleThreadTaskRunner::GetCurrentDefault(),
+                            weak_factory_.GetWeakPtr());
     workers_to_go_ =
         RenderThread::Get()->PostTaskToAllWebWorkers(std::move(collect));
     if (workers_to_go_) {
       // The guard task to send out partial stats
       // in case some workers are not responsive.
-      base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
           FROM_HERE,
           base::BindOnce(&ResourceUsageReporterImpl::SendResults,
                          weak_factory_.GetWeakPtr()),
-          base::TimeDelta::FromMilliseconds(kWaitForWorkersStatsTimeoutMS));
+          base::Milliseconds(kWaitForWorkersStatsTimeoutMS));
     } else {
       // No worker threads so just send out the main thread data right away.
       SendResults();
@@ -143,19 +176,38 @@ void CreateResourceUsageReporter(
       std::move(receiver));
 }
 
-void CreateEmbeddedWorker(
+void CreateEmbeddedWorkerWithRenderMainThread(
     scoped_refptr<base::SingleThreadTaskRunner> initiator_task_runner,
     base::WeakPtr<RenderThreadImpl> render_thread,
     mojo::PendingReceiver<blink::mojom::EmbeddedWorkerInstanceClient>
         receiver) {
+  TRACE_EVENT0("ServiceWorker", "CreateEmbeddedWorkerWithRenderMainThread");
   initiator_task_runner->PostTask(
-      FROM_HERE,
-      base::BindOnce(&EmbeddedWorkerInstanceClientImpl::CreateForRequest,
-                     initiator_task_runner,
-                     render_thread->cors_exempt_header_list(),
-                     std::move(receiver)));
+      FROM_HERE, base::BindOnce(&EmbeddedWorkerInstanceClientImpl::Create,
+                                initiator_task_runner,
+                                render_thread->cors_exempt_header_list(),
+                                std::move(receiver)));
 }
 
+void CreateEmbeddedWorker(
+    scoped_refptr<base::SingleThreadTaskRunner> initiator_task_runner,
+    mojo::PendingReceiver<blink::mojom::EmbeddedWorkerInstanceClient>
+        receiver) {
+  TRACE_EVENT0("ServiceWorker", "CreateEmbeddedWorker");
+  // An empty fake list is passed to
+  // `EmbeddedWorkerInstanceClientImpl::Create()`. That will be overridden by
+  // the actual cors exempt header list in
+  // `EmbeddedWorkerInstanceClientImpl::StartWorker()`.
+  //
+  // TODO(crbug.com/40753993): Remove this fake empty list once we confirmed
+  // this approach is fine.
+  const std::vector<std::string> fake_cors_exempt_header_list;
+  initiator_task_runner->PostTask(
+      FROM_HERE,
+      base::BindOnce(&EmbeddedWorkerInstanceClientImpl::Create,
+                     initiator_task_runner, fake_cors_exempt_header_list,
+                     std::move(receiver)));
+}
 }  // namespace
 
 void ExposeRendererInterfacesToBrowser(
@@ -163,23 +215,52 @@ void ExposeRendererInterfacesToBrowser(
     mojo::BinderMap* binders) {
   DCHECK(render_thread);
 
-  binders->Add(base::BindRepeating(&SharedWorkerFactoryImpl::Create),
-               base::ThreadTaskRunnerHandle::Get());
-  binders->Add(base::BindRepeating(&CreateResourceUsageReporter, render_thread),
-               base::ThreadTaskRunnerHandle::Get());
+  binders->Add<blink::mojom::SharedWorkerFactory>(
+      &SharedWorkerFactoryImpl::Create,
+      base::SingleThreadTaskRunner::GetCurrentDefault());
+  binders->Add<mojom::ResourceUsageReporter>(
+      base::BindRepeating(&CreateResourceUsageReporter, render_thread),
+      base::SingleThreadTaskRunner::GetCurrentDefault());
 
   auto task_runner_for_service_worker_startup =
       base::ThreadPool::CreateSingleThreadTaskRunner(
           {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
            base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN});
-  // TODO(crbug.com/1186912): Bind on `task_runner_for_service_worker_startup`
-  // instead of the main thread, so startup isn't blocked on the main thread.
-  // Currently it's on the main thread as CreateEmbeddedWorker accesses
-  // `cors_exempt_header_list` from `render_thread`.
-  binders->Add(base::BindRepeating(&CreateEmbeddedWorker,
-                                   task_runner_for_service_worker_startup,
-                                   render_thread),
-               base::ThreadTaskRunnerHandle::Get());
+  // TODO(crbug.com/40753993): Remove the feature flag and
+  // `CreateEmbeddedWorkerWithRenderMainThread()` once we confirmed this
+  // approach is fine.
+  //
+  // The kServiceWorkerAvoidMainThreadForInitialization feature flag is the
+  // experimental flag to avoid the additional thread hop over the main thread
+  // for the ServiceWorker initialization. Currently it's on the main thread as
+  // CreateEmbeddedWorker accesses `cors_exempt_header_list` from
+  // `render_thread`. When this feature flag is enabled, binds on
+  // `task_runner_for_service_worker_startup` instead of the main thread, so
+  // startup isn't blocked on the main thread.
+  if (base::FeatureList::IsEnabled(
+          features::kServiceWorkerAvoidMainThreadForInitialization)) {
+    binders->Add<blink::mojom::EmbeddedWorkerInstanceClient>(
+        base::BindRepeating(&CreateEmbeddedWorker,
+                            task_runner_for_service_worker_startup),
+        task_runner_for_service_worker_startup);
+  } else {
+    binders->Add<blink::mojom::EmbeddedWorkerInstanceClient>(
+        base::BindRepeating(&CreateEmbeddedWorkerWithRenderMainThread,
+                            task_runner_for_service_worker_startup,
+                            render_thread),
+        base::SingleThreadTaskRunner::GetCurrentDefault());
+  }
+
+#if BUILDFLAG(ENABLE_VRP_FLAGS)
+  if (vrp_flags::IsEnabled()) {
+    binders->Add<vrp_flags::mojom::VrpFlags>(
+        base::BindRepeating(
+            [](mojo::PendingReceiver<vrp_flags::mojom::VrpFlags> receiver) {
+              vrp_flags::VrpFlagsImpl::GetInstance()->Bind(std::move(receiver));
+            }),
+        base::SingleThreadTaskRunner::GetCurrentDefault());
+  }
+#endif
 
   GetContentClient()->renderer()->ExposeInterfacesToBrowser(binders);
 }

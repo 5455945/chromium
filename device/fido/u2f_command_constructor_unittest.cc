@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,11 @@
 
 #include <utility>
 
+#include "base/containers/to_vector.h"
 #include "device/fido/ctap_get_assertion_request.h"
 #include "device/fido/ctap_make_credential_request.h"
-#include "device/fido/fido_constants.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "device/fido/fido_test_data.h"
+#include "device/fido/public/fido_constants.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -22,11 +22,9 @@ CtapMakeCredentialRequest ConstructMakeCredentialRequest() {
   PublicKeyCredentialRpEntity rp("acme.com");
   rp.name = "acme.com";
 
-  PublicKeyCredentialUserEntity user(
-      fido_parsing_utils::Materialize(test_data::kUserId));
+  PublicKeyCredentialUserEntity user(base::ToVector(test_data::kUserId));
   user.name = "johnpsmith@example.com";
   user.display_name = "John P. Smith";
-  user.icon_url = GURL("https://pics.acme.com/00/p/aBjjjpqPb.png");
 
   return CtapMakeCredentialRequest(
       test_data::kClientDataJson, std::move(rp), std::move(user),
@@ -75,11 +73,9 @@ TEST(U2fCommandConstructorTest, TestU2fRegisterCredentialAlgorithmRequirement) {
   PublicKeyCredentialRpEntity rp("acme.com");
   rp.name = "acme.com";
 
-  PublicKeyCredentialUserEntity user(
-      fido_parsing_utils::Materialize(test_data::kUserId));
+  PublicKeyCredentialUserEntity user(base::ToVector(test_data::kUserId));
   user.name = "johnpsmith@example.com";
   user.display_name = "John P. Smith";
-  user.icon_url = GURL("https://pics.acme.com/00/p/aBjjjpqPb.png");
 
   CtapMakeCredentialRequest make_credential_param(
       test_data::kClientDataJson, std::move(rp), std::move(user),
@@ -117,12 +113,12 @@ TEST(U2fCommandConstructorTest, TestConvertCtapGetAssertionToU2fSignRequest) {
   std::vector<PublicKeyCredentialDescriptor> allowed_list;
   allowed_list.push_back(PublicKeyCredentialDescriptor(
       CredentialType::kPublicKey,
-      fido_parsing_utils::Materialize(test_data::kU2fSignKeyHandle)));
+      base::ToVector(test_data::kU2fSignKeyHandle)));
   get_assertion_req.allow_list = std::move(allowed_list);
 
   const auto u2f_sign_command = ConvertToU2fSignCommand(
       get_assertion_req, ApplicationParameterType::kPrimary,
-      fido_parsing_utils::Materialize(test_data::kU2fSignKeyHandle));
+      base::ToVector(test_data::kU2fSignKeyHandle));
 
   EXPECT_TRUE(IsConvertibleToU2fSignCommand(get_assertion_req));
   ASSERT_TRUE(u2f_sign_command);
@@ -140,7 +136,7 @@ TEST(U2fCommandConstructorTest, TestU2fSignUserVerificationRequirement) {
   std::vector<PublicKeyCredentialDescriptor> allowed_list;
   allowed_list.push_back(PublicKeyCredentialDescriptor(
       CredentialType::kPublicKey,
-      fido_parsing_utils::Materialize(test_data::kU2fSignKeyHandle)));
+      base::ToVector(test_data::kU2fSignKeyHandle)));
   get_assertion_req.allow_list = std::move(allowed_list);
   get_assertion_req.user_verification = UserVerificationRequirement::kRequired;
 

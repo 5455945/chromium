@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,18 @@
 #include <memory>
 #include <string>
 #include <utility>
-#include <vector>
 
-#include "base/bind.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/task_environment.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/test/test_future.h"
 #include "components/image_fetcher/core/cache/image_cache.h"
 #include "components/image_fetcher/core/cache/image_data_store_disk.h"
 #include "components/image_fetcher/core/cache/image_metadata_store_leveldb.h"
@@ -26,6 +28,7 @@
 #include "components/image_fetcher/core/image_fetcher_impl.h"
 #include "components/image_fetcher/core/image_fetcher_metrics_reporter.h"
 #include "components/image_fetcher/core/image_fetcher_types.h"
+#include "components/image_fetcher/core/request_metadata.h"
 #include "components/leveldb_proto/testing/fake_db.h"
 #include "components/prefs/testing_pref_service.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
@@ -37,8 +40,8 @@
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_unittest_util.h"
 
-using testing::_;
 using leveldb_proto::test::FakeDB;
+using testing::_;
 
 namespace image_fetcher {
 
@@ -59,7 +62,10 @@ const char kNetworkLoadHistogramName[] =
 
 class CachedImageFetcherTest : public testing::Test {
  public:
-  CachedImageFetcherTest() {}
+  CachedImageFetcherTest() = default;
+
+  CachedImageFetcherTest(const CachedImageFetcherTest&) = delete;
+  CachedImageFetcherTest& operator=(const CachedImageFetcherTest&) = delete;
 
   ~CachedImageFetcherTest() override {
     cached_image_fetcher_.reset();
@@ -82,17 +88,17 @@ class CachedImageFetcherTest : public testing::Test {
     auto metadata_store =
         std::make_unique<ImageMetadataStoreLevelDB>(std::move(db), &clock_);
     auto data_store = std::make_unique<ImageDataStoreDisk>(
-        data_dir_.GetPath(), base::SequencedTaskRunnerHandle::Get());
+        data_dir_.GetPath(), base::SequencedTaskRunner::GetCurrentDefault());
 
     image_cache_ = base::MakeRefCounted<ImageCache>(
         std::move(data_store), std::move(metadata_store), &test_prefs_, &clock_,
-        base::SequencedTaskRunnerHandle::Get());
+        base::SequencedTaskRunner::GetCurrentDefault());
 
     // Use an initial request to start the cache up.
     const std::string kImageUrl("http://gstatic.img.com/foo.jpg");
     image_cache_->SaveImage(kImageUrl, kImageData,
                             /* needs_transcoding */ false,
-                            /* expiration_interval */ absl::nullopt);
+                            /* expiration_interval */ std::nullopt);
     RunUntilIdle();
     db_->InitStatusCallback(leveldb_proto::Enums::InitStatus::kOK);
     image_cache_->DeleteImage(kImageUrl);
@@ -118,34 +124,35 @@ class CachedImageFetcherTest : public testing::Test {
   CachedImageFetcher* cached_image_fetcher() {
     return cached_image_fetcher_.get();
   }
+  void DestroyCachedImageFetcher() { cached_image_fetcher_.reset(); }
   scoped_refptr<ImageCache> image_cache() { return image_cache_; }
   FakeImageDecoder* image_decoder() { return fake_image_decoder_; }
   network::TestURLLoaderFactory* test_url_loader_factory() {
     return &test_url_loader_factory_;
   }
+  TestingPrefServiceSimple* prefs() { return &test_prefs_; }
   base::HistogramTester& histogram_tester() { return histogram_tester_; }
   FakeDB<CachedImageMetadataProto>* db() { return db_; }
+  ImageFetcher* network_image_fetcher() { return image_fetcher_.get(); }
 
-  MOCK_METHOD2(OnImageLoaded, void(bool, std::string));
+  MOCK_METHOD(void, OnImageLoaded, (bool, std::string), ());
 
  private:
   std::unique_ptr<ImageFetcher> image_fetcher_;
   std::unique_ptr<CachedImageFetcher> cached_image_fetcher_;
   network::TestURLLoaderFactory test_url_loader_factory_;
   scoped_refptr<network::SharedURLLoaderFactory> shared_factory_;
-  FakeImageDecoder* fake_image_decoder_;
+  raw_ptr<FakeImageDecoder> fake_image_decoder_;
 
   scoped_refptr<ImageCache> image_cache_;
   base::SimpleTestClock clock_;
   TestingPrefServiceSimple test_prefs_;
   base::ScopedTempDir data_dir_;
-  FakeDB<CachedImageMetadataProto>* db_;
+  raw_ptr<FakeDB<CachedImageMetadataProto>> db_;
   std::map<std::string, CachedImageMetadataProto> metadata_store_;
 
   base::test::TaskEnvironment task_environment_;
   base::HistogramTester histogram_tester_;
-
-  DISALLOW_COPY_AND_ASSIGN(CachedImageFetcherTest);
 };
 
 MATCHER(EmptyImage, "") {
@@ -160,14 +167,56 @@ MATCHER(NonEmptyString, "") {
   return !arg.empty();
 }
 
-// TODO(wylieb): Write a test that creates two CachedImageFetcher and tests
-// that they both can use what's inside.
+TEST_F(CachedImageFetcherTest, FailedCacheInitializationFallsBackToNetwork) {
+  base::ScopedTempDir cache_dir;
+  ASSERT_TRUE(cache_dir.CreateUniqueTempDir());
+  // A regular file where the disk store needs a directory prevents the cache
+  // from initializing successfully.
+  ASSERT_TRUE(
+      base::WriteFile(cache_dir.GetPath().AppendASCII("image_data_storage"),
+                      "not a directory"));
+  base::SimpleTestClock clock;
+  std::map<std::string, CachedImageMetadataProto> entries;
+  auto database = std::make_unique<FakeDB<CachedImageMetadataProto>>(&entries);
+  auto* database_ptr = database.get();
+  auto metadata_store =
+      std::make_unique<ImageMetadataStoreLevelDB>(std::move(database), &clock);
+  auto data_store = std::make_unique<ImageDataStoreDisk>(
+      cache_dir.GetPath(), base::SequencedTaskRunner::GetCurrentDefault());
+  auto* data_store_ptr = data_store.get();
+  auto cache = base::MakeRefCounted<ImageCache>(
+      std::move(data_store), std::move(metadata_store), prefs(), &clock,
+      base::SequencedTaskRunner::GetCurrentDefault());
+  CachedImageFetcher fetcher(network_image_fetcher(), cache,
+                             /*read_only=*/false);
+
+  const GURL image_url("http://gstatic.img.com/cache-init-failure.jpg");
+  test_url_loader_factory()->AddResponse(image_url.spec(), kImageData);
+  base::test::TestFuture<std::string, RequestMetadata> data_result;
+  base::test::TestFuture<gfx::Image, RequestMetadata> image_result;
+  fetcher.FetchImageAndData(
+      image_url,
+      data_result.GetCallback<const std::string&, const RequestMetadata&>(),
+      image_result.GetCallback<const gfx::Image&, const RequestMetadata&>(),
+      ImageFetcherParams(TRAFFIC_ANNOTATION_FOR_TESTS, kUmaClientName));
+  database_ptr->InitStatusCallback(leveldb_proto::Enums::InitStatus::kOK);
+
+  ASSERT_TRUE(data_result.Wait());
+  ASSERT_FALSE(data_store_ptr->IsInitialized());
+  EXPECT_EQ(kImageData, data_result.Get<0>());
+  ASSERT_TRUE(image_result.Wait());
+  EXPECT_FALSE(image_result.Get<0>().IsEmpty());
+  EXPECT_TRUE(entries.empty());
+  histogram_tester().ExpectBucketCount(kImageFetcherEventHistogramName,
+                                       ImageFetcherEvent::kCacheMiss, 1);
+}
+
 TEST_F(CachedImageFetcherTest, FetchImageFromCache) {
   // Save the image in the database.
   const GURL kImageUrl("http://gstatic.img.com/foo.jpg");
   image_cache()->SaveImage(kImageUrl.spec(), kImageData,
                            /* needs_transcoding */ false,
-                           /* expiration_interval */ absl::nullopt);
+                           /* expiration_interval */ std::nullopt);
   RunUntilIdle();
 
   base::MockCallback<ImageDataFetcherCallback> data_callback;
@@ -188,12 +237,75 @@ TEST_F(CachedImageFetcherTest, FetchImageFromCache) {
                                        ImageFetcherEvent::kCacheHit, 1);
 }
 
+// The parameter controls whether the writer is destroyed before the other
+// fetcher reads from their shared cache.
+class CachedImageFetcherSharingTest : public CachedImageFetcherTest,
+                                      public testing::WithParamInterface<bool> {
+ protected:
+  bool ShouldDestroyWriter() const { return GetParam(); }
+};
+
+TEST_P(CachedImageFetcherSharingTest, ReusesImageCachedByAnotherFetcher) {
+  const GURL image_url("http://gstatic.img.com/shared.jpg");
+  auto shared_factory =
+      base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
+          test_url_loader_factory());
+  ImageFetcherImpl second_network_fetcher(std::make_unique<FakeImageDecoder>(),
+                                          shared_factory);
+  CachedImageFetcher second_fetcher(&second_network_fetcher, image_cache(),
+                                    /*read_only=*/false);
+
+  test_url_loader_factory()->AddResponse(image_url.spec(), kImageData);
+  ImageFetcherParams params(TRAFFIC_ANNOTATION_FOR_TESTS, kUmaClientName);
+  params.set_skip_transcoding_for_testing(true);
+  {
+    base::MockCallback<ImageDataFetcherCallback> callback;
+    EXPECT_CALL(callback, Run(kImageData, _));
+    cached_image_fetcher()->FetchImageAndData(image_url, callback.Get(),
+                                              ImageFetcherCallback(), params);
+    db()->LoadCallback(true);
+    RunUntilIdle();
+  }
+  ASSERT_EQ(1u, test_url_loader_factory()->total_requests());
+  histogram_tester().ExpectBucketCount(kImageFetcherEventHistogramName,
+                                       ImageFetcherEvent::kCacheMiss, 1);
+
+  if (ShouldDestroyWriter()) {
+    DestroyCachedImageFetcher();
+    RunUntilIdle();
+  }
+  test_url_loader_factory()->ClearResponses();
+  {
+    base::MockCallback<ImageDataFetcherCallback> callback;
+    base::MockCallback<ImageFetcherCallback> image_callback;
+    EXPECT_CALL(callback, Run(kImageData, _));
+    EXPECT_CALL(image_callback, Run(NonEmptyImage(), _));
+    second_fetcher.FetchImageAndData(
+        image_url, callback.Get(), image_callback.Get(),
+        ImageFetcherParams(TRAFFIC_ANNOTATION_FOR_TESTS, kUmaClientName));
+    db()->LoadCallback(true);
+    RunUntilIdle();
+  }
+  EXPECT_EQ(1u, test_url_loader_factory()->total_requests());
+  EXPECT_EQ(0, test_url_loader_factory()->NumPending());
+  histogram_tester().ExpectBucketCount(kImageFetcherEventHistogramName,
+                                       ImageFetcherEvent::kCacheHit, 1);
+}
+
+INSTANTIATE_TEST_SUITE_P(,
+                         CachedImageFetcherSharingTest,
+                         testing::Bool(),
+                         [](const testing::TestParamInfo<bool>& info) {
+                           return info.param ? "WriterDestroyed"
+                                             : "WriterAlive";
+                         });
+
 TEST_F(CachedImageFetcherTest, FetchImageFromCacheNeedsTranscoding) {
   // Save the image in the database.
   const GURL kImageUrl("http://gstatic.img.com/foo.jpg");
   image_cache()->SaveImage(kImageUrl.spec(), kImageData,
                            /* needs_transcoding */ true,
-                           /* expiration_interval */ absl::nullopt);
+                           /* expiration_interval */ std::nullopt);
   RunUntilIdle();
 
   base::MockCallback<ImageDataFetcherCallback> data_callback;
@@ -221,7 +333,7 @@ TEST_F(CachedImageFetcherTest, FetchImageFromCacheReadOnly) {
   const GURL kImageUrl("http://gstatic.img.com/foo.jpg");
   image_cache()->SaveImage(kImageUrl.spec(), kImageData,
                            /* needs_transcoding */ false,
-                           /* expiration_interval */ absl::nullopt);
+                           /* expiration_interval */ std::nullopt);
   test_url_loader_factory()->AddResponse(kImageUrl.spec(), kImageData);
   RunUntilIdle();
   {
@@ -378,7 +490,7 @@ TEST_F(CachedImageFetcherTest, FetchImageWithSkipDiskCache) {
   const GURL kImageUrl("http://gstatic.img.com/foo.jpg");
   image_cache()->SaveImage(kImageUrl.spec(), kImageDataOther,
                            /* needs_transcoding */ false,
-                           /* expiration_interval */ absl::nullopt);
+                           /* expiration_interval */ std::nullopt);
   RunUntilIdle();
   test_url_loader_factory()->AddResponse(kImageUrl.spec(), kImageData);
 
@@ -394,6 +506,41 @@ TEST_F(CachedImageFetcherTest, FetchImageWithSkipDiskCache) {
                                             image_callback.Get(), params);
 
   RunUntilIdle();
+}
+
+// Tests that fetching an image with `TranscodeFormat::kJpeg` encodes the
+// transcoded image as JPEG in the cache instead of PNG.
+TEST_F(CachedImageFetcherTest, FetchImagePopulatesCacheAsJpeg) {
+  static constexpr std::string_view kJpegMagicHeader = "\xFF\xD8";
+  const GURL kImageUrl("http://gstatic.img.com/foo.jpg");
+  {
+    test_url_loader_factory()->AddResponse(kImageUrl.spec(), kImageData);
+
+    base::MockCallback<ImageDataFetcherCallback> data_callback;
+    base::MockCallback<ImageFetcherCallback> image_callback;
+
+    EXPECT_CALL(data_callback, Run(NonEmptyString(), _));
+    EXPECT_CALL(image_callback, Run(NonEmptyImage(), _));
+    ImageFetcherParams params(TRAFFIC_ANNOTATION_FOR_TESTS, kUmaClientName);
+    params.set_transcode_format(ImageFetcherParams::TranscodeFormat::kJpeg);
+    cached_image_fetcher()->FetchImageAndData(kImageUrl, data_callback.Get(),
+                                              image_callback.Get(), params);
+    db()->LoadCallback(true);
+    RunUntilIdle();
+  }
+  // Verify the image data stored in the cache is JPEG-encoded.
+  {
+    std::string cached_data;
+    EXPECT_CALL(*this, OnImageLoaded(false, _))
+        .WillOnce(testing::SaveArg<1>(&cached_data));
+    image_cache()->LoadImage(
+        /*read_only=*/false, kImageUrl.spec(),
+        base::BindOnce(&CachedImageFetcherTest::OnImageLoaded,
+                       base::Unretained(this)));
+    db()->LoadCallback(true);
+    RunUntilIdle();
+    EXPECT_TRUE(cached_data.starts_with(kJpegMagicHeader));
+  }
 }
 
 }  // namespace image_fetcher

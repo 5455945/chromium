@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,14 +11,21 @@
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/memory_coordinator/memory_limit.h"
+#include "base/memory_coordinator/test_memory_consumer_registry.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "chrome/browser/flags/android/chrome_feature_list.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
+#include "components/paint_preview/common/mock_paint_preview_recorder.h"
 #include "components/paint_preview/common/mojom/paint_preview_recorder.mojom.h"
+#include "components/paint_preview/common/mojom/paint_preview_types.mojom.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_utils.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
+#include "ui/base/page_transition_types.h"
 
 namespace long_screenshots {
 
@@ -26,43 +33,19 @@ using paint_preview::DirectoryKey;
 using paint_preview::FileManager;
 
 namespace {
-
 constexpr char kFeatureName[] = "tab_service_test";
 
 // Override PaintPreviewRecorder with a mock version where the status and
 // response can be manipulated based on the expected response.
-class MockPaintPreviewRecorder
-    : public paint_preview::mojom::PaintPreviewRecorder {
+class LaxMockPaintPreviewRecorder
+    : public paint_preview::MockPaintPreviewRecorder {
  public:
-  MockPaintPreviewRecorder() = default;
-  ~MockPaintPreviewRecorder() override = default;
+  LaxMockPaintPreviewRecorder() = default;
+  ~LaxMockPaintPreviewRecorder() override = default;
 
-  MockPaintPreviewRecorder(const MockPaintPreviewRecorder&) = delete;
-  MockPaintPreviewRecorder& operator=(const MockPaintPreviewRecorder&) = delete;
-
-  void CapturePaintPreview(
-      paint_preview::mojom::PaintPreviewCaptureParamsPtr params,
-      paint_preview::mojom::PaintPreviewRecorder::CapturePaintPreviewCallback
-          callback) override {
-    std::move(callback).Run(
-        status_, paint_preview::mojom::PaintPreviewCaptureResponse::New());
-  }
-
-  void SetResponse(paint_preview::mojom::PaintPreviewStatus status) {
-    status_ = status;
-  }
-
-  void BindRequest(mojo::ScopedInterfaceEndpointHandle handle) {
-    binding_.reset();
-    binding_.Bind(
-        mojo::PendingAssociatedReceiver<
-            paint_preview::mojom::PaintPreviewRecorder>(std::move(handle)));
-  }
-
- private:
-  paint_preview::mojom::PaintPreviewStatus status_;
-  mojo::AssociatedReceiver<paint_preview::mojom::PaintPreviewRecorder> binding_{
-      this};
+ protected:
+  void CheckParams(const paint_preview::mojom::PaintPreviewCaptureParamsPtr&
+                       params) override {}
 };
 
 std::vector<base::FilePath> ListDir(const base::FilePath& path) {
@@ -110,18 +93,31 @@ class LongScreenshotsTabServiceTest : public ChromeRenderViewHostTestHarness {
 
   LongScreenshotsTabService* GetService() { return service_.get(); }
 
-  void OverrideInterface(MockPaintPreviewRecorder* recorder) {
+  bool TabService_IsAmpUrl(const GURL& url) { return service_->IsAmpUrl(url); }
+
+  content::RenderFrameHost* TabService_GetRootRenderFrameHost(
+      content::RenderFrameHost* frame,
+      const GURL& url) {
+    return service_->GetRootRenderFrameHost(frame, url);
+  }
+
+  void OverrideInterface(LaxMockPaintPreviewRecorder* recorder) {
     blink::AssociatedInterfaceProvider* remote_interfaces =
-        web_contents()->GetMainFrame()->GetRemoteAssociatedInterfaces();
+        web_contents()->GetPrimaryMainFrame()->GetRemoteAssociatedInterfaces();
     remote_interfaces->OverrideBinderForTesting(
         paint_preview::mojom::PaintPreviewRecorder::Name_,
-        base::BindRepeating(&MockPaintPreviewRecorder::BindRequest,
+        base::BindRepeating(&LaxMockPaintPreviewRecorder::BindRequest,
                             base::Unretained(recorder)));
   }
 
   const base::FilePath& GetPath() const { return temp_dir_.GetPath(); }
 
+  base::TestMemoryConsumerRegistry* memory_consumer_registry() {
+    return &test_memory_consumer_registry_;
+  }
+
  private:
+  base::TestMemoryConsumerRegistry test_memory_consumer_registry_;
   std::unique_ptr<LongScreenshotsTabService> service_;
   base::ScopedTempDir temp_dir_;
 };
@@ -130,12 +126,15 @@ class LongScreenshotsTabServiceTest : public ChromeRenderViewHostTestHarness {
 TEST_F(LongScreenshotsTabServiceTest, CaptureTab) {
   const int kTabId = 1U;
 
-  MockPaintPreviewRecorder recorder;
-  recorder.SetResponse(paint_preview::mojom::PaintPreviewStatus::kOk);
+  LaxMockPaintPreviewRecorder recorder;
+  recorder.SetResponse();
   OverrideInterface(&recorder);
 
   auto* service = GetService();
-  service->CaptureTab(kTabId, web_contents(), 0, 0, 1000, 1000);
+  service->CaptureTab(kTabId, GURL::EmptyGURL(), web_contents(), 0, 0, 1000,
+                      1000, false,
+                      paint_preview::mojom::ClipCoordOverride::kNone,
+                      paint_preview::mojom::ClipCoordOverride::kNone);
   task_environment()->RunUntilIdle();
 
   auto file_manager = service->GetFileMixin()->GetFileManager();
@@ -156,16 +155,50 @@ TEST_F(LongScreenshotsTabServiceTest, CaptureTab) {
   task_environment()->RunUntilIdle();
 }
 
+// Test a successful capturing of a tab in memory.
+TEST_F(LongScreenshotsTabServiceTest, CaptureTabInMemory) {
+  const int kTabId = 1U;
+
+  LaxMockPaintPreviewRecorder recorder;
+  paint_preview::mojom::PaintPreviewCaptureResponsePtr response =
+      paint_preview::mojom::PaintPreviewCaptureResponse::New();
+  response->geometry_metadata =
+      paint_preview::mojom::GeometryMetadataResponse::New();
+  response->skp.emplace(mojo_base::BigBuffer());
+  recorder.SetResponse(std::move(response));
+  OverrideInterface(&recorder);
+
+  auto* service = GetService();
+  service->CaptureTab(kTabId, GURL::EmptyGURL(), web_contents(), 0, 0, 1000,
+                      1000, true,
+                      paint_preview::mojom::ClipCoordOverride::kNone,
+                      paint_preview::mojom::ClipCoordOverride::kNone);
+  task_environment()->RunUntilIdle();
+
+  // No file should have been created.
+  auto file_manager = service->GetFileMixin()->GetFileManager();
+  auto key = file_manager->CreateKey(kTabId);
+  service->GetFileMixin()->GetTaskRunner()->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(&paint_preview::FileManager::DirectoryExists, file_manager,
+                     key),
+      base::BindOnce([](bool exists) { EXPECT_FALSE(exists); }));
+  task_environment()->RunUntilIdle();
+}
+
 // Test a successful capturing a tab multiple times.
 TEST_F(LongScreenshotsTabServiceTest, CaptureTabTwice) {
   const int kTabId = 1U;
 
-  MockPaintPreviewRecorder recorder;
-  recorder.SetResponse(paint_preview::mojom::PaintPreviewStatus::kOk);
+  LaxMockPaintPreviewRecorder recorder;
+  recorder.SetResponse();
   OverrideInterface(&recorder);
 
   auto* service = GetService();
-  service->CaptureTab(kTabId, web_contents(), 0, 0, 1000, 1000);
+  service->CaptureTab(kTabId, GURL::EmptyGURL(), web_contents(), 0, 0, 1000,
+                      1000, false,
+                      paint_preview::mojom::ClipCoordOverride::kNone,
+                      paint_preview::mojom::ClipCoordOverride::kNone);
 
   task_environment()->RunUntilIdle();
   auto file_manager = service->GetFileMixin()->GetFileManager();
@@ -181,7 +214,7 @@ TEST_F(LongScreenshotsTabServiceTest, CaptureTabTwice) {
       base::BindOnce(&FileManager::CreateOrGetDirectory, file_manager, key,
                      false),
       base::BindOnce(
-          [](base::FilePath* out, const absl::optional<base::FilePath>& path) {
+          [](base::FilePath* out, const std::optional<base::FilePath>& path) {
             EXPECT_TRUE(path.has_value());
             *out = path.value();
           },
@@ -190,7 +223,11 @@ TEST_F(LongScreenshotsTabServiceTest, CaptureTabTwice) {
   auto files_1 = ListDir(path_1);
   ASSERT_EQ(1U, files_1.size());
 
-  service->CaptureTab(kTabId, web_contents(), 1000, 1000, 2000, 2000);
+  recorder.SetResponse();
+  service->CaptureTab(kTabId, GURL::EmptyGURL(), web_contents(), 1000, 1000,
+                      2000, 2000, false,
+                      paint_preview::mojom::ClipCoordOverride::kNone,
+                      paint_preview::mojom::ClipCoordOverride::kNone);
   task_environment()->RunUntilIdle();
 
   service->GetFileMixin()->GetTaskRunner()->PostTaskAndReplyWithResult(
@@ -203,7 +240,7 @@ TEST_F(LongScreenshotsTabServiceTest, CaptureTabTwice) {
       base::BindOnce(&FileManager::CreateOrGetDirectory, file_manager, key,
                      false),
       base::BindOnce(
-          [](base::FilePath* out, const absl::optional<base::FilePath>& path) {
+          [](base::FilePath* out, const std::optional<base::FilePath>& path) {
             EXPECT_TRUE(path.has_value());
             *out = path.value();
           },
@@ -230,12 +267,16 @@ TEST_F(LongScreenshotsTabServiceTest, CaptureTabTwice) {
 TEST_F(LongScreenshotsTabServiceTest, CaptureTabFailed) {
   const int kTabId = 1U;
 
-  MockPaintPreviewRecorder recorder;
-  recorder.SetResponse(paint_preview::mojom::PaintPreviewStatus::kFailed);
+  LaxMockPaintPreviewRecorder recorder;
+  recorder.SetResponse(
+      base::unexpected(paint_preview::mojom::PaintPreviewStatus::kFailed));
   OverrideInterface(&recorder);
 
   auto* service = GetService();
-  service->CaptureTab(kTabId, web_contents(), 0, 0, 1000, 1000);
+  service->CaptureTab(kTabId, GURL::EmptyGURL(), web_contents(), 0, 0, 1000,
+                      1000, false,
+                      paint_preview::mojom::ClipCoordOverride::kNone,
+                      paint_preview::mojom::ClipCoordOverride::kNone);
   task_environment()->RunUntilIdle();
 
   auto file_manager = service->GetFileMixin()->GetFileManager();
@@ -254,4 +295,97 @@ TEST_F(LongScreenshotsTabServiceTest, CaptureTabFailed) {
       base::BindOnce([](bool exists) { EXPECT_FALSE(exists); }));
   task_environment()->RunUntilIdle();
 }
+
+TEST_F(LongScreenshotsTabServiceTest, AmpPageDetection) {
+  GURL amp_url("https://www.google.com/amp/s/example");
+  GURL amp_cahe_url(
+      "https://www-example-com.cdn.ampproject.org/c/www.example.com");
+  GURL google_news_url("https://news.google.com/articles/foo");
+  GURL non_amp_url("https://foo.com/amp/bar/");
+
+  ASSERT_TRUE(TabService_IsAmpUrl(amp_url));
+  ASSERT_TRUE(TabService_IsAmpUrl(amp_cahe_url));
+  ASSERT_TRUE(TabService_IsAmpUrl(google_news_url));
+  ASSERT_FALSE(TabService_IsAmpUrl(non_amp_url));
+
+  auto* rfh = main_rfh();
+  ASSERT_EQ(rfh, TabService_GetRootRenderFrameHost(rfh, non_amp_url));
+  // The main frame has no child frame so main frame should be returned.
+  ASSERT_EQ(rfh, TabService_GetRootRenderFrameHost(rfh, amp_url));
+  auto* rfh_tester = content::RenderFrameHostTester::For(rfh);
+  auto* subframe = rfh_tester->AppendChild("child 1");
+  // Child frame should be returned.
+  ASSERT_EQ(subframe, TabService_GetRootRenderFrameHost(rfh, amp_url));
+  // main frame has more than one child frame. Main frame should be returned.
+  rfh_tester->AppendChild("child 2");
+  ASSERT_EQ(rfh, TabService_GetRootRenderFrameHost(rfh, amp_url));
+}
+
+// Test that under critical memory pressure, CaptureTab aborts when
+// kLongScreenshotsNoMemoryCheck is disabled.
+TEST_F(LongScreenshotsTabServiceTest,
+       CaptureTab_LowMemory_AbortsWhenCheckEnabled) {
+  memory_consumer_registry()->NotifyUpdateMemoryLimit(
+      base::MemoryLimit::CriticalPressureThreshold());
+
+  const int kTabId = 1;
+  LaxMockPaintPreviewRecorder recorder;
+  OverrideInterface(&recorder);
+
+  auto* service = GetService();
+  service->CaptureTab(kTabId, GURL::EmptyGURL(), web_contents(), 0, 0, 1000,
+                      1000, false,
+                      paint_preview::mojom::ClipCoordOverride::kNone,
+                      paint_preview::mojom::ClipCoordOverride::kNone);
+  task_environment()->RunUntilIdle();
+
+  // Directory should not exist because capture aborted due to low memory.
+  auto file_manager = service->GetFileMixin()->GetFileManager();
+  auto key = file_manager->CreateKey(kTabId);
+  service->GetFileMixin()->GetTaskRunner()->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(&paint_preview::FileManager::DirectoryExists, file_manager,
+                     key),
+      base::BindOnce([](bool exists) { EXPECT_FALSE(exists); }));
+  task_environment()->RunUntilIdle();
+}
+
+// Test that when kLongScreenshotsNoMemoryCheck is enabled, CaptureTab skips
+// memory checks and proceeds with capture even under critical memory pressure.
+TEST_F(LongScreenshotsTabServiceTest,
+       CaptureTab_NoMemoryCheck_SkipsMemoryCheck) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      chrome::android::kLongScreenshotsNoMemoryCheck);
+
+  memory_consumer_registry()->NotifyUpdateMemoryLimit(
+      base::MemoryLimit::CriticalPressureThreshold());
+
+  const int kTabId = 1;
+  LaxMockPaintPreviewRecorder recorder;
+  recorder.SetResponse();
+  OverrideInterface(&recorder);
+
+  auto* service = GetService();
+  service->CaptureTab(kTabId, GURL::EmptyGURL(), web_contents(), 0, 0, 1000,
+                      1000, false,
+                      paint_preview::mojom::ClipCoordOverride::kNone,
+                      paint_preview::mojom::ClipCoordOverride::kNone);
+  task_environment()->RunUntilIdle();
+
+  // With kLongScreenshotsNoMemoryCheck enabled, capture should proceed even
+  // under critical memory pressure, creating the directory.
+  auto file_manager = service->GetFileMixin()->GetFileManager();
+  auto key = file_manager->CreateKey(kTabId);
+  service->GetFileMixin()->GetTaskRunner()->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(&paint_preview::FileManager::DirectoryExists, file_manager,
+                     key),
+      base::BindOnce([](bool exists) { EXPECT_TRUE(exists); }));
+  task_environment()->RunUntilIdle();
+
+  service->DeleteAllLongScreenshotFiles();
+  task_environment()->RunUntilIdle();
+}
+
 }  // namespace long_screenshots

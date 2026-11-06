@@ -1,9 +1,11 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/common/android/sync_compositor_statics.h"
 
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/command_line.h"
 #include "content/public/common/content_switches.h"
 

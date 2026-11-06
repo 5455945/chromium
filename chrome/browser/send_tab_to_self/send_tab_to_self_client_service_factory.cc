@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,25 @@
 
 #include <string>
 
-#include "base/bind.h"
-#include "base/memory/singleton.h"
-#include "build/chromeos_buildflags.h"
-#include "chrome/browser/notifications/notification_display_service_factory.h"
+#include "base/functional/bind.h"
+#include "base/no_destructor.h"
+#include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/send_tab_to_self/send_tab_to_self_client_service.h"
 #include "chrome/browser/sync/send_tab_to_self_sync_service_factory.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "chrome/common/chrome_features.h"
 #include "components/send_tab_to_self/send_tab_to_self_model.h"
 #include "components/send_tab_to_self/send_tab_to_self_sync_service.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "components/user_manager/user.h"
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/android/send_tab_to_self/android_notification_handler.h"
+#else
+#include "chrome/browser/ui/send_tab_to_self/send_tab_to_self_receiving_ui_handler.h"
 #endif
 
 namespace send_tab_to_self {
@@ -33,50 +38,68 @@ SendTabToSelfClientService* SendTabToSelfClientServiceFactory::GetForProfile(
 // static
 SendTabToSelfClientServiceFactory*
 SendTabToSelfClientServiceFactory::GetInstance() {
-  return base::Singleton<SendTabToSelfClientServiceFactory>::get();
+  static base::NoDestructor<SendTabToSelfClientServiceFactory> instance;
+  return instance.get();
 }
 
 SendTabToSelfClientServiceFactory::SendTabToSelfClientServiceFactory()
-    : BrowserContextKeyedServiceFactory(
+    : ProfileKeyedServiceFactory(
           "SendTabToSelfClientService",
-          BrowserContextDependencyManager::GetInstance()) {
-  DependsOn(NotificationDisplayServiceFactory::GetInstance());
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOriginalOnly)
+              .WithGuest(ProfileSelection::kNone)
+              .WithAshInternals(ProfileSelection::kNone)
+              .Build()) {
   DependsOn(SendTabToSelfSyncServiceFactory::GetInstance());
 }
 
-SendTabToSelfClientServiceFactory::~SendTabToSelfClientServiceFactory() {}
+SendTabToSelfClientServiceFactory::~SendTabToSelfClientServiceFactory() =
+    default;
 
-// BrowserStateKeyedServiceFactory implementation.
-KeyedService* SendTabToSelfClientServiceFactory::BuildServiceInstanceFor(
+// BrowserContextKeyedServiceFactory implementation.
+std::unique_ptr<KeyedService>
+SendTabToSelfClientServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
   Profile* profile = Profile::FromBrowserContext(context);
   SendTabToSelfSyncService* sync_service =
       SendTabToSelfSyncServiceFactory::GetForProfile(profile);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Create SendTabToSelfClientService only for profiles of Gaia users.
   // ChromeOS has system level profiles, such as the sign-in profile, or
   // users that are not Gaia users, such as public account users. Do not
   // create the service for them.
   user_manager::User* user =
-      chromeos::ProfileHelper::Get()->GetUserByProfile(profile);
+      ash::ProfileHelper::Get()->GetUserByProfile(profile);
   // Ensure that the profile is a user profile.
-  if (!user)
+  if (!user) {
     return nullptr;
+  }
   // Ensure that the user is a Gaia user, since other types of user should not
   // have access to the service.
-  if (!user->HasGaiaAccount())
+  if (!user->HasGaiaAccount()) {
     return nullptr;
+  }
 #endif
 
-  // TODO(crbug.com/976741) refactor profile out of STTSClient constructor.
-  return new SendTabToSelfClientService(profile,
-                                        sync_service->GetSendTabToSelfModel());
+  SendTabToSelfModel* model = sync_service->GetSendTabToSelfModel();
+  return std::make_unique<SendTabToSelfClientService>(
+#if BUILDFLAG(IS_ANDROID)
+      std::make_unique<AndroidNotificationHandler>(model)
+#else
+      std::make_unique<SendTabToSelfReceivingUiHandler>(profile)
+#endif
+          ,
+      model);
 }
 
 bool SendTabToSelfClientServiceFactory::ServiceIsCreatedWithBrowserContext()
     const {
-  return true;
+  return !::features::IsLazyAfterStartupKeyedServicesEnabled();
+}
+
+bool SendTabToSelfClientServiceFactory::ServiceIsCreatedAfterStartup() const {
+  return ::features::IsLazyAfterStartupKeyedServicesEnabled();
 }
 
 bool SendTabToSelfClientServiceFactory::ServiceIsNULLWhileTesting() const {

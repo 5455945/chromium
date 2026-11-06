@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,13 @@ import android.net.ConnectivityManager;
 import android.net.ConnectivityManager.NetworkCallback;
 import android.os.Build;
 import android.os.Looper;
-import android.support.test.InstrumentationRegistry;
 
+import androidx.test.InstrumentationRegistry;
 import androidx.test.filters.MediumTest;
 
 import org.junit.After;
 import org.junit.Assert;
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -29,51 +30,57 @@ import org.chromium.base.test.util.MinAndroidSdkLevel;
 @RunWith(BaseJUnit4ClassRunner.class)
 @SuppressLint("NewApi")
 public class NetworkChangeNotifierNoNativeTest {
+    @Before
+    public void setUp() {
+        Looper.prepare();
+        NetworkChangeNotifier.resetInstanceForTests();
+    }
+
     @After
     public void tearDown() {
-        // Destroy NetworkChangeNotifierAutoDetect
+        // Destroy NetworkChangeNotifierAutoDetect on the test thread
         NetworkChangeNotifier.setAutoDetectConnectivityState(false);
     }
 
     /**
-     * Verify NetworkChangeNotifier can initialize without calling into native code. This test
-     * will crash if any native calls are made during NetworkChangeNotifier initialization.
+     * Verify NetworkChangeNotifier can initialize without calling into native code. This test will
+     * crash if any native calls are made during NetworkChangeNotifier initialization.
      */
     @Test
     @MediumTest
     public void testNoNativeDependence() {
-        Looper.prepare();
         NetworkChangeNotifier.init();
         NetworkChangeNotifier.registerToReceiveNotificationsAlways();
     }
 
     /**
-     * Verify NetworkChangeNotifier.registerNetworkCallbackFailed() and
-     * NetworkChangeNotifier.isProcessBoundToNetwork() return false under normal circumstances.
+     * Verify NetworkChangeNotifier.registerNetworkCallbackFailed() returns false under normal
+     * circumstances.
      */
     @Test
     @MediumTest
     public void testDefaultState() {
-        Looper.prepare();
         NetworkChangeNotifier ncn = NetworkChangeNotifier.init();
+        Assert.assertFalse(ncn.registerDefaultNetworkCallbackFailed());
         Assert.assertFalse(ncn.registerNetworkCallbackFailed());
-        Assert.assertFalse(NetworkChangeNotifier.isProcessBoundToNetwork());
         NetworkChangeNotifier.registerToReceiveNotificationsAlways();
+        Assert.assertFalse(ncn.registerDefaultNetworkCallbackFailed());
         Assert.assertFalse(ncn.registerNetworkCallbackFailed());
-        Assert.assertFalse(NetworkChangeNotifier.isProcessBoundToNetwork());
+        // Disabling auto-detect / unregistering must not report failure.
+        NetworkChangeNotifier.setAutoDetectConnectivityState(false);
+        Assert.assertFalse(ncn.registerDefaultNetworkCallbackFailed());
+        Assert.assertFalse(ncn.registerNetworkCallbackFailed());
     }
 
-    /**
-     * Verify NetworkChangeNotifier.registerNetworkCallbackFailed() catches exception properly.
-     */
+    /** Verify NetworkChangeNotifier.registerNetworkCallbackFailed() catches exception properly. */
     @Test
     @MediumTest
     @MinAndroidSdkLevel(Build.VERSION_CODES.N)
     public void testRegisterNetworkCallbackFail() {
         ConnectivityManager connectivityManager =
-                (ConnectivityManager) InstrumentationRegistry.getTargetContext().getSystemService(
-                        Context.CONNECTIVITY_SERVICE);
-        Looper.prepare();
+                (ConnectivityManager)
+                        InstrumentationRegistry.getTargetContext()
+                                .getSystemService(Context.CONNECTIVITY_SERVICE);
         NetworkChangeNotifier ncn = NetworkChangeNotifier.init();
         Assert.assertFalse(ncn.registerNetworkCallbackFailed());
 
@@ -83,6 +90,7 @@ public class NetworkChangeNotifierNoNativeTest {
         }
 
         NetworkChangeNotifier.registerToReceiveNotificationsAlways();
+        Assert.assertTrue(ncn.registerDefaultNetworkCallbackFailed());
         Assert.assertTrue(ncn.registerNetworkCallbackFailed());
     }
 }

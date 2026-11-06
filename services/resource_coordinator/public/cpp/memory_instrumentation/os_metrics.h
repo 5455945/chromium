@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #ifndef SERVICES_RESOURCE_COORDINATOR_PUBLIC_CPP_MEMORY_INSTRUMENTATION_OS_METRICS_H_
@@ -7,11 +7,17 @@
 #include <vector>
 
 #include "base/component_export.h"
+#include "base/containers/enum_set.h"
 #include "base/gtest_prod_util.h"
 #include "base/process/process_handle.h"
+#include "base/process/process_metrics.h"
 #include "base/trace_event/process_memory_dump.h"
 #include "build/build_config.h"
 #include "services/resource_coordinator/public/mojom/memory_instrumentation/memory_instrumentation.mojom.h"
+
+#if BUILDFLAG(IS_APPLE)
+#include <mach/mach.h>
+#endif
 
 namespace heap_profiling {
 FORWARD_DECLARE_TEST(ProfilingJsonExporterTest, MemoryMaps);
@@ -35,19 +41,34 @@ namespace memory_instrumentation {
 class COMPONENT_EXPORT(
     RESOURCE_COORDINATOR_PUBLIC_MEMORY_INSTRUMENTATION) OSMetrics {
  public:
-  // Fills |dump| with memory information about |pid|. See class comments for
-  // restrictions on |pid|. |dump.platform_private_footprint| must be allocated
-  // before calling this function. If |pid| is null, the pid of the current
-  // process is used
-  static bool FillOSMemoryDump(base::ProcessId pid, mojom::RawOSMemDump* dump);
-  static bool FillProcessMemoryMaps(base::ProcessId,
+  using MemDumpFlagSet =
+      base::EnumSet<mojom::MemDumpFlags,
+                    mojom::MemDumpFlags::MEM_DUMP_COUNT_MAPPINGS,
+                    mojom::MemDumpFlags::kMaxValue>;
+
+  // Fills |dump| with memory information about |handle|. See class comments for
+  // restrictions on |handle|. |dump.platform_private_footprint| must be
+  // allocated before calling this function. If |handle| is null, the handle of
+  // the current process is used
+  static bool FillOSMemoryDump(base::ProcessHandle handle,
+                               const MemDumpFlagSet& flags,
+                               mojom::RawOSMemDump* dump);
+#if BUILDFLAG(IS_APPLE)
+  static bool FillOSMemoryDump(base::ProcessHandle handle,
+                               const MemDumpFlagSet& flags,
+                               base::PortProvider* port_provider,
+                               mojom::RawOSMemDump* dump);
+#endif
+  static bool FillProcessMemoryMaps(base::ProcessHandle,
                                     mojom::MemoryMapOption,
                                     mojom::RawOSMemDump*);
-  static std::vector<mojom::VmRegionPtr> GetProcessMemoryMaps(base::ProcessId);
+  static std::vector<mojom::VmRegionPtr> GetProcessMemoryMaps(
+      base::ProcessHandle);
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_ANDROID)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   static void SetProcSmapsForTesting(FILE*);
-#endif  // defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
+        // BUILDFLAG(IS_ANDROID)
 
  private:
   FRIEND_TEST_ALL_PREFIXES(OSMetricsTest, ParseProcSmaps);
@@ -57,11 +78,16 @@ class COMPONENT_EXPORT(
   FRIEND_TEST_ALL_PREFIXES(heap_profiling::ProfilingJsonExporterTest,
                            MemoryMaps);
 
-#if defined(OS_MAC)
-  static std::vector<mojom::VmRegionPtr> GetProcessModules(base::ProcessId);
+#if BUILDFLAG(IS_MAC)
+  static std::vector<mojom::VmRegionPtr> GetProcessModules(base::ProcessHandle);
 #endif
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_ANDROID)
+#if !BUILDFLAG(IS_APPLE)
+  static base::expected<base::ProcessMemoryInfo, base::ProcessUsageError>
+  GetMemoryInfo(base::ProcessHandle handle);
+#endif  // !BUILDFLAG(IS_APPLE)
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   // Provides information on the dump state of resident pages. These values are
   // written to logs. New enum values can be added, but existing enums must
   // never be renumbered or deleted and reused.
@@ -82,10 +108,9 @@ class COMPONENT_EXPORT(
   // Depends on /proc/self/pagemap to determine the mapped and resident pages
   // within bounds (|start_address| inclusive and |end_address| exclusive).
   //
-  // Does not use mincore() because the latter only reports resident pages. The
-  // mincore() would report a page as resident if that page was accessed from a
-  // different process (such as the commonly used prefetch of the native
-  // library).
+  // Does not use mincore(). Note: in recent kernels mincore() only reports
+  // residence correctly for the files the calling process could (if tried) open
+  // for writing. See can_do_mincore() in mm/mincore.c.
   //
   // Tested only on Android.
   static MappedAndResidentPagesDumpState GetMappedAndResidentPages(
@@ -96,7 +121,8 @@ class COMPONENT_EXPORT(
   // TODO(chiniforooshan): move to /base/process/process_metrics_linux.cc after
   // making sure that peak RSS is useful.
   static size_t GetPeakResidentSetSize(base::ProcessId pid);
-#endif  // defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
+        // BUILDFLAG(IS_ANDROID)
 };
 
 }  // namespace memory_instrumentation

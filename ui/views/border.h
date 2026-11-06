@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,9 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/color/color_id.h"
+#include "ui/color/color_variant.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/views/views_export.h"
@@ -29,8 +30,9 @@ class View;
 //
 // The border class is used to display a border around a view.
 // To set a border on a view, call SetBorder on the view, for example:
-// view->SetBorder(CreateSolidBorder(1, view->GetNativeTheme()->GetSystemColor(
-//            ui::NativeTheme::kColorId_UnfocusedBorderColor)));
+// view->SetBorder(
+//     CreateSolidBorder(1, view->GetColorProvider()->GetColor(
+//                              ui::kColorFocusableBorderUnfocused)));
 // Make sure the border color is updated on theme changes.
 // Once set on a view, the border is owned by the view.
 //
@@ -44,7 +46,10 @@ class View;
 class VIEWS_EXPORT Border {
  public:
   Border();
-  explicit Border(SkColor color);
+
+  Border(const Border&) = delete;
+  Border& operator=(const Border&) = delete;
+
   virtual ~Border();
 
   // Renders the border for the specified view.
@@ -61,15 +66,20 @@ class VIEWS_EXPORT Border {
   // content laid out relative to these images.
   virtual gfx::Size GetMinimumSize() const = 0;
 
-  SkColor color() const { return color_; }
+  // This is called by the View on which it is attached. This is overridden for
+  // subclasses that depend on theme colors.
+  virtual void OnViewThemeChanged(View* view);
 
-  // Sets the border color.
-  void set_color(SkColor color) { color_ = color; }
+  ui::ColorVariant color() const { return color_; }
+
+ protected:
+  // Sets the border color. Restricted to subclasses: callers holding a generic
+  // `Border*` cannot know how the concrete subclass uses the color, if at all.
+  // To change a view's border, install a new one with `View::SetBorder()`.
+  void set_color(ui::ColorVariant color);
 
  private:
-  SkColor color_ = gfx::kPlaceholderColor;
-
-  DISALLOW_COPY_AND_ASSIGN(Border);
+  ui::ColorVariant color_;
 };
 
 // Convenience for creating a scoped_ptr with no Border.
@@ -77,44 +87,44 @@ VIEWS_EXPORT std::unique_ptr<Border> NullBorder();
 
 // Creates a border that is a simple line of the specified thickness and color.
 VIEWS_EXPORT std::unique_ptr<Border> CreateSolidBorder(int thickness,
-                                                       SkColor color);
+                                                       ui::ColorVariant color);
 
 // Creates a border that is a rounded rectangle of the specified thickness and
 // color.
-VIEWS_EXPORT std::unique_ptr<Border> CreateRoundedRectBorder(int thickness,
-                                                             int corner_radius,
-                                                             SkColor color);
+// NOTE: `corner_radius` is an OUTER EDGE RADIUS, not a stroke radius!
 VIEWS_EXPORT std::unique_ptr<Border> CreateRoundedRectBorder(
     int thickness,
-    int corner_radius,
+    float corner_radius,
+    ui::ColorVariant color);
+
+VIEWS_EXPORT std::unique_ptr<Border> CreateRoundedRectBorder(
+    int thickness,
+    float corner_radius,
     const gfx::Insets& paint_insets,
-    SkColor color);
+    ui::ColorVariant color);
 
 // Creates a border for reserving space. The returned border does not paint
 // anything.
 VIEWS_EXPORT std::unique_ptr<Border> CreateEmptyBorder(
     const gfx::Insets& insets);
-VIEWS_EXPORT std::unique_ptr<Border> CreateEmptyBorder(int top,
-                                                       int left,
-                                                       int bottom,
-                                                       int right);
 
-// Creates a border of the specified color, and specified thickness on each
-// side.
-VIEWS_EXPORT std::unique_ptr<Border> CreateSolidSidedBorder(int top,
-                                                            int left,
-                                                            int bottom,
-                                                            int right,
-                                                            SkColor color);
+// A simpler version of the above for a border with uniform thickness.
+VIEWS_EXPORT std::unique_ptr<Border> CreateEmptyBorder(int thickness);
+
+// Creates a border of the specified color, and thickness on each side specified
+// in |insets|.
+VIEWS_EXPORT std::unique_ptr<Border> CreateSolidSidedBorder(
+    const gfx::Insets& insets,
+    ui::ColorVariant color);
 
 // Creates a new border that draws |border| and adds additional padding. This is
 // equivalent to changing the insets of |border| without changing how or what it
 // paints. Example:
 //
 // view->SetBorder(CreatePaddedBorder(
-//     CreateSolidBorder(1, view->GetNativeTheme()->GetSystemColor(
-//         ui::NativeTheme::kColorId_UnfocusedBorderColor)),
-//     gfx::Insets(2, 0, 0, 0)));
+//     CreateSolidBorder(1, view->GetColorProvider()->GetColor(
+//                              ui::kColorFocusableBorderUnfocused)),
+//     gfx::Insets::TLBR(2, 0, 0, 0)));
 //
 // yields a single dip red border and an additional 2dip of unpainted padding
 // above the view content (below the border).

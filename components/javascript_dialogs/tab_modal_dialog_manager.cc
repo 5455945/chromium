@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,21 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/stringprintf.h"
 #include "components/javascript_dialogs/app_modal_dialog_manager.h"
 #include "components/javascript_dialogs/tab_modal_dialog_view.h"
 #include "components/navigation_metrics/navigation_metrics.h"
-#include "components/ukm/content/source_url_recorder.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "ui/gfx/text_elider.h"
+#include "url/origin.h"
 
 namespace javascript_dialogs {
 
@@ -29,84 +28,6 @@ namespace {
 
 AppModalDialogManager* GetAppModalDialogManager() {
   return AppModalDialogManager::GetInstance();
-}
-
-// The relationship between origins in displayed dialogs.
-//
-// This is used for a UMA histogram. Please never alter existing values, only
-// append new ones.
-//
-// Note that "HTTP" in these enum names refers to a scheme that is either HTTP
-// or HTTPS.
-enum class DialogOriginRelationship {
-  // The dialog was shown by a main frame with a non-HTTP(S) scheme, or by a
-  // frame within a non-HTTP(S) main frame.
-  NON_HTTP_MAIN_FRAME = 1,
-
-  // The dialog was shown by a main frame with an HTTP(S) scheme.
-  HTTP_MAIN_FRAME = 2,
-
-  // The dialog was displayed by an HTTP(S) frame which shared the same origin
-  // as the main frame.
-  HTTP_MAIN_FRAME_HTTP_SAME_ORIGIN_ALERTING_FRAME = 3,
-
-  // The dialog was displayed by an HTTP(S) frame which had a different origin
-  // from the main frame.
-  HTTP_MAIN_FRAME_HTTP_DIFFERENT_ORIGIN_ALERTING_FRAME = 4,
-
-  // The dialog was displayed by a non-HTTP(S) frame whose nearest HTTP(S)
-  // ancestor shared the same origin as the main frame.
-  HTTP_MAIN_FRAME_NON_HTTP_ALERTING_FRAME_SAME_ORIGIN_ANCESTOR = 5,
-
-  // The dialog was displayed by a non-HTTP(S) frame whose nearest HTTP(S)
-  // ancestor was a different origin than the main frame.
-  HTTP_MAIN_FRAME_NON_HTTP_ALERTING_FRAME_DIFFERENT_ORIGIN_ANCESTOR = 6,
-
-  COUNT,
-};
-
-DialogOriginRelationship GetDialogOriginRelationship(
-    content::WebContents* web_contents,
-    content::RenderFrameHost* alerting_frame) {
-  GURL main_frame_url = web_contents->GetLastCommittedURL();
-
-  if (!main_frame_url.SchemeIsHTTPOrHTTPS())
-    return DialogOriginRelationship::NON_HTTP_MAIN_FRAME;
-
-  if (alerting_frame == web_contents->GetMainFrame())
-    return DialogOriginRelationship::HTTP_MAIN_FRAME;
-
-  GURL alerting_frame_url = alerting_frame->GetLastCommittedURL();
-
-  if (alerting_frame_url.SchemeIsHTTPOrHTTPS()) {
-    if (main_frame_url.GetOrigin() == alerting_frame_url.GetOrigin()) {
-      return DialogOriginRelationship::
-          HTTP_MAIN_FRAME_HTTP_SAME_ORIGIN_ALERTING_FRAME;
-    }
-    return DialogOriginRelationship::
-        HTTP_MAIN_FRAME_HTTP_DIFFERENT_ORIGIN_ALERTING_FRAME;
-  }
-
-  // Walk up the tree to find the nearest ancestor frame of the alerting frame
-  // that has an HTTP(S) scheme. Note that this is guaranteed to terminate
-  // because the main frame has an HTTP(S) scheme.
-  content::RenderFrameHost* nearest_http_ancestor_frame =
-      alerting_frame->GetParent();
-  while (!nearest_http_ancestor_frame->GetLastCommittedURL()
-              .SchemeIsHTTPOrHTTPS()) {
-    nearest_http_ancestor_frame = nearest_http_ancestor_frame->GetParent();
-  }
-
-  GURL nearest_http_ancestor_frame_url =
-      nearest_http_ancestor_frame->GetLastCommittedURL();
-
-  if (main_frame_url.GetOrigin() ==
-      nearest_http_ancestor_frame_url.GetOrigin()) {
-    return DialogOriginRelationship::
-        HTTP_MAIN_FRAME_NON_HTTP_ALERTING_FRAME_SAME_ORIGIN_ANCESTOR;
-  }
-  return DialogOriginRelationship::
-      HTTP_MAIN_FRAME_NON_HTTP_ALERTING_FRAME_DIFFERENT_ORIGIN_ANCESTOR;
 }
 
 }  // namespace
@@ -158,39 +79,39 @@ void TabModalDialogManager::RunJavaScriptDialog(
   DCHECK_EQ(alerting_web_contents,
             content::WebContents::FromRenderFrameHost(render_frame_host));
 
-  GURL alerting_frame_url = render_frame_host->GetLastCommittedURL();
-
   content::WebContents* web_contents = WebContentsObserver::web_contents();
-  DialogOriginRelationship origin_relationship =
-      GetDialogOriginRelationship(alerting_web_contents, render_frame_host);
-  navigation_metrics::Scheme scheme =
-      navigation_metrics::GetScheme(alerting_frame_url);
-  switch (dialog_type) {
-    case content::JAVASCRIPT_DIALOG_TYPE_ALERT:
-      UMA_HISTOGRAM_ENUMERATION("JSDialogs.OriginRelationship.Alert",
-                                origin_relationship,
-                                DialogOriginRelationship::COUNT);
-      UMA_HISTOGRAM_ENUMERATION("JSDialogs.Scheme.Alert", scheme,
-                                navigation_metrics::Scheme::COUNT);
-      break;
-    case content::JAVASCRIPT_DIALOG_TYPE_CONFIRM:
-      UMA_HISTOGRAM_ENUMERATION("JSDialogs.OriginRelationship.Confirm",
-                                origin_relationship,
-                                DialogOriginRelationship::COUNT);
-      UMA_HISTOGRAM_ENUMERATION("JSDialogs.Scheme.Confirm", scheme,
-                                navigation_metrics::Scheme::COUNT);
-      break;
-    case content::JAVASCRIPT_DIALOG_TYPE_PROMPT:
-      UMA_HISTOGRAM_ENUMERATION("JSDialogs.OriginRelationship.Prompt",
-                                origin_relationship,
-                                DialogOriginRelationship::COUNT);
-      UMA_HISTOGRAM_ENUMERATION("JSDialogs.Scheme.Prompt", scheme,
-                                navigation_metrics::Scheme::COUNT);
-      break;
-  }
 
   // Close any dialog already showing.
   CloseDialog(DismissalCause::kSubsequentDialogShown, false, std::u16string());
+
+  // Only show the dialog if there is no other modal dialog showing.
+  if (!delegate_->CanShowModalUI()) {
+    static const char kDialogSuppressedByOtherDialogConsoleMessageFormat[] =
+        "A window.%s() dialog generated by this page was suppressed because "
+        "another browser modal dialog was already showing to the user.";
+    std::string dialog_type_string;
+    switch (dialog_type) {
+      case content::JAVASCRIPT_DIALOG_TYPE_ALERT: {
+        dialog_type_string = "alert";
+        break;
+      }
+      case content::JAVASCRIPT_DIALOG_TYPE_CONFIRM: {
+        dialog_type_string = "confirm";
+        break;
+      }
+      case content::JAVASCRIPT_DIALOG_TYPE_PROMPT: {
+        dialog_type_string = "prompt";
+        break;
+      }
+    }
+    render_frame_host->AddMessageToConsole(
+        blink::mojom::ConsoleMessageLevel::kWarning,
+        base::StringPrintf(kDialogSuppressedByOtherDialogConsoleMessageFormat,
+                           dialog_type_string.c_str()));
+
+    *did_suppress_message = true;
+    return;
+  }
 
   bool make_pending = false;
   if (!delegate_->IsWebContentsForemost() &&
@@ -215,7 +136,7 @@ void TabModalDialogManager::RunJavaScriptDialog(
       }
       case content::JAVASCRIPT_DIALOG_TYPE_CONFIRM: {
         *did_suppress_message = true;
-        alerting_web_contents->GetMainFrame()->AddMessageToConsole(
+        render_frame_host->AddMessageToConsole(
             blink::mojom::ConsoleMessageLevel::kWarning,
             base::StringPrintf(kDialogSuppressedConsoleMessageFormat, "confirm",
                                "5140698722467840"));
@@ -223,7 +144,7 @@ void TabModalDialogManager::RunJavaScriptDialog(
       }
       case content::JAVASCRIPT_DIALOG_TYPE_PROMPT: {
         *did_suppress_message = true;
-        alerting_web_contents->GetMainFrame()->AddMessageToConsole(
+        render_frame_host->AddMessageToConsole(
             blink::mojom::ConsoleMessageLevel::kWarning,
             base::StringPrintf(kDialogSuppressedConsoleMessageFormat, "prompt",
                                "5637107137642496"));
@@ -248,7 +169,8 @@ void TabModalDialogManager::RunJavaScriptDialog(
                    &truncated_default_prompt_text);
 
   std::u16string title = GetAppModalDialogManager()->GetTitle(
-      alerting_web_contents, alerting_frame_url);
+      alerting_web_contents, render_frame_host->GetLastCommittedOrigin());
+  dialog_title_ = title;
   dialog_callback_ = std::move(callback);
   dialog_type_ = dialog_type;
   if (make_pending) {
@@ -296,16 +218,6 @@ void TabModalDialogManager::RunBeforeUnloadDialog(
   DCHECK_EQ(web_contents,
             content::WebContents::FromRenderFrameHost(render_frame_host));
 
-  DialogOriginRelationship origin_relationship =
-      GetDialogOriginRelationship(web_contents, render_frame_host);
-  navigation_metrics::Scheme scheme =
-      navigation_metrics::GetScheme(render_frame_host->GetLastCommittedURL());
-  UMA_HISTOGRAM_ENUMERATION("JSDialogs.OriginRelationship.BeforeUnload",
-                            origin_relationship,
-                            DialogOriginRelationship::COUNT);
-  UMA_HISTOGRAM_ENUMERATION("JSDialogs.Scheme.BeforeUnload", scheme,
-                            navigation_metrics::Scheme::COUNT);
-
   // onbeforeunload dialogs are always handled with an app-modal dialog, because
   // - they are critical to the user not losing data
   // - they can be requested for tabs that are not foremost
@@ -345,6 +257,15 @@ void TabModalDialogManager::OnVisibilityChanged(
   if (visibility == content::Visibility::HIDDEN) {
     HandleTabSwitchAway(DismissalCause::kTabHidden);
   } else if (pending_dialog_) {
+    // Another dialog has started showing between when the pending dialog was
+    // created and now. We cannot show the pending dialog over the currently
+    // showing dialog, so we must close the pending dialog.
+    if (!delegate_->CanShowModalUI()) {
+      CloseDialog(DismissalCause::kSuppressedByOtherDialog, false,
+                  std::u16string());
+      return;
+    }
+
     dialog_ = std::move(pending_dialog_).Run();
     pending_dialog_.Reset();
     delegate_->SetTabNeedsAttention(false);
@@ -365,6 +286,7 @@ TabModalDialogManager::TabModalDialogManager(
     content::WebContents* web_contents,
     std::unique_ptr<TabModalDialogManagerDelegate> delegate)
     : content::WebContentsObserver(web_contents),
+      content::WebContentsUserData<TabModalDialogManager>(*web_contents),
       delegate_(std::move(delegate)) {}
 
 void TabModalDialogManager::LogDialogDismissalCause(DismissalCause cause) {
@@ -377,8 +299,9 @@ void TabModalDialogManager::LogDialogDismissalCause(DismissalCause cause) {
   // WebContents that had the alert call in it. For 99.9999% of cases they're
   // the same, but for instances like the <webview> tag in extensions and PDF
   // files that alert they may differ.
-  ukm::SourceId source_id = ukm::GetSourceIdForWebContentsDocument(
-      WebContentsObserver::web_contents());
+  ukm::SourceId source_id = WebContentsObserver::web_contents()
+                                ->GetPrimaryMainFrame()
+                                ->GetPageUkmSourceId();
   if (source_id != ukm::kInvalidSourceId) {
     ukm::builders::AbusiveExperienceHeuristic_JavaScriptDialog(source_id)
         .SetDismissalCause(static_cast<int64_t>(cause))
@@ -439,12 +362,13 @@ void TabModalDialogManager::CloseDialog(DismissalCause cause,
   }
 
   dialog_.reset();
+  dialog_title_.clear();
   pending_dialog_.Reset();
   dialog_callback_.Reset();
 
   delegate_->DidCloseDialog();
 }
 
-WEB_CONTENTS_USER_DATA_KEY_IMPL(TabModalDialogManager)
+WEB_CONTENTS_USER_DATA_KEY_IMPL(TabModalDialogManager);
 
 }  // namespace javascript_dialogs

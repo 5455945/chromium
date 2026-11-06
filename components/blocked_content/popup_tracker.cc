@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,15 @@
 
 #include "base/check.h"
 #include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/time/default_tick_clock.h"
+#include "base/time/time.h"
 #include "components/blocked_content/popup_opener_tab_helper.h"
-#include "components/ukm/content/source_url_recorder.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 
 namespace blocked_content {
 namespace {
@@ -30,7 +30,7 @@ int CappedUserInteractions(int user_interactions, int max_interactions) {
 PopupTracker* PopupTracker::CreateForWebContents(
     content::WebContents* contents,
     content::WebContents* opener,
-    WindowOpenDisposition disposition) {
+    ui::mojom::WindowOpenDisposition disposition) {
   DCHECK(contents);
   DCHECK(opener);
   auto* tracker = FromWebContents(contents);
@@ -45,49 +45,35 @@ PopupTracker::~PopupTracker() = default;
 
 PopupTracker::PopupTracker(content::WebContents* contents,
                            content::WebContents* opener,
-                           WindowOpenDisposition disposition)
+                           ui::mojom::WindowOpenDisposition disposition)
     : content::WebContentsObserver(contents),
+      content::WebContentsUserData<PopupTracker>(*contents),
       visibility_tracker_(
           base::DefaultTickClock::GetInstance(),
           contents->GetVisibility() != content::Visibility::HIDDEN),
-      opener_source_id_(ukm::GetSourceIdForWebContentsDocument(opener)),
+      opener_source_id_(opener->GetPrimaryMainFrame()->GetPageUkmSourceId()),
       window_open_disposition_(disposition) {
   if (auto* popup_opener = PopupOpenerTabHelper::FromWebContents(opener))
     popup_opener->OnOpenedPopup(this);
 
-  auto* observation_manager =
+  // A popup tracker may be constructed before `contents` has been added to its
+  // owning tab strip, and as such tab helpers for `contents` may not yet have
+  // been initialized. Explicitly instantiate SubresourceFilterObserverManager
+  // if necessary for `contents` if necessary to ensure the popup registers the
+  // observation.
+  subresource_filter::SubresourceFilterObserverManager::CreateForWebContents(
+      contents);
+  scoped_observation_.Observe(
       subresource_filter::SubresourceFilterObserverManager::FromWebContents(
-          contents);
-  if (observation_manager) {
-    scoped_observation_.Observe(observation_manager);
-  }
+          contents));
 }
 
 void PopupTracker::WebContentsDestroyed() {
   base::TimeDelta total_foreground_duration =
       visibility_tracker_.GetForegroundDuration();
-  if (first_load_visible_time_start_) {
-    base::TimeDelta first_load_visible_time =
-        first_load_visible_time_
-            ? *first_load_visible_time_
-            : total_foreground_duration - *first_load_visible_time_start_;
-    UMA_HISTOGRAM_LONG_TIMES(
-        "ContentSettings.Popups.FirstDocumentEngagementTime2",
-        first_load_visible_time);
-  }
-  UMA_HISTOGRAM_CUSTOM_TIMES(
-      "ContentSettings.Popups.EngagementTime", total_foreground_duration,
-      base::TimeDelta::FromMilliseconds(1), base::TimeDelta::FromHours(6), 50);
-  if (web_contents()->GetClosedByUserGesture()) {
-    UMA_HISTOGRAM_CUSTOM_TIMES(
-        "ContentSettings.Popups.EngagementTime.GestureClose",
-        total_foreground_duration, base::TimeDelta::FromMilliseconds(1),
-        base::TimeDelta::FromHours(6), 50);
-  }
-
   if (opener_source_id_ != ukm::kInvalidSourceId) {
     const int kMaxInteractions = 100;
-    const int kMaxSubcatagoryInteractions = 50;
+    const int kMaxSubcategoryInteractions = 50;
     ukm::builders::Popup_Closed(opener_source_id_)
         .SetEngagementTime(ukm::GetExponentialBucketMinForUserTiming(
             total_foreground_duration.InMilliseconds()))
@@ -98,9 +84,9 @@ void PopupTracker::WebContentsDestroyed() {
         .SetNumInteractions(
             CappedUserInteractions(num_interactions_, kMaxInteractions))
         .SetNumActivationInteractions(CappedUserInteractions(
-            num_activation_events_, kMaxSubcatagoryInteractions))
+            num_activation_events_, kMaxSubcategoryInteractions))
         .SetNumGestureScrollBeginInteractions(CappedUserInteractions(
-            num_gesture_scroll_begin_events_, kMaxSubcatagoryInteractions))
+            num_gesture_scroll_begin_events_, kMaxSubcategoryInteractions))
         .SetRedirectCount(num_redirects_)
         .Record(ukm::UkmRecorder::Get());
   }
@@ -109,11 +95,12 @@ void PopupTracker::WebContentsDestroyed() {
 void PopupTracker::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
   if (!navigation_handle->HasCommitted() ||
-      navigation_handle->IsSameDocument()) {
+      navigation_handle->IsSameDocument() ||
+      !navigation_handle->IsInPrimaryMainFrame()) {
     return;
   }
 
-  if (navigation_handle->IsInMainFrame() && !first_navigation_committed_) {
+  if (!first_navigation_committed_) {
     first_navigation_committed_ = true;
     // The last page in the redirect chain is the current page, the number of
     // redirects is one less than the size of the chain.
@@ -160,6 +147,9 @@ void PopupTracker::OnSafeBrowsingChecksComplete(
     const subresource_filter::SubresourceFilterSafeBrowsingClient::CheckResult&
         result) {
   DCHECK(navigation_handle->IsInMainFrame());
+  if (!navigation_handle->IsInPrimaryMainFrame())
+    return;
+
   safe_browsing_status_ = PopupSafeBrowsingStatus::kSafe;
   if (result.threat_type ==
           safe_browsing::SBThreatType::SB_THREAT_TYPE_URL_PHISHING ||
@@ -176,6 +166,6 @@ void PopupTracker::OnSubresourceFilterGoingAway() {
   scoped_observation_.Reset();
 }
 
-WEB_CONTENTS_USER_DATA_KEY_IMPL(PopupTracker)
+WEB_CONTENTS_USER_DATA_KEY_IMPL(PopupTracker);
 
 }  // namespace blocked_content

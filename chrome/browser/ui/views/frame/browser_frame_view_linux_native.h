@@ -1,22 +1,31 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_FRAME_VIEW_LINUX_NATIVE_H_
 #define CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_FRAME_VIEW_LINUX_NATIVE_H_
 
+#include <optional>
+
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view_linux.h"
-#include "ui/views/linux_ui/nav_button_provider.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/linux/nav_button_provider.h"
+#include "ui/linux/window_frame_provider.h"
+#include "ui/views/window/frame_view_utils_linux.h"
+
+class BrowserFrameViewLayoutLinuxNative;
 
 // A specialization of BrowserFrameViewLinux that is also able to
 // render frame buttons using the native toolkit.
 class BrowserFrameViewLinuxNative : public BrowserFrameViewLinux {
+  METADATA_HEADER(BrowserFrameViewLinuxNative, BrowserFrameViewLinux)
  public:
   BrowserFrameViewLinuxNative(
-      BrowserFrame* frame,
+      BrowserWidget* widget,
       BrowserView* browser_view,
-      BrowserFrameViewLayoutLinux* layout,
-      std::unique_ptr<views::NavButtonProvider> nav_button_provider);
+      BrowserFrameViewLayoutLinuxNative* layout,
+      std::unique_ptr<ui::NavButtonProvider> nav_button_provider);
 
   BrowserFrameViewLinuxNative(const BrowserFrameViewLinuxNative&) = delete;
   BrowserFrameViewLinuxNative& operator=(const BrowserFrameViewLinuxNative&) =
@@ -24,20 +33,18 @@ class BrowserFrameViewLinuxNative : public BrowserFrameViewLinux {
 
   ~BrowserFrameViewLinuxNative() override;
 
- protected:
-  // OpaqueBrowserFrameView:
-  void Layout() override;
+  // BrowserFrameViewLinux:
+  void Layout(PassKey) override;
   FrameButtonStyle GetFrameButtonStyle() const override;
+  int GetTranslucentTopAreaHeight() const override;
+  BrowserLayoutParams GetBrowserLayoutParams() const override;
+
+ protected:
+  // BrowserFrameViewLinux:
+  float GetRestoredCornerRadiusDip() const override;
+  void PaintRestoredFrameBorder(gfx::Canvas* canvas) const override;
 
  private:
-  struct DrawFrameButtonParams {
-    bool operator==(const DrawFrameButtonParams& other) const;
-
-    int top_area_height;
-    bool maximized;
-    bool active;
-  };
-
   // Redraws the image resources associated with the minimize, maximize,
   // restore, and close buttons.
   virtual void MaybeUpdateCachedFrameButtonImages();
@@ -45,11 +52,15 @@ class BrowserFrameViewLinuxNative : public BrowserFrameViewLinux {
   // Returns one of |{minimize,maximize,restore,close}_button_|
   // corresponding to |type|.
   views::Button* GetButtonFromDisplayType(
-      views::NavButtonProvider::FrameButtonDisplayType type);
+      ui::NavButtonProvider::FrameButtonDisplayType type);
 
-  std::unique_ptr<views::NavButtonProvider> nav_button_provider_;
+  std::unique_ptr<ui::NavButtonProvider> nav_button_provider_;
 
-  DrawFrameButtonParams cache_{0, false, false};
+  const raw_ptr<BrowserFrameViewLayoutLinuxNative> layout_;
+
+  // Cache the last parameters with which the caption buttons were drawn.
+  // Parameters still need to be computed even if the buttons cannot be drawn.
+  std::optional<views::DrawFrameButtonParams> cache_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_FRAME_VIEW_LINUX_NATIVE_H_

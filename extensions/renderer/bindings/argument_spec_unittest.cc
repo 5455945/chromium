@@ -1,22 +1,33 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/renderer/bindings/argument_spec.h"
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/macros.h"
+
+#include <optional>
+#include <string_view>
+
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
+#include "extensions/grit/extensions_renderer_generated_resources.h"
 #include "extensions/renderer/bindings/api_binding_test_util.h"
 #include "extensions/renderer/bindings/api_invocation_errors.h"
 #include "extensions/renderer/bindings/api_type_reference_map.h"
 #include "extensions/renderer/bindings/argument_spec_builder.h"
+#include "extensions/renderer/module_system_test.h"
 #include "gin/converter.h"
 #include "gin/dictionary.h"
 #include "gin/public/isolate_holder.h"
 #include "gin/test/v8_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "v8/include/v8-context.h"
+#include "v8/include/v8-function.h"
+#include "v8/include/v8-object.h"
+#include "v8/include/v8-primitive.h"
 #include "v8/include/v8.h"
 
 namespace extensions {
@@ -33,10 +44,15 @@ using api_errors::kTypeObject;
 using api_errors::kTypeString;
 using api_errors::kTypeUndefined;
 using api_errors::MissingRequiredProperty;
+using api_errors::NumberIsNaNOrInfinity;
 
 using V8Validator = base::OnceCallback<void(v8::Local<v8::Value>)>;
 
 class ArgumentSpecUnitTest : public gin::V8Test {
+ public:
+  ArgumentSpecUnitTest(const ArgumentSpecUnitTest&) = delete;
+  ArgumentSpecUnitTest& operator=(const ArgumentSpecUnitTest&) = delete;
+
  protected:
   ArgumentSpecUnitTest()
       : type_refs_(APITypeReferenceMap::InitializeTypeCallback()) {}
@@ -50,17 +66,17 @@ class ArgumentSpecUnitTest : public gin::V8Test {
 
   struct RunTestParams {
     RunTestParams(const ArgumentSpec& spec,
-                  base::StringPiece script_source,
+                  std::string_view script_source,
                   TestResult result)
         : spec(spec), script_source(script_source), expected_result(result) {}
 
-    const ArgumentSpec& spec;
-    base::StringPiece script_source;
+    const raw_ref<const ArgumentSpec> spec;
+    std::string_view script_source;
     TestResult expected_result;
-    base::StringPiece expected_json;
-    base::StringPiece expected_error;
-    base::StringPiece expected_thrown_message;
-    const base::Value* expected_value = nullptr;
+    std::string_view expected_json;
+    std::string_view expected_error;
+    std::string_view expected_thrown_message;
+    raw_ptr<const base::Value> expected_value = nullptr;
     bool should_convert_to_base = true;
     bool should_convert_to_v8 = false;
     V8Validator validate_v8;
@@ -95,23 +111,23 @@ class ArgumentSpecUnitTest : public gin::V8Test {
   }
 
   void ExpectSuccessWithNoConversion(const ArgumentSpec& spec,
-                                     const std::string& script_source) {
+                                     std::string_view script_source) {
     RunTestParams params(spec, script_source, TestResult::PASS);
     params.should_convert_to_base = false;
     RunTest(params);
   }
 
   void ExpectFailure(const ArgumentSpec& spec,
-                     const std::string& script_source,
-                     const std::string& expected_error) {
+                     std::string_view script_source,
+                     std::string_view expected_error) {
     RunTestParams params(spec, script_source, TestResult::FAIL);
     params.expected_error = expected_error;
     RunTest(params);
   }
 
   void ExpectFailureWithNoConversion(const ArgumentSpec& spec,
-                                     const std::string& script_source,
-                                     const std::string& expected_error) {
+                                     std::string_view script_source,
+                                     std::string_view expected_error) {
     RunTestParams params(spec, script_source, TestResult::FAIL);
     params.should_convert_to_base = false;
     params.expected_error = expected_error;
@@ -119,8 +135,8 @@ class ArgumentSpecUnitTest : public gin::V8Test {
   }
 
   void ExpectThrow(const ArgumentSpec& spec,
-                   const std::string& script_source,
-                   const std::string& expected_thrown_message) {
+                   std::string_view script_source,
+                   std::string_view expected_thrown_message) {
     RunTestParams params(spec, script_source, TestResult::THROW);
     params.expected_thrown_message = expected_thrown_message;
     RunTest(params);
@@ -136,8 +152,6 @@ class ArgumentSpecUnitTest : public gin::V8Test {
   void RunTest(RunTestParams& params);
 
   APITypeReferenceMap type_refs_;
-
-  DISALLOW_COPY_AND_ASSIGN(ArgumentSpecUnitTest);
 };
 
 void ArgumentSpecUnitTest::RunTest(RunTestParams& params) {
@@ -152,9 +166,9 @@ void ArgumentSpecUnitTest::RunTest(RunTestParams& params) {
   ASSERT_FALSE(val.IsEmpty()) << params.script_source;
 
   std::string error;
-  std::unique_ptr<base::Value> out_value;
+  std::optional<base::Value> out_value;
   v8::Local<v8::Value> v8_out_value;
-  bool did_succeed = params.spec.ParseArgument(
+  bool did_succeed = params.spec->ParseArgument(
       context, val, type_refs_,
       params.should_convert_to_base ? &out_value : nullptr,
       params.should_convert_to_v8 ? &v8_out_value : nullptr, &error);
@@ -174,8 +188,7 @@ void ArgumentSpecUnitTest::RunTest(RunTestParams& params) {
     if (params.should_convert_to_base) {
       ASSERT_TRUE(out_value);
       if (params.expected_value) {
-        EXPECT_TRUE(params.expected_value->Equals(out_value.get()))
-            << params.script_source;
+        EXPECT_EQ(*params.expected_value, *out_value) << params.script_source;
       } else {
         EXPECT_EQ(params.expected_json, ValueToString(*out_value));
       }
@@ -193,7 +206,7 @@ void ArgumentSpecUnitTest::RunTest(RunTestParams& params) {
 
 TEST_F(ArgumentSpecUnitTest, Test) {
   {
-    ArgumentSpec spec(*ValueFromString("{'type': 'integer'}"));
+    ArgumentSpec spec(DictValueFromString("{'type': 'integer'}"));
     ExpectSuccess(spec, "1", "1");
     ExpectSuccess(spec, "-1", "-1");
     ExpectSuccess(spec, "0", "0");
@@ -209,10 +222,12 @@ TEST_F(ArgumentSpecUnitTest, Test) {
     ExpectFailure(spec, "'1'", InvalidType(kTypeInteger, kTypeString));
     ExpectFailure(spec, "({})", InvalidType(kTypeInteger, kTypeObject));
     ExpectFailure(spec, "[1]", InvalidType(kTypeInteger, kTypeList));
+    ExpectFailure(spec, "NaN", InvalidType(kTypeInteger, kTypeDouble));
+    ExpectFailure(spec, "Infinity", InvalidType(kTypeInteger, kTypeDouble));
   }
 
   {
-    ArgumentSpec spec(*ValueFromString("{'type': 'number'}"));
+    ArgumentSpec spec(DictValueFromString("{'type': 'number'}"));
     ExpectSuccess(spec, "1", "1.0");
     ExpectSuccess(spec, "-1", "-1.0");
     ExpectSuccess(spec, "0", "0.0");
@@ -225,10 +240,12 @@ TEST_F(ArgumentSpecUnitTest, Test) {
     ExpectFailure(spec, "'1.1'", InvalidType(kTypeDouble, kTypeString));
     ExpectFailure(spec, "({})", InvalidType(kTypeDouble, kTypeObject));
     ExpectFailure(spec, "[1.1]", InvalidType(kTypeDouble, kTypeList));
+    ExpectFailure(spec, "NaN", NumberIsNaNOrInfinity());
+    ExpectFailure(spec, "Infinity", NumberIsNaNOrInfinity());
   }
 
   {
-    ArgumentSpec spec(*ValueFromString("{'type': 'integer', 'minimum': 1}"));
+    ArgumentSpec spec(DictValueFromString("{'type': 'integer', 'minimum': 1}"));
     ExpectSuccess(spec, "2", "2");
     ExpectSuccess(spec, "1", "1");
     ExpectFailure(spec, "0", api_errors::NumberTooSmall(1));
@@ -236,14 +253,15 @@ TEST_F(ArgumentSpecUnitTest, Test) {
   }
 
   {
-    ArgumentSpec spec(*ValueFromString("{'type': 'integer', 'maximum': 10}"));
+    ArgumentSpec spec(
+        DictValueFromString("{'type': 'integer', 'maximum': 10}"));
     ExpectSuccess(spec, "10", "10");
     ExpectSuccess(spec, "1", "1");
     ExpectFailure(spec, "11", api_errors::NumberTooLarge(10));
   }
 
   {
-    ArgumentSpec spec(*ValueFromString("{'type': 'string'}"));
+    ArgumentSpec spec(DictValueFromString("{'type': 'string'}"));
     ExpectSuccess(spec, "'foo'", "'foo'");
     ExpectSuccess(spec, "''", "''");
     ExpectFailure(spec, "1", InvalidType(kTypeString, kTypeInteger));
@@ -253,7 +271,7 @@ TEST_F(ArgumentSpecUnitTest, Test) {
 
   {
     ArgumentSpec spec(
-        *ValueFromString("{'type': 'string', 'enum': ['foo', 'bar']}"));
+        DictValueFromString("{'type': 'string', 'enum': ['foo', 'bar']}"));
     std::set<std::string> valid_enums = {"foo", "bar"};
     ExpectSuccess(spec, "'foo'", "'foo'");
     ExpectSuccess(spec, "'bar'", "'bar'");
@@ -265,7 +283,7 @@ TEST_F(ArgumentSpecUnitTest, Test) {
   }
 
   {
-    ArgumentSpec spec(*ValueFromString(
+    ArgumentSpec spec(DictValueFromString(
         "{'type': 'string', 'enum': [{'name': 'foo'}, {'name': 'bar'}]}"));
     std::set<std::string> valid_enums = {"foo", "bar"};
     ExpectSuccess(spec, "'foo'", "'foo'");
@@ -278,7 +296,7 @@ TEST_F(ArgumentSpecUnitTest, Test) {
   }
 
   {
-    ArgumentSpec spec(*ValueFromString("{'type': 'boolean'}"));
+    ArgumentSpec spec(DictValueFromString("{'type': 'boolean'}"));
     ExpectSuccess(spec, "true", "true");
     ExpectSuccess(spec, "false", "false");
     ExpectFailure(spec, "1", InvalidType(kTypeBoolean, kTypeInteger));
@@ -288,7 +306,7 @@ TEST_F(ArgumentSpecUnitTest, Test) {
 
   {
     ArgumentSpec spec(
-        *ValueFromString("{'type': 'array', 'items': {'type': 'string'}}"));
+        DictValueFromString("{'type': 'array', 'items': {'type': 'string'}}"));
     ExpectSuccess(spec, "[]", "[]");
     ExpectSuccess(spec, "['foo']", "['foo']");
     ExpectSuccess(spec, "['foo', 'bar']", "['foo','bar']");
@@ -322,7 +340,7 @@ TEST_F(ArgumentSpecUnitTest, Test) {
         "    'prop2': {'type': 'integer', 'optional': true}"
         "  }"
         "}";
-    ArgumentSpec spec(*ValueFromString(kObjectSpec));
+    ArgumentSpec spec(DictValueFromString(kObjectSpec));
     ExpectSuccess(spec, "({prop1: 'foo', prop2: 2})",
                   "{'prop1':'foo','prop2':2}");
     ExpectSuccess(spec, "({prop1: 'foo'})", "{'prop1':'foo'}");
@@ -383,7 +401,7 @@ TEST_F(ArgumentSpecUnitTest, Test) {
 
   {
     const char kFunctionSpec[] = "{ 'type': 'function' }";
-    ArgumentSpec spec(*ValueFromString(kFunctionSpec));
+    ArgumentSpec spec(DictValueFromString(kFunctionSpec));
     // Functions are serialized as empty dictionaries.
     ExpectSuccess(spec, "(function() {})", "{}");
     ExpectSuccessWithNoConversion(spec, "(function() {})");
@@ -399,7 +417,7 @@ TEST_F(ArgumentSpecUnitTest, Test) {
 
   {
     const char kBinarySpec[] = "{ 'type': 'binary' }";
-    ArgumentSpec spec(*ValueFromString(kBinarySpec));
+    ArgumentSpec spec(DictValueFromString(kBinarySpec));
     // Simple case: empty ArrayBuffer -> empty BinaryValue.
     ExpectSuccess(spec, "(new ArrayBuffer())",
                   base::Value(base::Value::Type::BINARY));
@@ -410,7 +428,7 @@ TEST_F(ArgumentSpecUnitTest, Test) {
     {
       // Actual data.
       const uint8_t kBuffer[] = {'p', 'i', 'n', 'g'};
-      base::Value expected_value(base::make_span(kBuffer));
+      base::Value expected_value{base::span(kBuffer)};
       ExpectSuccess(spec,
                     "var b = new ArrayBuffer(4);\n"
                     "var v = new Uint8Array(b);\n"
@@ -425,7 +443,7 @@ TEST_F(ArgumentSpecUnitTest, Test) {
   }
   {
     const char kAnySpec[] = "{ 'type': 'any' }";
-    ArgumentSpec spec(*ValueFromString(kAnySpec));
+    ArgumentSpec spec(DictValueFromString(kAnySpec));
     ExpectSuccess(spec, "42", "42");
     ExpectSuccess(spec, "'foo'", "'foo'");
     ExpectSuccess(spec, "({prop1:'bar'})", "{'prop1':'bar'}");
@@ -463,9 +481,9 @@ TEST_F(ArgumentSpecUnitTest, TypeRefsTest) {
   const char kEnumType[] =
       "{'id': 'refEnum', 'type': 'string', 'enum': ['alpha', 'beta']}";
   AddTypeRef("refObj",
-             std::make_unique<ArgumentSpec>(*ValueFromString(kObjectType)));
+             std::make_unique<ArgumentSpec>(DictValueFromString(kObjectType)));
   AddTypeRef("refEnum",
-             std::make_unique<ArgumentSpec>(*ValueFromString(kEnumType)));
+             std::make_unique<ArgumentSpec>(DictValueFromString(kEnumType)));
   std::set<std::string> valid_enums = {"alpha", "beta"};
 
   {
@@ -478,7 +496,7 @@ TEST_F(ArgumentSpecUnitTest, TypeRefsTest) {
         "    'sub': {'type': 'integer'}"
         "  }"
         "}";
-    ArgumentSpec spec(*ValueFromString(kObjectWithRefEnumSpec));
+    ArgumentSpec spec(DictValueFromString(kObjectWithRefEnumSpec));
     ExpectSuccess(spec, "({e: 'alpha', sub: 1})", "{'e':'alpha','sub':1}");
     ExpectSuccess(spec, "({e: 'beta', sub: 1})", "{'e':'beta','sub':1}");
     ExpectFailure(spec, "({e: 'gamma', sub: 1})",
@@ -496,7 +514,7 @@ TEST_F(ArgumentSpecUnitTest, TypeRefsTest) {
         "    'o': {'$ref': 'refObj'}"
         "  }"
         "}";
-    ArgumentSpec spec(*ValueFromString(kObjectWithRefObjectSpec));
+    ArgumentSpec spec(DictValueFromString(kObjectWithRefObjectSpec));
     ExpectSuccess(spec, "({o: {prop1: 'foo'}})", "{'o':{'prop1':'foo'}}");
     ExpectSuccess(spec, "({o: {prop1: 'foo', prop2: 2}})",
                   "{'o':{'prop1':'foo','prop2':2}}");
@@ -510,7 +528,7 @@ TEST_F(ArgumentSpecUnitTest, TypeRefsTest) {
   {
     const char kRefEnumListSpec[] =
         "{'type': 'array', 'items': {'$ref': 'refEnum'}}";
-    ArgumentSpec spec(*ValueFromString(kRefEnumListSpec));
+    ArgumentSpec spec(DictValueFromString(kRefEnumListSpec));
     ExpectSuccess(spec, "['alpha']", "['alpha']");
     ExpectSuccess(spec, "['alpha', 'alpha']", "['alpha','alpha']");
     ExpectSuccess(spec, "['alpha', 'beta']", "['alpha','beta']");
@@ -523,7 +541,7 @@ TEST_F(ArgumentSpecUnitTest, TypeChoicesTest) {
   {
     const char kSimpleChoices[] =
         "{'choices': [{'type': 'string'}, {'type': 'integer'}]}";
-    ArgumentSpec spec(*ValueFromString(kSimpleChoices));
+    ArgumentSpec spec(DictValueFromString(kSimpleChoices));
     ExpectSuccess(spec, "'alpha'", "'alpha'");
     ExpectSuccess(spec, "42", "42");
     const char kChoicesType[] = "[string|integer]";
@@ -538,7 +556,7 @@ TEST_F(ArgumentSpecUnitTest, TypeChoicesTest) {
         "    {'type': 'object', 'properties': {'prop1': {'type': 'string'}}}"
         "  ]"
         "}";
-    ArgumentSpec spec(*ValueFromString(kComplexChoices));
+    ArgumentSpec spec(DictValueFromString(kComplexChoices));
     ExpectSuccess(spec, "['alpha']", "['alpha']");
     ExpectSuccess(spec, "['alpha', 'beta']", "['alpha','beta']");
     ExpectSuccess(spec, "({prop1: 'alpha'})", "{'prop1':'alpha'}");
@@ -557,7 +575,7 @@ TEST_F(ArgumentSpecUnitTest, AdditionalPropertiesTest) {
         "  'type': 'object',"
         "  'additionalProperties': {'type': 'any'}"
         "}";
-    ArgumentSpec spec(*ValueFromString(kOnlyAnyAdditionalProperties));
+    ArgumentSpec spec(DictValueFromString(kOnlyAnyAdditionalProperties));
     ExpectSuccess(spec, "({prop1: 'alpha', prop2: 42, prop3: {foo: 'bar'}})",
                   "{'prop1':'alpha','prop2':42,'prop3':{'foo':'bar'}}");
     ExpectSuccess(spec, "({})", "{}");
@@ -626,7 +644,8 @@ TEST_F(ArgumentSpecUnitTest, AdditionalPropertiesTest) {
         "  },"
         "  'additionalProperties': {'type': 'any'}"
         "}";
-    ArgumentSpec spec(*ValueFromString(kPropertiesAndAnyAdditionalProperties));
+    ArgumentSpec spec(
+        DictValueFromString(kPropertiesAndAnyAdditionalProperties));
     ExpectSuccess(spec, "({prop1: 'alpha', prop2: 42, prop3: {foo: 'bar'}})",
                   "{'prop1':'alpha','prop2':42,'prop3':{'foo':'bar'}}");
     // Additional properties are optional.
@@ -643,12 +662,47 @@ TEST_F(ArgumentSpecUnitTest, AdditionalPropertiesTest) {
         "  'type': 'object',"
         "  'additionalProperties': {'type': 'string'}"
         "}";
-    ArgumentSpec spec(*ValueFromString(kTypedAdditionalProperties));
+    ArgumentSpec spec(DictValueFromString(kTypedAdditionalProperties));
     ExpectSuccess(spec, "({prop1: 'alpha', prop2: 'beta', prop3: 'gamma'})",
                   "{'prop1':'alpha','prop2':'beta','prop3':'gamma'}");
     ExpectFailure(spec, "({prop1: 'alpha', prop2: 42})",
                   api_errors::PropertyError(
                       "prop2", InvalidType(kTypeString, kTypeInteger)));
+  }
+}
+
+TEST_F(ArgumentSpecUnitTest, IgnoreAdditionalPropertiesTest) {
+  {
+    constexpr char kPropertiesWithIgnoreAdditionalProperties[] =
+        R"({
+             'type': 'object',
+             'properties': {
+               'prop1': {'type': 'string'}
+             },
+             'ignoreAdditionalProperties': true
+           })";
+    ArgumentSpec spec(
+        DictValueFromString(kPropertiesWithIgnoreAdditionalProperties));
+    ExpectSuccess(spec, "({prop1: 'alpha', prop2: 42, prop3: {foo: 'bar'}})",
+                  "{'prop1':'alpha'}");
+    ExpectSuccess(spec, "({prop1: 'foo'})", "{'prop1':'foo'}");
+    ExpectFailure(spec, "({prop2: 42, prop3: {foo: 'bar'}})",
+                  MissingRequiredProperty("prop1"));
+    ExpectFailure(spec, "({prop1: 42})",
+                  api_errors::PropertyError(
+                      "prop1", InvalidType(kTypeString, kTypeInteger)));
+  }
+  {
+    constexpr char kEmptyPropertiesWithIgnoreAdditionalProperties[] =
+        R"({
+             'type': 'object',
+             'properties': {},
+             'ignoreAdditionalProperties': true
+           })";
+    ArgumentSpec spec(
+        DictValueFromString(kEmptyPropertiesWithIgnoreAdditionalProperties));
+    ExpectSuccess(spec, "({prop1: 'alpha', prop2: {foo: 'bar'}})", "{}");
+    ExpectSuccess(spec, "({})", "{}");
   }
 }
 
@@ -659,7 +713,7 @@ TEST_F(ArgumentSpecUnitTest, InstanceOfTest) {
         "  'type': 'object',"
         "  'isInstanceOf': 'RegExp'"
         "}";
-    ArgumentSpec spec(*ValueFromString(kInstanceOfRegExp));
+    ArgumentSpec spec(DictValueFromString(kInstanceOfRegExp));
     ExpectSuccess(spec, "(new RegExp())", "{}");
     ExpectSuccess(spec, "({ __proto__: RegExp.prototype })", "{}");
     ExpectSuccess(spec,
@@ -688,7 +742,7 @@ TEST_F(ArgumentSpecUnitTest, InstanceOfTest) {
         "  'type': 'object',"
         "  'isInstanceOf': 'customClass'"
         "}";
-    ArgumentSpec spec(*ValueFromString(kInstanceOfCustomClass));
+    ArgumentSpec spec(DictValueFromString(kInstanceOfCustomClass));
     ExpectSuccess(spec,
                   "(function() {\n"
                   "  function customClass() {}\n"
@@ -717,7 +771,7 @@ TEST_F(ArgumentSpecUnitTest, InstanceOfTest) {
 TEST_F(ArgumentSpecUnitTest, MinAndMaxLengths) {
   {
     const char kMinLengthString[] = "{'type': 'string', 'minLength': 3}";
-    ArgumentSpec spec(*ValueFromString(kMinLengthString));
+    ArgumentSpec spec(DictValueFromString(kMinLengthString));
     ExpectSuccess(spec, "'aaa'", "'aaa'");
     ExpectSuccess(spec, "'aaaa'", "'aaaa'");
     ExpectFailure(spec, "'aa'", api_errors::TooFewStringChars(3, 2));
@@ -726,7 +780,7 @@ TEST_F(ArgumentSpecUnitTest, MinAndMaxLengths) {
 
   {
     const char kMaxLengthString[] = "{'type': 'string', 'maxLength': 3}";
-    ArgumentSpec spec(*ValueFromString(kMaxLengthString));
+    ArgumentSpec spec(DictValueFromString(kMaxLengthString));
     ExpectSuccess(spec, "'aaa'", "'aaa'");
     ExpectSuccess(spec, "'aa'", "'aa'");
     ExpectSuccess(spec, "''", "''");
@@ -736,7 +790,7 @@ TEST_F(ArgumentSpecUnitTest, MinAndMaxLengths) {
   {
     const char kMinLengthArray[] =
         "{'type': 'array', 'items': {'type': 'integer'}, 'minItems': 3}";
-    ArgumentSpec spec(*ValueFromString(kMinLengthArray));
+    ArgumentSpec spec(DictValueFromString(kMinLengthArray));
     ExpectSuccess(spec, "[1, 2, 3]", "[1,2,3]");
     ExpectSuccess(spec, "[1, 2, 3, 4]", "[1,2,3,4]");
     ExpectFailure(spec, "[1, 2]", api_errors::TooFewArrayItems(3, 2));
@@ -746,7 +800,7 @@ TEST_F(ArgumentSpecUnitTest, MinAndMaxLengths) {
   {
     const char kMaxLengthArray[] =
         "{'type': 'array', 'items': {'type': 'integer'}, 'maxItems': 3}";
-    ArgumentSpec spec(*ValueFromString(kMaxLengthArray));
+    ArgumentSpec spec(DictValueFromString(kMaxLengthArray));
     ExpectSuccess(spec, "[1, 2, 3]", "[1,2,3]");
     ExpectSuccess(spec, "[1, 2]", "[1,2]");
     ExpectSuccess(spec, "[]", "[]");
@@ -762,7 +816,7 @@ TEST_F(ArgumentSpecUnitTest, PreserveNull) {
         "  'additionalProperties': {'type': 'any'},"
         "  'preserveNull': true"
         "}";
-    ArgumentSpec spec(*ValueFromString(kObjectSpec));
+    ArgumentSpec spec(DictValueFromString(kObjectSpec));
     ExpectSuccess(spec, "({foo: 1, bar: null})", "{'bar':null,'foo':1}");
     // Subproperties shouldn't preserve null (if not specified).
     ExpectSuccess(spec, "({prop: {subprop1: 'foo', subprop2: null}})",
@@ -776,7 +830,7 @@ TEST_F(ArgumentSpecUnitTest, PreserveNull) {
         "  'additionalProperties': {'type': 'any', 'preserveNull': true},"
         "  'preserveNull': true"
         "}";
-    ArgumentSpec spec(*ValueFromString(kObjectSpec));
+    ArgumentSpec spec(DictValueFromString(kObjectSpec));
     ExpectSuccess(spec, "({foo: 1, bar: null})", "{'bar':null,'foo':1}");
     // Here, subproperties should preserve null.
     ExpectSuccess(spec, "({prop: {subprop1: 'foo', subprop2: null}})",
@@ -790,7 +844,7 @@ TEST_F(ArgumentSpecUnitTest, PreserveNull) {
         "  'properties': {'prop1': {'type': 'string', 'optional': true}},"
         "  'preserveNull': true"
         "}";
-    ArgumentSpec spec(*ValueFromString(kObjectSpec));
+    ArgumentSpec spec(DictValueFromString(kObjectSpec));
     ExpectSuccess(spec, "({})", "{}");
     ExpectSuccess(spec, "({prop1: null})", "{'prop1':null}");
     ExpectSuccess(spec, "({prop1: 'foo'})", "{'prop1':'foo'}");
@@ -806,14 +860,14 @@ TEST_F(ArgumentSpecUnitTest, PreserveNull) {
 TEST_F(ArgumentSpecUnitTest, NaNFun) {
   {
     const char kAnySpec[] = "{'type': 'any'}";
-    ArgumentSpec spec(*ValueFromString(kAnySpec));
+    ArgumentSpec spec(DictValueFromString(kAnySpec));
     ExpectFailure(spec, "NaN", api_errors::UnserializableValue());
   }
 
   {
     const char kObjectWithAnyPropertiesSpec[] =
         "{'type': 'object', 'additionalProperties': {'type': 'any'}}";
-    ArgumentSpec spec(*ValueFromString(kObjectWithAnyPropertiesSpec));
+    ArgumentSpec spec(DictValueFromString(kObjectWithAnyPropertiesSpec));
     ExpectSuccess(spec, "({foo: NaN, bar: 'baz'})", "{'bar':'baz'}");
   }
 }
@@ -894,8 +948,7 @@ TEST_F(ArgumentSpecUnitTest, V8Conversion) {
                   base::BindOnce([](v8::Local<v8::Value> value) {
                     ASSERT_TRUE(value->IsObject());
                     v8::Local<v8::Object> object = value.As<v8::Object>();
-                    v8::Local<v8::Context> context = object->CreationContext();
-                    gin::Dictionary dict(context->GetIsolate(), object);
+                    gin::Dictionary dict(v8::Isolate::GetCurrent(), object);
                     std::string result;
                     ASSERT_TRUE(dict.Get("str", &result));
                     EXPECT_EQ("a string", result);
@@ -932,11 +985,10 @@ TEST_F(ArgumentSpecUnitTest, V8Conversion) {
     ExpectSuccess(*spec, "({})", base::BindOnce([](v8::Local<v8::Value> value) {
       ASSERT_TRUE(value->IsObject());
       v8::Local<v8::Object> object = value.As<v8::Object>();
-      v8::Local<v8::Context> context = object->CreationContext();
       // We expect a null prototype to ensure we avoid tricky getters/setters on
       // the Object prototype.
       EXPECT_TRUE(object->GetPrototype()->IsNull());
-      gin::Dictionary dict(context->GetIsolate(), object);
+      gin::Dictionary dict(v8::Isolate::GetCurrent(), object);
       v8::Local<v8::Value> result;
       ASSERT_TRUE(dict.Get("str", &result));
       EXPECT_TRUE(result->IsUndefined());
@@ -958,10 +1010,11 @@ TEST_F(ArgumentSpecUnitTest, V8Conversion) {
         base::BindOnce([](v8::Local<v8::Value> value) {
           ASSERT_TRUE(value->IsObject());
           v8::Local<v8::Object> object = value.As<v8::Object>();
-          v8::Local<v8::Context> context = object->CreationContext();
+          v8::Local<v8::Context> context = object->GetCreationContextChecked();
           v8::Local<v8::Value> prop =
               object
-                  ->Get(context, gin::StringToV8(context->GetIsolate(), "prop"))
+                  ->Get(context,
+                        gin::StringToV8(v8::Isolate::GetCurrent(), "prop"))
                   .ToLocalChecked();
           EXPECT_TRUE(prop->IsNull());
         }));
@@ -1006,6 +1059,7 @@ TEST_F(ArgumentSpecUnitTest, TestV8ValuePassedThrough) {
             .Build();
     test_is_same_value(*instance_of_spec, "(new RegExp('hi'))");
   }
+
   {
     std::unique_ptr<ArgumentSpec> additional_properties_spec =
         ArgumentSpecBuilder(ArgumentType::OBJECT, "additional props")
@@ -1024,7 +1078,7 @@ TEST_F(ArgumentSpecUnitTest, SerializableFunctions) {
            "type": "function",
            "serializableFunction": true
          })";
-  ArgumentSpec spec(*ValueFromString(kFunctionSpec));
+  ArgumentSpec spec(DictValueFromString(kFunctionSpec));
 
   constexpr char kExpectedSerialization[] = R"("function() { }")";
   ExpectSuccess(spec, "(function() { })", kExpectedSerialization);
@@ -1047,6 +1101,130 @@ TEST_F(ArgumentSpecUnitTest, SerializableFunctions) {
          g.toString = function() { return 'function() { return 3; }'; };
          g;)",
                 kExpectedSerialization);
+}
+
+class ArgumentSpecIntegrationTest : public ModuleSystemTest {
+ public:
+  // See UtilsUnittest::SetUp().
+  void SetUp() override {
+    ModuleSystemTest::SetUp();
+
+    env()->RegisterModule("utils", IDR_EXTENSIONS_RENDERER_GENERATED_UTILS_JS);
+    env()->OverrideNativeHandler("schema_registry",
+                                 "exports.$set('GetSchema', function() {});");
+    env()->OverrideNativeHandler("logging",
+                                 "exports.$set('CHECK', function() {});\n"
+                                 "exports.$set('DCHECK', function() {});\n"
+                                 "exports.$set('WARNING', function() {});");
+    env()->OverrideNativeHandler("v8_context", "");
+  }
+};
+
+TEST_F(ArgumentSpecIntegrationTest, ExposeIsInstanceOfIntegration) {
+  ExpectNoAssertionsMade();
+  ModuleSystem::NativesEnabledScope natives_enabled_scope(
+      env()->module_system());
+
+  constexpr char kModuleBody[] = R"(
+      var utils = require('utils');
+
+      // Base class.
+      function MyClassImpl() {}
+      function MyClass() {
+        privates(MyClass).constructPrivate(this, arguments);
+      }
+      utils.expose(MyClass, MyClassImpl, {});
+
+      // Subclass.
+      function MySubClassImpl() {}
+      function MySubClass() {
+        privates(MySubClass).constructPrivate(this, arguments);
+      }
+      utils.expose(MySubClass, MySubClassImpl, {
+        superclass: MyClass
+      });
+
+      exports.$set('MyClass', MyClass);
+      exports.$set('MySubClass', MySubClass);
+  )";
+
+  env()->RegisterModule("argument_spec_unittest", kModuleBody);
+
+  ASSERT_FALSE(env()
+                   ->module_system()
+                   ->Require("argument_spec_unittest")
+                   .ToLocalChecked()
+                   .IsEmpty());
+
+  // 1. Retrieve constructors from the module exports.
+  v8::Isolate* isolate = env()->isolate();
+  v8::HandleScope handle_scope(isolate);
+  v8::Local<v8::Context> context = env()->context()->v8_context();
+
+  v8::Local<v8::Object> exports;
+  ASSERT_TRUE(env()
+                  ->module_system()
+                  ->Require("argument_spec_unittest")
+                  .ToLocal(&exports));
+
+  v8::Local<v8::Function> my_class;
+  {
+    v8::Local<v8::Value> my_class_val;
+    ASSERT_TRUE(exports->Get(context, gin::StringToSymbol(isolate, "MyClass"))
+                    .ToLocal(&my_class_val));
+    ASSERT_TRUE(my_class_val->IsFunction());
+    my_class = my_class_val.As<v8::Function>();
+  }
+
+  v8::Local<v8::Function> my_sub_class;
+  {
+    v8::Local<v8::Value> my_sub_class_val;
+    ASSERT_TRUE(
+        exports->Get(context, gin::StringToSymbol(isolate, "MySubClass"))
+            .ToLocal(&my_sub_class_val));
+    ASSERT_TRUE(my_sub_class_val->IsFunction());
+    my_sub_class = my_sub_class_val.As<v8::Function>();
+  }
+
+  // 2. Create class instances.
+  v8::Local<v8::Object> my_instance;
+  ASSERT_TRUE(my_class->NewInstance(context).ToLocal(&my_instance));
+
+  v8::Local<v8::Object> my_sub_instance;
+  ASSERT_TRUE(my_sub_class->NewInstance(context).ToLocal(&my_sub_instance));
+
+  // 3. Create an ArgumentSpec expecting "MyClass".
+  APITypeReferenceMap type_refs =
+      APITypeReferenceMap(APITypeReferenceMap::InitializeTypeCallback());
+  std::unique_ptr<ArgumentSpec> spec =
+      ArgumentSpecBuilder(ArgumentType::OBJECT, "instance_of")
+          .SetInstanceOf("MyClass")
+          .Build();
+
+  // 4. Validate the JS object (base class) using ArgumentSpec.
+  v8::Local<v8::Value> value_out;
+  std::string error;
+  EXPECT_TRUE(spec->ParseArgument(context, my_instance, type_refs, nullptr,
+                                  &value_out, &error))
+      << error;
+  EXPECT_FALSE(value_out.IsEmpty());
+
+  // 5. Validate the JS object (subclass class) using ArgumentSpec.
+  v8::Local<v8::Value> value_sub_out;
+  std::string error_sub;
+  EXPECT_TRUE(spec->ParseArgument(context, my_sub_instance, type_refs, nullptr,
+                                  &value_sub_out, &error_sub))
+      << error_sub;
+  EXPECT_FALSE(value_sub_out.IsEmpty());
+
+  // 6. Validate that an unrelated object (e.g. RegExp) fails this check.
+  v8::Local<v8::Value> regexp_instance =
+      V8ValueFromScriptSource(context, "(new RegExp('hi'))");
+  ASSERT_FALSE(regexp_instance.IsEmpty());
+  v8::Local<v8::Value> value_out_fail;
+  std::string error_fail;
+  EXPECT_FALSE(spec->ParseArgument(context, regexp_instance, type_refs, nullptr,
+                                   &value_out_fail, &error_fail));
 }
 
 }  // namespace extensions

@@ -1,37 +1,16 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/win/scoped_process_information.h"
 
-#include "base/logging.h"
+#include <utility>
+
+#include "base/check.h"
 #include "base/win/scoped_handle.h"
 
 namespace base {
 namespace win {
-
-namespace {
-
-// Duplicates source into target, returning true upon success. |target| is
-// guaranteed to be untouched in case of failure. Succeeds with no side-effects
-// if source is NULL.
-bool CheckAndDuplicateHandle(HANDLE source, ScopedHandle* target) {
-  if (!source)
-    return true;
-
-  HANDLE temp = nullptr;
-  if (!::DuplicateHandle(::GetCurrentProcess(), source, ::GetCurrentProcess(),
-                         &temp, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
-    DWORD last_error = ::GetLastError();
-    DPLOG(ERROR) << "Failed to duplicate a handle " << last_error;
-    ::SetLastError(last_error);
-    return false;
-  }
-  target->Set(temp);
-  return true;
-}
-
-}  // namespace
 
 ScopedProcessInformation::ScopedProcessInformation() = default;
 
@@ -40,13 +19,19 @@ ScopedProcessInformation::ScopedProcessInformation(
   Set(process_info);
 }
 
+ScopedProcessInformation::ScopedProcessInformation(ScopedProcessInformation&&) =
+    default;
+
+ScopedProcessInformation& ScopedProcessInformation::operator=(
+    ScopedProcessInformation&&) = default;
+
 ScopedProcessInformation::~ScopedProcessInformation() {
   Close();
 }
 
 bool ScopedProcessInformation::IsValid() const {
-  return process_id_ || process_handle_.Get() || thread_id_ ||
-         thread_handle_.Get();
+  return process_id_ || process_handle_.get() || thread_id_ ||
+         thread_handle_.get();
 }
 
 void ScopedProcessInformation::Close() {
@@ -57,8 +42,9 @@ void ScopedProcessInformation::Close() {
 }
 
 void ScopedProcessInformation::Set(const PROCESS_INFORMATION& process_info) {
-  if (IsValid())
+  if (IsValid()) {
     Close();
+  }
 
   process_handle_.Set(process_info.hProcess);
   thread_handle_.Set(process_info.hThread);
@@ -71,20 +57,27 @@ bool ScopedProcessInformation::DuplicateFrom(
   DCHECK(!IsValid()) << "target ScopedProcessInformation must be NULL";
   DCHECK(other.IsValid()) << "source ScopedProcessInformation must be valid";
 
-  if (CheckAndDuplicateHandle(other.process_handle(), &process_handle_) &&
-      CheckAndDuplicateHandle(other.thread_handle(), &thread_handle_)) {
-    process_id_ = other.process_id();
-    thread_id_ = other.thread_id();
-    return true;
+  ScopedHandle duplicate_process = other.process_handle_.Duplicate();
+  if (other.process_handle_.is_valid() && !duplicate_process.is_valid()) {
+    return false;
   }
 
-  return false;
+  ScopedHandle duplicate_thread = other.thread_handle_.Duplicate();
+  if (other.thread_handle_.is_valid() && !duplicate_thread.is_valid()) {
+    return false;
+  }
+
+  process_handle_ = std::move(duplicate_process);
+  thread_handle_ = std::move(duplicate_thread);
+  process_id_ = other.process_id();
+  thread_id_ = other.thread_id();
+  return true;
 }
 
 PROCESS_INFORMATION ScopedProcessInformation::Take() {
   PROCESS_INFORMATION process_information = {};
-  process_information.hProcess = process_handle_.Take();
-  process_information.hThread = thread_handle_.Take();
+  process_information.hProcess = process_handle_.release();
+  process_information.hThread = thread_handle_.release();
   process_information.dwProcessId = process_id();
   process_information.dwThreadId = thread_id();
   process_id_ = 0;
@@ -95,12 +88,12 @@ PROCESS_INFORMATION ScopedProcessInformation::Take() {
 
 HANDLE ScopedProcessInformation::TakeProcessHandle() {
   process_id_ = 0;
-  return process_handle_.Take();
+  return process_handle_.release();
 }
 
 HANDLE ScopedProcessInformation::TakeThreadHandle() {
   thread_id_ = 0;
-  return thread_handle_.Take();
+  return thread_handle_.release();
 }
 
 }  // namespace win

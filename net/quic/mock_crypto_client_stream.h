@@ -1,18 +1,19 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_QUIC_MOCK_CRYPTO_CLIENT_STREAM_H_
 #define NET_QUIC_MOCK_CRYPTO_CLIENT_STREAM_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "net/quic/crypto/proof_verifier_chromium.h"
-#include "net/third_party/quiche/src/quic/core/crypto/crypto_handshake.h"
-#include "net/third_party/quiche/src/quic/core/crypto/crypto_protocol.h"
-#include "net/third_party/quiche/src/quic/core/http/quic_spdy_client_session_base.h"
-#include "net/third_party/quiche/src/quic/core/quic_crypto_client_stream.h"
-#include "net/third_party/quiche/src/quic/core/quic_server_id.h"
-#include "net/third_party/quiche/src/quic/core/quic_session.h"
+#include "net/third_party/quiche/src/quiche/quic/core/crypto/crypto_handshake.h"
+#include "net/third_party/quiche/src/quiche/quic/core/crypto/crypto_protocol.h"
+#include "net/third_party/quiche/src/quiche/quic/core/http/quic_spdy_client_session_base.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_crypto_client_stream.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_server_id.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_session.h"
 
 namespace net {
 
@@ -56,6 +57,10 @@ class MockCryptoClientStream : public quic::QuicCryptoClientStream,
       HandshakeMode handshake_mode,
       const net::ProofVerifyDetailsChromium* proof_verify_details_,
       bool use_mock_crypter);
+
+  MockCryptoClientStream(const MockCryptoClientStream&) = delete;
+  MockCryptoClientStream& operator=(const MockCryptoClientStream&) = delete;
+
   ~MockCryptoClientStream() override;
 
   // CryptoFramerVisitorInterface implementation.
@@ -70,7 +75,19 @@ class MockCryptoClientStream : public quic::QuicCryptoClientStream,
       const override;
   quic::CryptoMessageParser* crypto_message_parser() override;
   void OnOneRttPacketAcknowledged() override;
+  std::unique_ptr<quic::QuicDecrypter>
+  AdvanceKeysAndCreateCurrentOneRttDecrypter() override;
+  bool ResumptionAttempted() const override;
   bool EarlyDataAccepted() const override;
+  ssl_early_data_reason_t EarlyDataReason() const override;
+  void SetEarlyDataReason(ssl_early_data_reason_t reason) {
+    early_data_reason_ = reason;
+  }
+  std::optional<quic::QuicWallTime> GetSessionTicketCreationTime()
+      const override;
+  void SetTicketCreationTime(quic::QuicWallTime time) {
+    ticket_creation_time_ = time;
+  }
   // Override QuicCryptoClientStream::SetServerApplicationStateForResumption()
   // to avoid tripping over the DCHECK on handshaker state.
   void SetServerApplicationStateForResumption(
@@ -82,7 +99,15 @@ class MockCryptoClientStream : public quic::QuicCryptoClientStream,
   // Notify session that 0-RTT setup is complete.
   void NotifySessionZeroRttComplete();
 
+  base::WeakPtr<MockCryptoClientStream> GetWeakPtr() {
+    return weak_factory_.GetWeakPtr();
+  }
+
+  void setHandshakeConfirmedForce(bool state);
+
   static quic::CryptoHandshakeMessage GetDummyCHLOMessage();
+
+  quic::QuicConfig* negotiated_config() { return negotiated_config_.get(); }
 
  protected:
   using quic::QuicCryptoClientStream::session;
@@ -95,18 +120,21 @@ class MockCryptoClientStream : public quic::QuicCryptoClientStream,
   void FillCryptoParams();
 
   HandshakeMode handshake_mode_;
-  bool encryption_established_;
-  bool handshake_confirmed_;
-  quic::QuicReferenceCountedPointer<quic::QuicCryptoNegotiatedParameters>
+  bool encryption_established_ = false;
+  bool handshake_confirmed_ = false;
+  quiche::QuicheReferenceCountedPointer<quic::QuicCryptoNegotiatedParameters>
       crypto_negotiated_params_;
   quic::CryptoFramer crypto_framer_;
   bool use_mock_crypter_;
 
   const quic::QuicServerId server_id_;
-  const net::ProofVerifyDetailsChromium* proof_verify_details_;
+  raw_ptr<const net::ProofVerifyDetailsChromium> proof_verify_details_;
   const quic::QuicConfig config_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockCryptoClientStream);
+  std::unique_ptr<quic::QuicConfig> negotiated_config_;
+  bool config_negotiated_ = false;
+  std::optional<ssl_early_data_reason_t> early_data_reason_;
+  std::optional<quic::QuicWallTime> ticket_creation_time_;
+  base::WeakPtrFactory<MockCryptoClientStream> weak_factory_{this};
 };
 
 }  // namespace net

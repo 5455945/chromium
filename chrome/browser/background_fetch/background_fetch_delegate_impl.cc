@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,13 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
-#include "base/task/post_task.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "chrome/browser/download/background_download_service_factory.h"
 #include "chrome/browser/metrics/ukm_background_recorder_service.h"
@@ -22,6 +22,7 @@
 #include "components/background_fetch/job_details.h"
 #include "components/download/public/background_service/background_download_service.h"
 #include "components/download/public/common/download_features.h"
+#include "components/offline_items_collection/core/fail_state.h"
 #include "components/offline_items_collection/core/offline_content_aggregator.h"
 #include "components/offline_items_collection/core/offline_item.h"
 #include "content/public/browser/background_fetch_description.h"
@@ -44,8 +45,8 @@ BackgroundFetchDelegateImpl::BackgroundFetchDelegateImpl(Profile* profile)
                                     profile->IsOffTheRecord())),
       offline_content_aggregator_(OfflineContentAggregatorFactory::GetForKey(
           profile->GetProfileKey())) {
-  DCHECK(profile_);
-  DCHECK(!provider_namespace_.empty());
+  CHECK(profile_, base::NotFatalUntil::M161);
+  CHECK(!provider_namespace_.empty(), base::NotFatalUntil::M161);
   offline_content_aggregator_->RegisterProvider(provider_namespace_, this);
 
   // Ensure that downloads UI components are initialized to handle the UI
@@ -62,7 +63,7 @@ BackgroundFetchDelegateImpl::~BackgroundFetchDelegateImpl() {
 }
 
 void BackgroundFetchDelegateImpl::MarkJobComplete(const std::string& job_id) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   background_fetch::JobDetails* job_details = GetJobDetails(job_id);
   RecordBackgroundFetchDeletingRegistrationUkmEvent(
       job_details->fetch_description->origin, job_details->cancelled_from_ui);
@@ -72,11 +73,13 @@ void BackgroundFetchDelegateImpl::MarkJobComplete(const std::string& job_id) {
 
 void BackgroundFetchDelegateImpl::UpdateUI(
     const std::string& job_id,
-    const absl::optional<std::string>& title,
-    const absl::optional<SkBitmap>& icon) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(title || icon);             // One of the UI options must be updatable.
-  DCHECK(!icon || !icon->isNull());  // The |icon|, if provided, is not null.
+    const std::optional<std::string>& title,
+    const std::optional<SkBitmap>& icon) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
+  CHECK(title || icon,
+        base::NotFatalUntil::M161);  // One of the UI options must be updatable.
+  CHECK(!icon || !icon->isNull(),
+        base::NotFatalUntil::M161);  // The |icon|, if provided, is not null.
 
   background_fetch::JobDetails* job_details =
       GetJobDetails(job_id, /*allow_null=*/true);
@@ -87,7 +90,7 @@ void BackgroundFetchDelegateImpl::UpdateUI(
   if (title && job_details->fetch_description->title != *title)
     job_details->fetch_description->title = *title;
 
-  DCHECK(base::Contains(ui_state_map_, job_id));
+  CHECK(ui_state_map_.contains(job_id), base::NotFatalUntil::M161);
   UiState& ui_state = ui_state_map_[job_id];
 
   if (icon) {
@@ -100,7 +103,7 @@ void BackgroundFetchDelegateImpl::UpdateUI(
   bool should_update_visuals = ui_state.update_delta.has_value()
                                    ? ui_state.update_delta->visuals_changed
                                    : false;
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
   should_update_visuals = false;
 #endif
 
@@ -116,7 +119,11 @@ void BackgroundFetchDelegateImpl::UpdateUI(
 void BackgroundFetchDelegateImpl::OpenItem(
     const offline_items_collection::OpenParams& open_params,
     const offline_items_collection::ContentId& id) {
-  OnUiFinished(id.id, /*activated=*/true);
+  OnUiActivated(id.id);
+
+  auto* job_details = GetJobDetails(id.id, /*allow_null=*/true);
+  if (job_details && job_details->IsComplete())
+    OnUiFinished(id.id);
 }
 
 void BackgroundFetchDelegateImpl::RemoveItem(
@@ -138,20 +145,24 @@ void BackgroundFetchDelegateImpl::PauseDownload(
 }
 
 void BackgroundFetchDelegateImpl::ResumeDownload(
-    const offline_items_collection::ContentId& id,
-    bool has_user_gesture) {
+    const offline_items_collection::ContentId& id) {
   UpdateOfflineItem(id.id);
   BackgroundFetchDelegateBase::ResumeDownload(id.id);
+}
+
+void BackgroundFetchDelegateImpl::ValidateDangerousDownload(
+    const offline_items_collection::ContentId& id) {
+  NOTREACHED();
 }
 
 void BackgroundFetchDelegateImpl::GetItemById(
     const offline_items_collection::ContentId& id,
     SingleItemCallback callback) {
   auto iter = ui_state_map_.find(id.id);
-  absl::optional<offline_items_collection::OfflineItem> offline_item;
+  std::optional<offline_items_collection::OfflineItem> offline_item;
   if (iter != ui_state_map_.end())
     offline_item = iter->second.offline_item;
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), offline_item));
 }
 
@@ -159,7 +170,7 @@ void BackgroundFetchDelegateImpl::GetAllItems(MultipleItemCallback callback) {
   OfflineItemList item_list;
   for (auto& entry : ui_state_map_)
     item_list.push_back(entry.second.offline_item);
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), item_list));
 }
 
@@ -168,7 +179,7 @@ void BackgroundFetchDelegateImpl::GetVisualsForItem(
     GetVisualsOptions options,
     VisualsCallback callback) {
   if (!options.get_icon) {
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback), id, nullptr));
     return;
   }
@@ -188,7 +199,7 @@ void BackgroundFetchDelegateImpl::GetVisualsForItem(
     }
   }
 
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), id, std::move(visuals)));
 }
 
@@ -196,7 +207,7 @@ void BackgroundFetchDelegateImpl::GetShareInfoForItem(
     const offline_items_collection::ContentId& id,
     ShareCallback callback) {
   // TODO(xingliu): Provide OfflineItemShareInfo to |callback|.
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), id,
                                 nullptr /* OfflineItemShareInfo */));
 }
@@ -208,12 +219,6 @@ void BackgroundFetchDelegateImpl::RenameItem(
   NOTIMPLEMENTED();
 }
 
-void BackgroundFetchDelegateImpl::ChangeSchedule(
-    const offline_items_collection::ContentId& id,
-    absl::optional<offline_items_collection::OfflineItemSchedule> schedule) {
-  NOTIMPLEMENTED();
-}
-
 download::BackgroundDownloadService*
 BackgroundFetchDelegateImpl::GetDownloadService() {
   return BackgroundDownloadServiceFactory::GetInstance()->GetForKey(
@@ -222,12 +227,13 @@ BackgroundFetchDelegateImpl::GetDownloadService() {
 
 void BackgroundFetchDelegateImpl::OnJobDetailsCreated(
     const std::string& job_id) {
-  DCHECK(!base::Contains(ui_state_map_, job_id));
+  CHECK(!ui_state_map_.contains(job_id), base::NotFatalUntil::M161);
   UiState& ui_state = ui_state_map_[job_id];
   offline_items_collection::OfflineItem offline_item(
       offline_items_collection::ContentId(provider_namespace_, job_id));
+  offline_item.creation_time = base::Time::Now();
   offline_item.is_off_the_record = profile_->IsOffTheRecord();
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   if (profile_->IsOffTheRecord())
     offline_item.otr_profile_id = profile_->GetOTRProfileID().Serialize();
 #endif
@@ -263,7 +269,7 @@ void BackgroundFetchDelegateImpl::DoCleanUpUi(const std::string& job_id) {
   ui_state_map_.erase(job_id);
   // Note that the entry in `ui_state_map_` will leak if OnUiFinished is never
   // called, and it's not called when the notification is dismissed without
-  // being clicked. See crbug.com/1190390
+  // being clicked. See crbug.com/40174140
 }
 
 void BackgroundFetchDelegateImpl::UpdateOfflineItem(const std::string& job_id) {
@@ -274,7 +280,7 @@ void BackgroundFetchDelegateImpl::UpdateOfflineItem(const std::string& job_id) {
 
   content::BackgroundFetchDescription* fetch_description =
       job_details->fetch_description.get();
-  DCHECK_GT(fetch_description->total_requests, 0);
+  CHECK_GT(fetch_description->total_requests, 0, base::NotFatalUntil::M161);
 
   offline_items_collection::OfflineItem* offline_item =
       &ui_state_map_[job_id].offline_item;
@@ -309,6 +315,8 @@ void BackgroundFetchDelegateImpl::UpdateOfflineItem(const std::string& job_id) {
   switch (job_details->job_state) {
     case JobState::kCancelled:
       offline_item->state = OfflineItemState::CANCELLED;
+      offline_item->fail_state =
+          offline_items_collection::FailState::USER_CANCELED;
       break;
     case JobState::kDownloadsComplete:
       // This includes cases when the download failed, or completed but the
@@ -323,7 +331,6 @@ void BackgroundFetchDelegateImpl::UpdateOfflineItem(const std::string& job_id) {
     case JobState::kJobComplete:
       // There shouldn't be any updates at this point.
       NOTREACHED();
-      break;
     default:
       offline_item->state = OfflineItemState::IN_PROGRESS;
   }
@@ -343,7 +350,7 @@ void BackgroundFetchDelegateImpl::
 
 void BackgroundFetchDelegateImpl::DidGetBackgroundSourceId(
     bool user_initiated_abort,
-    absl::optional<ukm::SourceId> source_id) {
+    std::optional<ukm::SourceId> source_id) {
   // This background event did not meet the requirements for the UKM service.
   if (!source_id)
     return;

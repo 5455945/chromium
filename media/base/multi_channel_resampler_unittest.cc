@@ -1,15 +1,16 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "media/base/multi_channel_resampler.h"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "media/base/audio_bus.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -18,29 +19,32 @@ namespace media {
 // Just test a basic resampling case.  The SincResampler unit test will take
 // care of accuracy testing; we just need to check that multichannel works as
 // expected within some tolerance.
-static const float kScaleFactor = 192000.0f / 44100.0f;
+static constexpr float kScaleFactor = 192000.0f / 44100.0f;
 
 // Simulate large and small sample requests used by the different audio paths.
-static const int kHighLatencySize = 8192;
+static constexpr int kHighLatencySize = 8192;
 // Low latency buffers show a larger error than high latency ones.  Which makes
 // sense since each error represents a larger portion of the total request.
-static const int kLowLatencySize = 128;
+static constexpr int kLowLatencySize = 128;
 
 // Test fill value.
-static const float kFillValue = 0.1f;
+static constexpr float kFillValue = 0.1f;
 
 // Chosen arbitrarily based on what each resampler reported during testing.
-static const double kLowLatencyMaxRMSError = 0.0036;
-static const double kLowLatencyMaxError = 0.04;
-static const double kHighLatencyMaxRMSError = 0.0036;
-static const double kHighLatencyMaxError = 0.04;
+static constexpr double kLowLatencyMaxRMSError = 0.0036;
+static constexpr double kLowLatencyMaxError = 0.04;
+static constexpr double kHighLatencyMaxRMSError = 0.0036;
+static constexpr double kHighLatencyMaxError = 0.04;
 
 class MultiChannelResamplerTest
     : public testing::TestWithParam<int> {
  public:
-  MultiChannelResamplerTest()
-      : last_frame_delay_(-1) {
-  }
+  MultiChannelResamplerTest() = default;
+
+  MultiChannelResamplerTest(const MultiChannelResamplerTest&) = delete;
+  MultiChannelResamplerTest& operator=(const MultiChannelResamplerTest&) =
+      delete;
+
   virtual ~MultiChannelResamplerTest() = default;
 
   void InitializeAudioData(int channels, int frames) {
@@ -56,9 +60,9 @@ class MultiChannelResamplerTest
 
     float fill_value = fill_junk_values_ ? (1 / kFillValue) : kFillValue;
     EXPECT_EQ(audio_bus->channels(), audio_bus_->channels());
-    for (int i = 0; i < audio_bus->channels(); ++i)
-      for (int j = 0; j < audio_bus->frames(); ++j)
-        audio_bus->channel(i)[j] = fill_value;
+    for (auto channel : audio_bus->AllChannels()) {
+      std::ranges::fill(channel, fill_value);
+    }
   }
 
   void MultiChannelTest(int channels, int frames, double expected_max_rms_error,
@@ -98,12 +102,12 @@ class MultiChannelResamplerTest
     // Calculate Root-Mean-Square-Error for the resampling.
     double max_error = 0.0;
     double sum_of_squares = 0.0;
-    for (int i = 0; i < audio_bus_->channels(); ++i) {
-      for (int j = 0; j < frames_; ++j) {
+    for (auto channel : audio_bus_->AllChannels()) {
+      for (auto sample : channel) {
         // Ensure all values are accounted for.
-        ASSERT_NE(audio_bus_->channel(i)[j], 0);
+        ASSERT_NE(sample, 0);
 
-        double error = fabs(audio_bus_->channel(i)[j] - kFillValue);
+        double error = fabs(sample - kFillValue);
         max_error = std::max(max_error, error);
         sum_of_squares += error * error;
       }
@@ -120,9 +124,7 @@ class MultiChannelResamplerTest
   int frames_;
   bool fill_junk_values_;
   std::unique_ptr<AudioBus> audio_bus_;
-  int last_frame_delay_;
-
-  DISALLOW_COPY_AND_ASSIGN(MultiChannelResamplerTest);
+  int last_frame_delay_ = -1;
 };
 
 TEST_P(MultiChannelResamplerTest, HighLatency) {

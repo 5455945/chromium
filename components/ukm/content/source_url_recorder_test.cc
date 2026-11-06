@@ -1,8 +1,9 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/ukm/content/source_url_recorder.h"
+
 #include "base/test/scoped_feature_list.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/public/browser/web_contents.h"
@@ -11,6 +12,7 @@
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_source.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/metrics_proto/ukm/source.pb.h"
 #include "url/gurl.h"
@@ -27,7 +29,7 @@ class SourceUrlRecorderWebContentsObserverTest
 
   GURL GetAssociatedURLForWebContentsDocument() {
     const ukm::UkmSource* src = test_ukm_recorder_.GetSourceForSourceId(
-        ukm::GetSourceIdForWebContentsDocument(web_contents()));
+        web_contents()->GetPrimaryMainFrame()->GetPageUkmSourceId());
     return src ? src->url() : GURL();
   }
 
@@ -61,27 +63,64 @@ TEST_F(SourceUrlRecorderWebContentsObserverTest, InitialUrl) {
 
   const auto& sources = test_ukm_recorder_.GetSources();
 
-  // Expect two sources, one for navigation, one for document.
-  EXPECT_EQ(2ul, sources.size());
+  // Expect three sources, one each for navigation, redirect, and document.
+  EXPECT_EQ(3ul, sources.size());
   size_t navigation_type_source_count = 0;
+  size_t redirect_type_source_count = 0;
   size_t document_type_source_count = 0;
   for (const auto& kv : sources) {
     if (ukm::GetSourceIdType(kv.first) ==
         ukm::SourceIdObj::Type::NAVIGATION_ID) {
       // The navigation source has both URLs.
-      EXPECT_EQ(initial_url, kv.second->urls().front());
-      EXPECT_EQ(final_url, kv.second->urls().back());
+      EXPECT_THAT(kv.second->urls(),
+                  testing::ElementsAre(initial_url, final_url));
       navigation_type_source_count++;
+    }
+    if (ukm::GetSourceIdType(kv.first) == ukm::SourceIdObj::Type::REDIRECT_ID) {
+      // The redirect source has the initial URL which the navigation requested.
+      EXPECT_THAT(kv.second->urls(), testing::ElementsAre(initial_url));
+      redirect_type_source_count++;
     }
     if (ukm::GetSourceIdType(kv.first) == ukm::SourceIdObj::Type::DEFAULT) {
       // The document source has the final URL which is one set on the
       // committed document.
-      EXPECT_EQ(final_url, kv.second->urls().front());
+      EXPECT_THAT(kv.second->urls(), testing::ElementsAre(final_url));
       document_type_source_count++;
     }
   }
   EXPECT_EQ(1u, navigation_type_source_count);
+  EXPECT_EQ(1u, redirect_type_source_count);
   EXPECT_EQ(1u, document_type_source_count);
+}
+
+TEST_F(SourceUrlRecorderWebContentsObserverTest, FullRedirectChain) {
+  GURL initial_url("https://www.a.com/");
+  GURL intermediate_url1("https://www.intermediate1.com/");
+  GURL intermediate_url2("https://www.intermediate2.com/");
+  GURL final_url("https://www.b.com/");
+
+  auto simulator =
+      NavigationSimulator::CreateRendererInitiated(initial_url, main_rfh());
+  simulator->Start();
+  simulator->Redirect(intermediate_url1);
+  simulator->Redirect(intermediate_url2);
+  simulator->Redirect(final_url);
+  simulator->Commit();
+
+  EXPECT_EQ(final_url, GetAssociatedURLForWebContentsDocument());
+
+  const auto& sources = test_ukm_recorder_.GetSources();
+  size_t navigation_type_source_count = 0;
+  for (const auto& kv : sources) {
+    if (ukm::GetSourceIdType(kv.first) ==
+        ukm::SourceIdObj::Type::NAVIGATION_ID) {
+      EXPECT_THAT(kv.second->urls(),
+                  testing::ElementsAre(initial_url, intermediate_url1,
+                                       intermediate_url2, final_url));
+      navigation_type_source_count++;
+    }
+  }
+  EXPECT_EQ(1u, navigation_type_source_count);
 }
 
 TEST_F(SourceUrlRecorderWebContentsObserverTest, IgnoreUrlInSubframe) {
@@ -198,32 +237,6 @@ TEST_F(SourceUrlRecorderWebContentsObserverTest, SameDocumentNavigation) {
             same_doc_source2.navigation_time_msec());
 }
 
-TEST_F(SourceUrlRecorderWebContentsObserverTest,
-       SameDocumentNavigationDisabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeatureWithParameters(
-      ukm::kUkmFeature, {{"MaxSameDocumentSourcesPerFullSource", "0"}});
-
-  GURL url("https://www.example.com/");
-  GURL same_document_url("https://www.example.com/#samedocument");
-  NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(), url);
-  NavigationSimulator::CreateRendererInitiated(same_document_url, main_rfh())
-      ->CommitSameDocument();
-
-  EXPECT_EQ(same_document_url, web_contents()->GetLastCommittedURL());
-
-  const auto& sources = test_ukm_recorder_.GetSources();
-  // Expect two sources, one for navigation, one for document.
-  EXPECT_EQ(2ul, sources.size());
-  for (auto& kv : sources) {
-    EXPECT_EQ(url, kv.second->url());
-    EXPECT_EQ(1u, kv.second->urls().size());
-    EXPECT_FALSE(kv.second->navigation_data().is_same_document_navigation);
-  }
-
-  EXPECT_EQ(url, GetAssociatedURLForWebContentsDocument());
-}
-
 TEST_F(SourceUrlRecorderWebContentsObserverTest, NavigationMetadata) {
   GURL url1("https://www.example.com/1");
   GURL same_origin_url1("https://www.example.com/same_origin");
@@ -273,7 +286,7 @@ TEST_F(SourceUrlRecorderWebContentsObserverTest, NavigationMetadata) {
   EXPECT_TRUE(full_nav_source1.has_id());
   EXPECT_FALSE(full_nav_source1.navigation_metadata().is_renderer_initiated());
   EXPECT_EQ(full_nav_source1.navigation_metadata().same_origin_status(),
-            ukm::Source::CROSS_ORIGIN);
+            ukm::CROSS_ORIGIN);
   EXPECT_FALSE(full_nav_source1.navigation_metadata().is_error_page());
 
   // The second navigation was a same-origin renderer-initiated navigation to
@@ -283,7 +296,7 @@ TEST_F(SourceUrlRecorderWebContentsObserverTest, NavigationMetadata) {
   EXPECT_TRUE(
       same_origin_source1.navigation_metadata().is_renderer_initiated());
   EXPECT_EQ(same_origin_source1.navigation_metadata().same_origin_status(),
-            ukm::Source::SAME_ORIGIN);
+            ukm::SAME_ORIGIN);
   EXPECT_FALSE(same_origin_source1.navigation_metadata().is_error_page());
 
   // The third navigation was a browser initiated navigation to url2.
@@ -291,7 +304,7 @@ TEST_F(SourceUrlRecorderWebContentsObserverTest, NavigationMetadata) {
   EXPECT_TRUE(full_nav_source2.has_id());
   EXPECT_FALSE(full_nav_source2.navigation_metadata().is_renderer_initiated());
   EXPECT_EQ(full_nav_source2.navigation_metadata().same_origin_status(),
-            ukm::Source::CROSS_ORIGIN);
+            ukm::CROSS_ORIGIN);
   EXPECT_FALSE(full_nav_source2.navigation_metadata().is_error_page());
 
   // The fourth navigation was a cross-origin renderer-initiated navigation to
@@ -301,7 +314,7 @@ TEST_F(SourceUrlRecorderWebContentsObserverTest, NavigationMetadata) {
   EXPECT_TRUE(
       cross_origin_source2.navigation_metadata().is_renderer_initiated());
   EXPECT_EQ(cross_origin_source2.navigation_metadata().same_origin_status(),
-            ukm::Source::CROSS_ORIGIN);
+            ukm::CROSS_ORIGIN);
   EXPECT_FALSE(cross_origin_source2.navigation_metadata().is_error_page());
 
   // The fifth navigation was an error page. Make sure it's is_error_page flag
@@ -310,6 +323,6 @@ TEST_F(SourceUrlRecorderWebContentsObserverTest, NavigationMetadata) {
   EXPECT_TRUE(error_page_source.has_id());
   EXPECT_FALSE(error_page_source.navigation_metadata().is_renderer_initiated());
   EXPECT_EQ(error_page_source.navigation_metadata().same_origin_status(),
-            ukm::Source::UNSET);
+            ukm::SAME_ORIGIN_STATUS_UNSET);
   EXPECT_TRUE(error_page_source.navigation_metadata().is_error_page());
 }

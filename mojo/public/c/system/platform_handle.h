@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -49,6 +49,9 @@ typedef uint32_t MojoPlatformHandleType;
 // The |MojoPlatformHandle| value represents a Mach receive right (e.g. a value
 // opaquely of type |mach_port_t|). Only usable on macOS hosts.
 #define MOJO_PLATFORM_HANDLE_TYPE_MACH_RECEIVE_RIGHT ((MojoPlatformHandleType)5)
+
+// An Android IBinder reference.
+#define MOJO_PLATFORM_HANDLE_TYPE_BINDER ((MojoPlatformHandleType)6)
 
 // |MojoPlatformHandle|: A handle to a native platform object.
 //
@@ -223,7 +226,7 @@ MojoWrapPlatformHandle(const struct MojoPlatformHandle* platform_handle,
 
 // Unwraps a native platform handle from a Mojo handle. If this call succeeds,
 // ownership of the underlying platform object is assumed by the caller. The
-// The Mojo handle is always closed regardless of success or failure.
+// Mojo handle is always closed regardless of success or failure.
 //
 // |mojo_handle|: The Mojo handle from which to unwrap the native platform
 //     handle.

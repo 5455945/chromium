@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,20 +20,21 @@
       .Times(1)                                                              \
       .InSequence((obs).sequence)
 
-#define EXPECT_BEGIN_FRAME_USED(obs, source_id, sequence_number, frame_time, \
-                                deadline, interval)                          \
-  EXPECT_CALL((obs), OnBeginFrame(CreateBeginFrameArgsForTesting(            \
-                         BEGINFRAME_FROM_HERE, source_id, sequence_number,   \
-                         frame_time, deadline, interval)))                   \
-      .InSequence((obs).sequence)                                            \
+#define EXPECT_BEGIN_FRAME_USED(obs, source_id, sequence_number, frame_time,   \
+                                deadline, interval, ...)                       \
+  EXPECT_CALL((obs), OnBeginFrame(CreateBeginFrameArgsForTesting(              \
+                         BEGINFRAME_FROM_HERE, (source_id), (sequence_number), \
+                         (frame_time), (deadline), (interval),                 \
+                         BeginFrameArgs::NORMAL, ##__VA_ARGS__)))              \
+      .InSequence((obs).sequence)                                              \
       .WillOnce(::testing::SaveArg<0>(&((obs).last_begin_frame_args)))
 
 #define EXPECT_BEGIN_FRAME_USED_MISSED(obs, source_id, sequence_number,        \
-                                       frame_time, deadline, interval)         \
-  EXPECT_CALL(                                                                 \
-      (obs), OnBeginFrame(CreateBeginFrameArgsForTesting(                      \
-                 BEGINFRAME_FROM_HERE, source_id, sequence_number, frame_time, \
-                 deadline, interval, BeginFrameArgs::MISSED)))                 \
+                                       frame_time, deadline, interval, ...)    \
+  EXPECT_CALL((obs), OnBeginFrame(CreateBeginFrameArgsForTesting(              \
+                         BEGINFRAME_FROM_HERE, (source_id), (sequence_number), \
+                         (frame_time), (deadline), (interval),                 \
+                         BeginFrameArgs::MISSED, ##__VA_ARGS__)))              \
       .InSequence((obs).sequence)                                              \
       .WillOnce(::testing::SaveArg<0>(&((obs).last_begin_frame_args)))
 
@@ -84,19 +85,26 @@ class MockBeginFrameObserver : public BeginFrameObserver {
   MOCK_CONST_METHOD0(LastUsedBeginFrameArgs, const BeginFrameArgs&());
   MOCK_METHOD1(OnBeginFrameSourcePausedChanged, void(bool));
   MOCK_CONST_METHOD0(WantsAnimateOnlyBeginFrames, bool());
-  MOCK_CONST_METHOD0(IsRoot, bool());
 
   virtual void AsValueInto(base::trace_event::TracedValue* dict) const;
 
   // A value different from the normal default returned by a
   // BeginFrameObserver so it is easiable traced back here.
-  static const BeginFrameArgs kDefaultBeginFrameArgs;
+  static BeginFrameArgs GetDefaultBeginFrameArgs();
 
   MockBeginFrameObserver();
   ~MockBeginFrameObserver() override;
 
   BeginFrameArgs last_begin_frame_args;
   ::testing::Sequence sequence;
+};
+
+class MockInputClient : public BeginFrameSource::InputClient {
+ public:
+  MOCK_METHOD1(OnBeginFrameForInput, void(const BeginFrameArgs&));
+
+  MockInputClient();
+  ~MockInputClient() override;
 };
 
 }  // namespace viz

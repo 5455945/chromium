@@ -26,7 +26,6 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_AUDIO_PROCESSING_EVENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_AUDIO_PROCESSING_EVENT_H_
 
-#include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_processing_event_init.h"
 #include "third_party/blink/renderer/modules/event_modules.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_buffer.h"
@@ -40,7 +39,6 @@ class AudioProcessingEvent final : public Event {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static AudioProcessingEvent* Create();
   static AudioProcessingEvent* Create(AudioBuffer* input_buffer,
                                       AudioBuffer* output_buffer,
                                       double playback_time);
@@ -48,7 +46,6 @@ class AudioProcessingEvent final : public Event {
   static AudioProcessingEvent* Create(const AtomicString& type,
                                       const AudioProcessingEventInit*);
 
-  AudioProcessingEvent();
   AudioProcessingEvent(AudioBuffer* input_buffer,
                        AudioBuffer* output_buffer,
                        double playback_time);

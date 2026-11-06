@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -7,11 +7,11 @@
 //
 // Relationship of classes.
 //
-//  AudioOutputController                AudioOutputDevice
+//  audio::OutputController              AudioOutputDevice
 //           ^                                  ^
 //           |                                  |
 //           v                 IPC              v
-//  MojoAudioOutputStream  <---------> AudioOutputIPC (MojoAudioOutputIPC)
+//  audio::OutputStream  <---------> AudioOutputIPC (MojoAudioOutputIPC)
 //
 // Transportation of audio samples from the render to the browser process
 // is done by using shared memory in combination with a sync socket pair
@@ -66,8 +66,8 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/unsafe_shared_memory_region.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/thread_annotations.h"
@@ -98,6 +98,9 @@ class MEDIA_EXPORT AudioOutputDevice : public AudioRendererSink,
       const AudioSinkParameters& sink_params,
       base::TimeDelta authorization_timeout);
 
+  AudioOutputDevice(const AudioOutputDevice&) = delete;
+  AudioOutputDevice& operator=(const AudioOutputDevice&) = delete;
+
   // Request authorization to use the device specified in the constructor.
   void RequestDeviceAuthorization();
 
@@ -107,7 +110,7 @@ class MEDIA_EXPORT AudioOutputDevice : public AudioRendererSink,
   void Start() override;
   void Stop() override;
   void Play() override;
-  void Pause() override;
+  void Pause(PauseReason reason) override;
   void Flush() override;
   bool SetVolume(double volume) override;
   OutputDeviceInfo GetOutputDeviceInfo() override;
@@ -126,13 +129,13 @@ class MEDIA_EXPORT AudioOutputDevice : public AudioRendererSink,
                        bool play_automatically) override;
   void OnIPCClosed() override;
 
- protected:
-  // Magic required by ref_counted.h to avoid any code deleting the object
-  // accidentally while there are references to it.
-  friend class base::RefCountedThreadSafe<AudioOutputDevice>;
-  ~AudioOutputDevice() override;
+  AudioOutputIPC* GetIpcForTesting() { return ipc_.get(); }
 
  private:
+  // Required by ref_counted.h to avoid any code deleting the object
+  // accidentally while there are references to it.
+  ~AudioOutputDevice() override;
+
   enum StartupState {
     IDLE,                       // Authorization not requested.
     AUTHORIZATION_REQUESTED,    // Sent (possibly completed) device
@@ -144,12 +147,14 @@ class MEDIA_EXPORT AudioOutputDevice : public AudioRendererSink,
   // This enum is used for UMA, so the only allowed operation on this definition
   // is to add new states to the bottom, update kMaxValue, and update the
   // histogram "Media.Audio.Render.StreamCallbackError2".
+  // LINT.IfChange(Error)
   enum Error {
     kNoError = 0,
     kErrorDuringCreation = 1,
     kErrorDuringRendering = 2,
     kMaxValue = kErrorDuringRendering
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/media/enums.xml:AudioRenderDeviceError)
 
   // Methods called on IO thread ----------------------------------------------
   // The following methods are tasks posted on the IO thread that need to
@@ -157,20 +162,13 @@ class MEDIA_EXPORT AudioOutputDevice : public AudioRendererSink,
   // upon state changes.
   void RequestDeviceAuthorizationOnIOThread();
   void InitializeOnIOThread(const AudioParameters& params,
-                            RenderCallback* callback);
+                            MayBeDangling<RenderCallback> callback);
   void CreateStreamOnIOThread();
   void PlayOnIOThread();
   void PauseOnIOThread();
   void FlushOnIOThread();
   void ShutDownOnIOThread();
   void SetVolumeOnIOThread(double volume);
-
-  // Process device authorization result on the IO thread.
-  void ProcessDeviceAuthorizationOnIOThread(
-      OutputDeviceStatus device_status,
-      const AudioParameters& output_params,
-      const std::string& matched_device_id,
-      bool timed_out);
 
   void NotifyRenderCallbackOfError();
 
@@ -181,7 +179,7 @@ class MEDIA_EXPORT AudioOutputDevice : public AudioRendererSink,
 
   AudioParameters audio_parameters_;
 
-  RenderCallback* callback_;
+  raw_ptr<RenderCallback, DanglingUntriaged> callback_;
 
   // A pointer to the IPC layer that takes care of sending requests over to
   // the implementation. May be set to nullptr after errors.
@@ -194,9 +192,6 @@ class MEDIA_EXPORT AudioOutputDevice : public AudioRendererSink,
   // For UMA stats. May only be accessed on the IO thread.
   Error had_error_ = kNoError;
 
-  // Last set volume.
-  double volume_ = 1.0;
-
   // The media session ID used to identify which input device to be started.
   // Only used by Unified IO.
   base::UnguessableToken session_id_;
@@ -207,8 +202,6 @@ class MEDIA_EXPORT AudioOutputDevice : public AudioRendererSink,
   // If |device_id_| is empty and |session_id_| is not, |matched_device_id_| is
   // received in OnDeviceAuthorized().
   std::string matched_device_id_;
-
-  absl::optional<base::UnguessableToken> processing_id_;
 
   // In order to avoid a race between OnStreamCreated and Stop(), we use this
   // guard to control stopping and starting the audio thread.
@@ -239,8 +232,6 @@ class MEDIA_EXPORT AudioOutputDevice : public AudioRendererSink,
   // if you add more usage of this lock ensure you have not added a deadlock.
   base::Lock device_info_lock_;
   OutputDeviceInfoCB pending_device_info_cb_ GUARDED_BY(device_info_lock_);
-
-  DISALLOW_COPY_AND_ASSIGN(AudioOutputDevice);
 };
 
 }  // namespace media

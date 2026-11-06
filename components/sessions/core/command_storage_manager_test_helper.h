@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,19 +8,30 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 
 namespace sessions {
 class SessionCommand;
 class CommandStorageManager;
+class CommandStorageBackend;
 
 class CommandStorageManagerTestHelper {
  public:
   explicit CommandStorageManagerTestHelper(
       CommandStorageManager* command_storage_manager);
+
+  CommandStorageManagerTestHelper(const CommandStorageManagerTestHelper&) =
+      delete;
+  CommandStorageManagerTestHelper& operator=(
+      const CommandStorageManagerTestHelper&) = delete;
+
   ~CommandStorageManagerTestHelper() = default;
+
+  CommandStorageBackend* GetCleartextBackend();
+  CommandStorageBackend* GetEncryptedBackend();
 
   // This posts the task to the SequencedWorkerPool, or run immediately
   // if the SequencedWorkerPool has been shutdown.
@@ -37,13 +48,17 @@ class CommandStorageManagerTestHelper {
 
   scoped_refptr<base::SequencedTaskRunner> GetBackendTaskRunner();
 
+  // Returns true if the CommandStorageManager should write cleartext files.
+  bool ShouldWriteCleartextFiles();
+
+  // Returns true if the CommandStorageManager should write encrypted files.
+  bool ShouldWriteEncryptedFiles();
+
   // See function of same name in CommandStorageBackend for details.
   void ForceAppendCommandsToFailForTesting();
 
  private:
-  CommandStorageManager* command_storage_manager_;
-
-  DISALLOW_COPY_AND_ASSIGN(CommandStorageManagerTestHelper);
+  raw_ptr<CommandStorageManager> command_storage_manager_;
 };
 
 }  // namespace sessions

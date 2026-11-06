@@ -1,15 +1,28 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #include "components/optimization_guide/core/tflite_op_resolver.h"
 
+#include "third_party/tflite/buildflags.h"
 #include "third_party/tflite/src/tensorflow/lite/c/common.h"
 #include "third_party/tflite/src/tensorflow/lite/kernels/builtin_op_kernels.h"
 #include "third_party/tflite/src/tensorflow/lite/schema/schema_generated.h"
 
+#if BUILDFLAG(BUILD_TFLITE_WITH_XNNPACK)
+#include "third_party/tflite/src/tensorflow/lite/tflite_with_xnnpack_optional.h"
+#endif
+
 namespace optimization_guide {
 
 TFLiteOpResolver::TFLiteOpResolver() {
+  // When registering a new built-in operator or increasing the maximum
+  // supported version (max_version in AddBuiltin) of an existing built-in
+  // operator below, append a new
+  // MODEL_ENGINE_VERSION_TFLITE_<major>_<minor>_<patch> entry to
+  // ModelEngineVersion in //components/optimization_guide/proto/models.proto
+  // with <patch> incremented by 1 (see the comment on ModelEngineVersion for
+  // full instructions).
+  // LINT.IfChange
   AddBuiltin(tflite::BuiltinOperator_ABS, tflite::ops::builtin::Register_ABS());
   AddBuiltin(tflite::BuiltinOperator_HARD_SWISH,
              tflite::ops::builtin::Register_HARD_SWISH());
@@ -64,13 +77,13 @@ TFLiteOpResolver::TFLiteOpResolver() {
   AddBuiltin(tflite::BuiltinOperator_EMBEDDING_LOOKUP,
              tflite::ops::builtin::Register_EMBEDDING_LOOKUP(),
              /* min_version = */ 1,
-             /* max_version = */ 3);
+             /* max_version = */ 4);
   AddBuiltin(tflite::BuiltinOperator_EMBEDDING_LOOKUP_SPARSE,
              tflite::ops::builtin::Register_EMBEDDING_LOOKUP_SPARSE());
   AddBuiltin(tflite::BuiltinOperator_FULLY_CONNECTED,
              tflite::ops::builtin::Register_FULLY_CONNECTED(),
              /* min_version = */ 1,
-             /* max_version = */ 9);
+             /* max_version = */ 12);
   AddBuiltin(tflite::BuiltinOperator_LSH_PROJECTION,
              tflite::ops::builtin::Register_LSH_PROJECTION());
   AddBuiltin(tflite::BuiltinOperator_HASHTABLE_LOOKUP,
@@ -141,7 +154,7 @@ TFLiteOpResolver::TFLiteOpResolver() {
   AddBuiltin(tflite::BuiltinOperator_GATHER,
              tflite::ops::builtin::Register_GATHER(),
              /* min_version = */ 1,
-             /* max_version = */ 3);
+             /* max_version = */ 4);
   AddBuiltin(tflite::BuiltinOperator_TRANSPOSE,
              tflite::ops::builtin::Register_TRANSPOSE(),
              /* min_version = */ 1,
@@ -371,6 +384,36 @@ TFLiteOpResolver::TFLiteOpResolver() {
              tflite::ops::builtin::Register_BATCH_MATMUL(),
              /* min_version = */ 1,
              /* max_version = */ 4);
+  AddBuiltin(tflite::BuiltinOperator_GELU,
+             tflite::ops::builtin::Register_GELU(),
+             /* min_version = */ 1,
+             /* max_version = */ 2);
+  AddBuiltin(tflite::BuiltinOperator_RANDOM_STANDARD_NORMAL,
+             tflite::ops::builtin::Register_RANDOM_STANDARD_NORMAL());
+  AddBuiltin(tflite::BuiltinOperator_RANDOM_UNIFORM,
+             tflite::ops::builtin::Register_RANDOM_UNIFORM());
+  AddBuiltin(tflite::BuiltinOperator_BROADCAST_TO,
+             tflite::ops::builtin::Register_BROADCAST_TO(),
+             /* min_version = */ 1,
+             /* max_version = */ 2);
+  AddBuiltin(tflite::BuiltinOperator_CUMSUM,
+             tflite::ops::builtin::Register_CUMSUM());
+  AddBuiltin(tflite::BuiltinOperator_CALL_ONCE,
+             tflite::ops::builtin::Register_CALL_ONCE());
+  AddBuiltin(tflite::BuiltinOperator_VAR_HANDLE,
+             tflite::ops::builtin::Register_VAR_HANDLE());
+  AddBuiltin(tflite::BuiltinOperator_READ_VARIABLE,
+             tflite::ops::builtin::Register_READ_VARIABLE());
+  AddBuiltin(tflite::BuiltinOperator_ASSIGN_VARIABLE,
+             tflite::ops::builtin::Register_ASSIGN_VARIABLE());
+  // LINT.ThenChange(//components/optimization_guide/proto/models.proto:TfliteEngineVersion)
+
+#if BUILDFLAG(BUILD_TFLITE_WITH_XNNPACK)
+  delegate_creators_.push_back([](TfLiteContext* context) {
+    return tflite::MaybeCreateXNNPACKDelegate(
+        context, tflite::XNNPackQS8Options::default_value);
+  });
+#endif
 }
 
 }  // namespace optimization_guide

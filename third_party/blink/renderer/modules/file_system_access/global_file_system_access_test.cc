@@ -1,16 +1,21 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/file_system_access/global_file_system_access.h"
 
+#include <tuple>
+
+#include "base/memory/raw_ref.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_directory_handle.mojom-blink.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_error.mojom-blink.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_file_handle.mojom-blink.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_manager.mojom-blink.h"
+#include "third_party/blink/public/mojom/frame/user_activation_notification_type.mojom-blink.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/html/forms/html_button_element.h"
@@ -24,26 +29,25 @@ namespace blink {
 class MockFileSystemAccessManager
     : public mojom::blink::FileSystemAccessManager {
  public:
-  MockFileSystemAccessManager(BrowserInterfaceBrokerProxy& broker,
+  MockFileSystemAccessManager(const BrowserInterfaceBrokerProxy& broker,
                               base::OnceClosure reached_callback)
       : reached_callback_(std::move(reached_callback)), broker_(broker) {
-    broker_.SetBinderForTesting(
+    broker_->SetBinderForTesting(
         mojom::blink::FileSystemAccessManager::Name_,
-        WTF::BindRepeating(
-            &MockFileSystemAccessManager::BindFileSystemAccessManager,
-            WTF::Unretained(this)));
+        BindRepeating(&MockFileSystemAccessManager::BindFileSystemAccessManager,
+                      Unretained(this)));
   }
-  MockFileSystemAccessManager(BrowserInterfaceBrokerProxy& broker)
+  explicit MockFileSystemAccessManager(
+      const BrowserInterfaceBrokerProxy& broker)
       : broker_(broker) {
-    broker_.SetBinderForTesting(
+    broker_->SetBinderForTesting(
         mojom::blink::FileSystemAccessManager::Name_,
-        WTF::BindRepeating(
-            &MockFileSystemAccessManager::BindFileSystemAccessManager,
-            WTF::Unretained(this)));
+        BindRepeating(&MockFileSystemAccessManager::BindFileSystemAccessManager,
+                      Unretained(this)));
   }
   ~MockFileSystemAccessManager() override {
-    broker_.SetBinderForTesting(mojom::blink::FileSystemAccessManager::Name_,
-                                {});
+    broker_->SetBinderForTesting(mojom::blink::FileSystemAccessManager::Name_,
+                                 {});
   }
 
   using ChooseEntriesResponseCallback =
@@ -57,8 +61,11 @@ class MockFileSystemAccessManager
   void GetSandboxedFileSystem(
       GetSandboxedFileSystemCallback callback) override {}
 
+  void GetSandboxedFileSystemForDevtools(
+      const Vector<String>& directory_path_components,
+      GetSandboxedFileSystemCallback callback) override {}
+
   void ChooseEntries(mojom::blink::FilePickerOptionsPtr options,
-                     mojom::blink::CommonFilePickerOptionsPtr common_options,
                      ChooseEntriesCallback callback) override {
     if (choose_entries_response_callback_) {
       std::move(choose_entries_response_callback_).Run(std::move(callback));
@@ -87,6 +94,10 @@ class MockFileSystemAccessManager
           blink::mojom::blink::FileSystemAccessDataTransferToken> token,
       GetEntryFromDataTransferTokenCallback callback) override {}
 
+  void BindObserverHost(
+      mojo::PendingReceiver<blink::mojom::blink::FileSystemAccessObserverHost>
+          observer_host) override {}
+
  private:
   void BindFileSystemAccessManager(mojo::ScopedMessagePipeHandle handle) {
     receivers_.Add(this,
@@ -97,7 +108,7 @@ class MockFileSystemAccessManager
   base::OnceClosure reached_callback_;
   ChooseEntriesResponseCallback choose_entries_response_callback_;
   mojo::ReceiverSet<mojom::blink::FileSystemAccessManager> receivers_;
-  BrowserInterfaceBrokerProxy& broker_;
+  const raw_ref<const BrowserInterfaceBrokerProxy> broker_;
 };
 
 class GlobalFileSystemAccessTest : public PageTestBase {
@@ -109,10 +120,9 @@ class GlobalFileSystemAccessTest : public PageTestBase {
   }
 
   void Navigate(const String& destinationUrl) {
-    const KURL& url = KURL(NullURL(), destinationUrl);
+    const KURL& url = KURL(NullUrl(), destinationUrl);
     auto navigation_params =
-        WebNavigationParams::CreateWithHTMLBufferForTesting(
-            SharedBuffer::Create(), url);
+        WebNavigationParams::CreateWithEmptyHTMLForTesting(url);
     GetDocument().GetFrame()->Loader().CommitNavigation(
         std::move(navigation_params), /*extra_data=*/nullptr);
     blink::test::RunPendingTasks();
@@ -125,12 +135,11 @@ TEST_F(GlobalFileSystemAccessTest, UserActivationRequiredOtherwiseDenied) {
   EXPECT_FALSE(frame->HasStickyUserActivation());
 
   MockFileSystemAccessManager manager(frame->GetBrowserInterfaceBroker());
-  manager.SetChooseEntriesResponse(WTF::Bind(
-      [](MockFileSystemAccessManager::ChooseEntriesCallback callback) {
+  manager.SetChooseEntriesResponse(
+      BindOnce([](MockFileSystemAccessManager::ChooseEntriesCallback callback) {
         FAIL();
       }));
-  ClassicScript::CreateUnspecifiedScript(
-      ScriptSourceCode("window.showOpenFilePicker();"))
+  ClassicScript::CreateUnspecifiedScript("window.showOpenFilePicker();")
       ->RunScript(GetFrame().DomWindow());
   base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(frame->HasStickyUserActivation());
@@ -147,15 +156,15 @@ TEST_F(GlobalFileSystemAccessTest, UserActivationChooseEntriesSuccessful) {
   base::RunLoop manager_run_loop;
   MockFileSystemAccessManager manager(frame->GetBrowserInterfaceBroker(),
                                       manager_run_loop.QuitClosure());
-  manager.SetChooseEntriesResponse(WTF::Bind(
-      [](MockFileSystemAccessManager::ChooseEntriesCallback callback) {
+  manager.SetChooseEntriesResponse(
+      BindOnce([](MockFileSystemAccessManager::ChooseEntriesCallback callback) {
         auto error = mojom::blink::FileSystemAccessError::New();
         error->status = mojom::blink::FileSystemAccessStatus::kOk;
         error->message = "";
 
         mojo::PendingRemote<mojom::blink::FileSystemAccessFileHandle>
             pending_remote;
-        ignore_result(pending_remote.InitWithNewPipeAndPassReceiver());
+        std::ignore = pending_remote.InitWithNewPipeAndPassReceiver();
         auto handle = mojom::blink::FileSystemAccessHandle::NewFile(
             std::move(pending_remote));
         auto entry = mojom::blink::FileSystemAccessEntry::New(std::move(handle),
@@ -165,8 +174,7 @@ TEST_F(GlobalFileSystemAccessTest, UserActivationChooseEntriesSuccessful) {
 
         std::move(callback).Run(std::move(error), std::move(entries));
       }));
-  ClassicScript::CreateUnspecifiedScript(
-      ScriptSourceCode("window.showOpenFilePicker();"))
+  ClassicScript::CreateUnspecifiedScript("window.showOpenFilePicker();")
       ->RunScript(GetFrame().DomWindow());
   manager_run_loop.Run();
 
@@ -204,7 +212,7 @@ TEST_F(GlobalFileSystemAccessTest, UserActivationChooseEntriesErrors) {
 
     base::RunLoop manager_run_loop;
     manager.SetQuitClosure(manager_run_loop.QuitClosure());
-    manager.SetChooseEntriesResponse(WTF::Bind(
+    manager.SetChooseEntriesResponse(BindOnce(
         [](mojom::blink::FileSystemAccessStatus status,
            MockFileSystemAccessManager::ChooseEntriesCallback callback) {
           auto error = mojom::blink::FileSystemAccessError::New();
@@ -215,8 +223,7 @@ TEST_F(GlobalFileSystemAccessTest, UserActivationChooseEntriesErrors) {
           std::move(callback).Run(std::move(error), std::move(entries));
         },
         status));
-    ClassicScript::CreateUnspecifiedScript(
-        ScriptSourceCode("window.showOpenFilePicker();"))
+    ClassicScript::CreateUnspecifiedScript("window.showOpenFilePicker();")
         ->RunScript(GetFrame().DomWindow());
     manager_run_loop.Run();
 

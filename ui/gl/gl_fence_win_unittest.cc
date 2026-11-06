@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -93,27 +93,23 @@ TEST_F(GLFenceWinTest, CreateFromGpuFence) {
 
   gfx::GpuFenceHandle gpu_fence_handle;
   EXPECT_TRUE(gpu_fence_handle.is_null());
-  gpu_fence_handle.owned_handle.Set(mock_handle);
+  gpu_fence_handle.Adopt(base::win::ScopedHandle(mock_handle));
   EXPECT_FALSE(gpu_fence_handle.is_null());
 
-  gfx::GpuFence gpu_fence(std::move(gpu_fence_handle));
-  EXPECT_TRUE(gpu_fence_handle.is_null());
-
-  const gfx::GpuFenceHandle& fence_handle_ref = gpu_fence.GetGpuFenceHandle();
-  EXPECT_EQ(fence_handle_ref.owned_handle.Get(), mock_handle);
-  EXPECT_FALSE(fence_handle_ref.is_null());
+  EXPECT_EQ(gpu_fence_handle.Peek(), mock_handle);
+  EXPECT_FALSE(gpu_fence_handle.is_null());
 
   // Ensure that CreateFromGpuFence opens the shared handle.
   EXPECT_CALL(d3d11_device_, OpenSharedFence(_, IID_ID3D11Fence, _))
       .WillOnce(media::SetComPointeeAndReturnOk<2>(&d3d11_fence_));
 
   std::unique_ptr<GLFenceWin> gl_fence_win =
-      GLFenceWin::CreateFromGpuFence(&d3d11_device_, gpu_fence);
+      GLFenceWin::CreateFromGpuFenceHandle(&d3d11_device_,
+                                           std::move(gpu_fence_handle));
   EXPECT_NE(gl_fence_win.get(), nullptr);
 
-  std::unique_ptr<gfx::GpuFence> gpu_fence_out = gl_fence_win->GetGpuFence();
-  EXPECT_NE(gpu_fence_out, nullptr);
-  EXPECT_FALSE(gpu_fence_out->GetGpuFenceHandle().is_null());
+  gfx::GpuFenceHandle gpu_fence_out = gl_fence_win->GetGpuFenceHandle();
+  EXPECT_FALSE(gpu_fence_out.is_null());
 
   // Verify that Wait is called with 1 to match the Signal in CreateForGpuFence.
   EXPECT_CALL(d3d11_device_context_, Wait(&d3d11_fence_, 1))

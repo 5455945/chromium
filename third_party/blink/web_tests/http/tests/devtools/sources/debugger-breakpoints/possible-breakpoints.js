@@ -1,10 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import * as TextUtils from 'devtools/core/text_utils/text_utils.js';
+import * as Breakpoints from 'devtools/models/breakpoints/breakpoints.js';
+import {SourcesTestRunner} from 'sources_test_runner';
+import {TestRunner} from 'test_runner';
+
 (async function() {
   TestRunner.addResult(`Checks that BreakpointManager.possibleBreakpoints returns correct locations\n`);
-  await TestRunner.loadModule('sources'); await TestRunner.loadTestModule('sources_test_runner');
   await TestRunner.showPanel('sources');
   await TestRunner.evaluateInPageAnonymously(`
       function foo() {
@@ -19,20 +23,20 @@
       () => SourcesTestRunner.showScriptSource('foo.js', didShowScriptSource));
 
   function didShowScriptSource(sourceFrame) {
-    var uiSourceCode = sourceFrame._uiSourceCode;
-    var breakpointManager = Bindings.breakpointManager;
+    var uiSourceCode = sourceFrame.uiSourceCode();
+    var breakpointManager = Breakpoints.BreakpointManager.BreakpointManager.instance();
 
     TestRunner.addResult('Locations for first line');
-    breakpointManager.possibleBreakpoints(uiSourceCode, new TextUtils.TextRange(0, 0, 1, 0))
+    breakpointManager.possibleBreakpoints(uiSourceCode, new TextUtils.TextRange.TextRange(0, 0, 1, 0))
         .then(dumpLocations)
         .then(() => TestRunner.addResult('All locations'))
-        .then(() => breakpointManager.possibleBreakpoints(uiSourceCode, new TextUtils.TextRange(0, 0, 6, 0)))
+        .then(() => breakpointManager.possibleBreakpoints(uiSourceCode, new TextUtils.TextRange.TextRange(0, 0, 6, 0)))
         .then(dumpLocations)
         .then(() => TestRunner.addResult('Existing location by position'))
-        .then(() => breakpointManager.possibleBreakpoints(uiSourceCode, new TextUtils.TextRange(2, 37, 2, 38)))
+        .then(() => breakpointManager.possibleBreakpoints(uiSourceCode, new TextUtils.TextRange.TextRange(2, 37, 2, 38)))
         .then(dumpLocations)
         .then(() => TestRunner.addResult('Not existing location by position'))
-        .then(() => breakpointManager.possibleBreakpoints(uiSourceCode, new TextUtils.TextRange(2, 38, 2, 39)))
+        .then(() => breakpointManager.possibleBreakpoints(uiSourceCode, new TextUtils.TextRange.TextRange(2, 38, 2, 39)))
         .then(dumpLocations)
         .then(() => SourcesTestRunner.completeDebuggerTest());
   }

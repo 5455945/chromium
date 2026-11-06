@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,9 @@
 #define CHROME_BROWSER_COMMERCE_MERCHANT_VIEWER_MERCHANT_SIGNAL_DB_H_
 
 #include "base/android/scoped_java_ref.h"
-#include "base/memory/weak_ptr.h"
-#include "chrome/browser/commerce/merchant_viewer/merchant_signal_db_content.pb.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/self_deleting.h"
+#include "components/commerce/core/proto/merchant_signal_db_content.pb.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/leveldb_proto/public/proto_database.h"
 
@@ -20,46 +21,47 @@ class MerchantSignalContentProto;
 }  // namespace merchant_signal_db
 
 template <typename T>
-class ProfileProtoDB;
+class SessionProtoDB;
 
-class MerchantSignalDB {
+class MerchantSignalDB : public base::SelfDeleting {
  public:
-  explicit MerchantSignalDB(content::BrowserContext* browser_context);
+  MerchantSignalDB(content::BrowserContext* browser_context,
+                   base::SelfDeletingPassKey key);
   MerchantSignalDB(const MerchantSignalDB&) = delete;
   MerchantSignalDB& operator=(const MerchantSignalDB&) = delete;
-  ~MerchantSignalDB();
 
   // Save signal for key.
   void Save(JNIEnv* env,
-            const base::android::JavaParamRef<jstring>& jkey,
-            const jlong jtimestamp,
-            const base::android::JavaParamRef<jobject>& jcallback);
+            const std::string& key,
+            const int64_t jtimestamp,
+            const base::android::JavaRef<jobject>& jcallback);
 
   // Load signal corresponding to key.
   void Load(JNIEnv* env,
-            const base::android::JavaParamRef<jstring>& jkey,
-            const base::android::JavaParamRef<jobject>& jcallback);
+            const std::string& key,
+            const base::android::JavaRef<jobject>& jcallback);
 
   // Load signal whose keys have specific prefix.
   void LoadWithPrefix(JNIEnv* env,
-                      const base::android::JavaParamRef<jstring>& jprefix,
-                      const base::android::JavaParamRef<jobject>& jcallback);
+                      const std::string& prefix,
+                      const base::android::JavaRef<jobject>& jcallback);
 
   // Delete entry corresponding to key.
   void Delete(JNIEnv* env,
-              const base::android::JavaParamRef<jstring>& jkey,
-              const base::android::JavaParamRef<jobject>& jcallback);
+              const std::string& key,
+              const base::android::JavaRef<jobject>& jcallback);
 
   // Delete all entries in the database.
-  void DeleteAll(JNIEnv* env,
-                 const base::android::JavaParamRef<jobject>& jcallback);
+  void DeleteAll(JNIEnv* env, const base::android::JavaRef<jobject>& jcallback);
 
-  // Destroy MerchantSignalDB object.
+  // Destroys this object.
   void Destroy(JNIEnv* env);
 
  private:
-  ProfileProtoDB<merchant_signal_db::MerchantSignalContentProto>* proto_db_;
-  base::WeakPtrFactory<MerchantSignalDB> weak_ptr_factory_{this};
+  ~MerchantSignalDB();
+
+  raw_ptr<SessionProtoDB<merchant_signal_db::MerchantSignalContentProto>>
+      proto_db_;
 };
 
 #endif  // CHROME_BROWSER_COMMERCE_MERCHANT_VIEWER_MERCHANT_SIGNAL_DB_H_

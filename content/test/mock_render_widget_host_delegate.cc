@@ -1,18 +1,22 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/test/mock_render_widget_host_delegate.h"
 
+#include "base/notimplemented.h"
+#include "components/input/native_web_keyboard_event.h"
+#include "components/viz/common/hit_test/hit_test_data_provider.h"
+#include "components/viz/host/host_frame_sink_manager.h"
+#include "content/browser/compositor/surface_utils.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_base.h"
-#include "content/public/browser/native_web_keyboard_event.h"
+#include "ui/compositor/compositor.h"
 #include "ui/display/screen.h"
 
 namespace content {
 
-MockRenderWidgetHostDelegate::MockRenderWidgetHostDelegate()
-    : text_input_manager_(false /* should_do_learning */) {}
+MockRenderWidgetHostDelegate::MockRenderWidgetHostDelegate() = default;
 
 MockRenderWidgetHostDelegate::~MockRenderWidgetHostDelegate() = default;
 
@@ -22,14 +26,26 @@ void MockRenderWidgetHostDelegate::ResizeDueToAutoResize(
 
 KeyboardEventProcessingResult
 MockRenderWidgetHostDelegate::PreHandleKeyboardEvent(
-    const NativeWebKeyboardEvent& event) {
-  last_event_ = std::make_unique<NativeWebKeyboardEvent>(event);
+    const input::NativeWebKeyboardEvent& event) {
+  last_keyboard_event_ = std::make_unique<input::NativeWebKeyboardEvent>(event);
   return pre_handle_keyboard_event_result_;
+}
+
+bool MockRenderWidgetHostDelegate::PreHandleMouseEvent(
+    const blink::WebMouseEvent& event) {
+  last_mouse_event_ = std::make_unique<blink::WebMouseEvent>(event);
+  return pre_handle_mouse_event_result_;
+}
+
+bool MockRenderWidgetHostDelegate::PreHandleGestureEvent(
+    const blink::WebGestureEvent& event) {
+  last_gesture_event_ = std::make_unique<blink::WebGestureEvent>(event);
+  return pre_handle_gesture_event_result_;
 }
 
 void MockRenderWidgetHostDelegate::ExecuteEditCommand(
     const std::string& command,
-    const absl::optional<std::u16string>& value) {}
+    const std::optional<std::u16string>& value) {}
 
 void MockRenderWidgetHostDelegate::Undo() {}
 
@@ -47,17 +63,23 @@ void MockRenderWidgetHostDelegate::SelectAll() {}
 
 void MockRenderWidgetHostDelegate::CreateInputEventRouter() {
   rwh_input_event_router_ =
-      std::make_unique<RenderWidgetHostInputEventRouter>();
+      base::MakeRefCounted<input::RenderWidgetHostInputEventRouter>(
+          GetHostFrameSinkManager(), this);
 }
 
-RenderWidgetHostInputEventRouter*
+input::RenderWidgetHostInputEventRouter*
 MockRenderWidgetHostDelegate::GetInputEventRouter() {
   return rwh_input_event_router_.get();
 }
 
 RenderWidgetHostImpl* MockRenderWidgetHostDelegate::GetFocusedRenderWidgetHost(
     RenderWidgetHostImpl* widget_host) {
-  return !!focused_widget_ ? focused_widget_ : widget_host;
+  return !!focused_widget_ ? focused_widget_.get() : widget_host;
+}
+
+RenderWidgetHostImpl*
+MockRenderWidgetHostDelegate::GetRenderWidgetHostWithPageFocus() {
+  return focused_widget_;
 }
 
 void MockRenderWidgetHostDelegate::SendScreenRects() {
@@ -77,8 +99,33 @@ RenderViewHostDelegateView* MockRenderWidgetHostDelegate::GetDelegateView() {
   return &rvh_delegate_view_;
 }
 
-bool MockRenderWidgetHostDelegate::ShouldIgnoreInputEvents() {
-  return should_ignore_input_events_;
+VisibleTimeRequestTrigger&
+MockRenderWidgetHostDelegate::GetVisibleTimeRequestTrigger() {
+  return visible_time_request_trigger_;
 }
+
+gfx::mojom::DelegatedInkPointRenderer*
+MockRenderWidgetHostDelegate::GetDelegatedInkRenderer(
+    ui::Compositor* compositor) {
+  if (!delegated_ink_point_renderer_.is_bound()) {
+    if (!compositor) {
+      return nullptr;
+    }
+
+    compositor->SetDelegatedInkPointRenderer(
+        delegated_ink_point_renderer_.BindNewPipeAndPassReceiver());
+    delegated_ink_point_renderer_.reset_on_disconnect();
+  }
+  return delegated_ink_point_renderer_.get();
+}
+
+input::TouchEmulator* MockRenderWidgetHostDelegate::GetTouchEmulator(
+    bool create_if_necessary) {
+  NOTIMPLEMENTED();
+  return nullptr;
+}
+
+void MockRenderWidgetHostDelegate::CancelAutoscroll(
+    input::RenderWidgetHostViewInput* view) {}
 
 }  // namespace content

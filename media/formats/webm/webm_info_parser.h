@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <stdint.h>
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "base/time/time.h"
 #include "media/base/media_export.h"
 #include "media/formats/webm/webm_parser.h"
@@ -19,14 +18,18 @@ namespace media {
 class MEDIA_EXPORT WebMInfoParser : public WebMParserClient {
  public:
   WebMInfoParser();
+
+  WebMInfoParser(const WebMInfoParser&) = delete;
+  WebMInfoParser& operator=(const WebMInfoParser&) = delete;
+
   ~WebMInfoParser() override;
 
-  // Parses a WebM Info element in |buf|.
+  // Parses a WebM Info element in `buf`.
   //
   // Returns -1 if the parse fails.
   // Returns 0 if more data is needed.
   // Returns the number of bytes parsed on success.
-  int Parse(const uint8_t* buf, int size);
+  int Parse(base::span<const uint8_t> buf);
 
   int64_t timecode_scale_ns() const { return timecode_scale_ns_; }
   double duration() const { return duration_; }
@@ -38,14 +41,12 @@ class MEDIA_EXPORT WebMInfoParser : public WebMParserClient {
   bool OnListEnd(int id) override;
   bool OnUInt(int id, int64_t val) override;
   bool OnFloat(int id, double val) override;
-  bool OnBinary(int id, const uint8_t* data, int size) override;
+  bool OnBinary(int id, base::span<const uint8_t> data) override;
   bool OnString(int id, const std::string& str) override;
 
   int64_t timecode_scale_ns_;
   double duration_;
   base::Time date_utc_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebMInfoParser);
 };
 
 }  // namespace media

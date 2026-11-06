@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,13 @@
 #define COMPONENTS_METRICS_UNSENT_LOG_STORE_METRICS_H_
 
 #include "base/feature_list.h"
-#include "base/macros.h"
 #include "components/metrics/unsent_log_store.h"
 
 namespace metrics {
+
+// The feature to record the unsent log info metrics, refer to
+// UnsentLogStoreMetricsImpl::RecordLastUnsentLogMetadataMetrics.
+BASE_DECLARE_FEATURE(kRecordLastUnsentLogMetadataMetrics);
 
 // Interface for recording metrics from UnsentLogStore.
 class UnsentLogStoreMetrics {
@@ -29,10 +32,14 @@ class UnsentLogStoreMetrics {
     DECODE_FAIL,                    // Failed to decode log.
     DEPRECATED_XML_PROTO_MISMATCH,  // The XML and protobuf logs have
                                     // inconsistent data.
-    END_RECALL_STATUS  // Number of bins to use to create the histogram.
+    kMaxValue = DEPRECATED_XML_PROTO_MISMATCH
   };
 
   UnsentLogStoreMetrics();
+
+  UnsentLogStoreMetrics(const UnsentLogStoreMetrics&) = delete;
+  UnsentLogStoreMetrics& operator=(const UnsentLogStoreMetrics&) = delete;
+
   virtual ~UnsentLogStoreMetrics();
 
   virtual void RecordLogReadStatus(LogReadStatus status);
@@ -47,13 +54,6 @@ class UnsentLogStoreMetrics {
   virtual void RecordLastUnsentLogMetadataMetrics(int unsent_samples_count,
                                                   int sent_samples_count,
                                                   int persisted_size_in_kb);
-
-  // The feature to record the unsent log info metrics, refer to
-  // UnsentLogStoreMetricsImpl::RecordLastUnsentLogMetadataMetrics.
-  static const base::Feature kRecordLastUnsentLogMetadataMetrics;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(UnsentLogStoreMetrics);
 };
 
 }  // namespace metrics

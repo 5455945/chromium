@@ -31,6 +31,7 @@
 #include "third_party/blink/renderer/core/svg/svg_animated_enumeration_base.h"
 
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -46,9 +47,9 @@ void SVGAnimatedEnumerationBase::setBaseVal(uint16_t value,
 
   if (value > BaseValue()->MaxExposedEnumValue()) {
     exception_state.ThrowTypeError(
-        "The enumeration value provided (" + String::Number(value) +
-        ") is larger than the largest allowed value (" +
-        String::Number(BaseValue()->MaxExposedEnumValue()) + ").");
+        Format("The enumeration value provided ({}) is larger than the largest "
+               "allowed value ({}).",
+               value, BaseValue()->MaxExposedEnumValue()));
     return;
   }
 

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,12 @@
 #define REMOTING_PROTOCOL_SPAKE2_AUTHENTICATOR_H_
 
 #include <memory>
-#include <queue>
 #include <string>
 
 #include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "remoting/protocol/authenticator.h"
 #include "third_party/boringssl/src/include/openssl/base.h"
 
@@ -40,18 +39,23 @@ class Spake2Authenticator : public Authenticator {
       const std::string& shared_secret,
       State initial_state);
 
+  Spake2Authenticator(const Spake2Authenticator&) = delete;
+  Spake2Authenticator& operator=(const Spake2Authenticator&) = delete;
+
   ~Spake2Authenticator() override;
 
   // Authenticator interface.
+  CredentialsType credentials_type() const override;
+  const Authenticator& implementing_authenticator() const override;
   State state() const override;
   bool started() const override;
   RejectionReason rejection_reason() const override;
-  void ProcessMessage(const jingle_xmpp::XmlElement* message,
+  RejectionDetails rejection_details() const override;
+  void ProcessMessage(const JingleAuthentication& message,
                       base::OnceClosure resume_callback) override;
-  std::unique_ptr<jingle_xmpp::XmlElement> GetNextMessage() override;
+  JingleAuthentication GetNextMessage() override;
   const std::string& GetAuthKey() const override;
-  std::unique_ptr<ChannelAuthenticator> CreateChannelAuthenticator()
-      const override;
+  const SessionPolicies* GetSessionPolicies() const override;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(Spake2AuthenticatorTest, InvalidSecret);
@@ -62,7 +66,7 @@ class Spake2Authenticator : public Authenticator {
                       bool is_host,
                       State initial_state);
 
-  virtual void ProcessMessageInternal(const jingle_xmpp::XmlElement* message);
+  virtual void ProcessMessageInternal(const JingleAuthentication& message);
 
   std::string CalculateVerificationHash(bool from_host,
                                         const std::string& local_id,
@@ -81,17 +85,16 @@ class Spake2Authenticator : public Authenticator {
   std::string remote_cert_;
 
   // Used for both host and client authenticators.
-  SPAKE2_CTX* spake2_context_;
+  raw_ptr<SPAKE2_CTX, DanglingUntriaged> spake2_context_;
   State state_;
   bool started_ = false;
-  RejectionReason rejection_reason_ = INVALID_CREDENTIALS;
+  RejectionReason rejection_reason_ = RejectionReason::INVALID_CREDENTIALS;
+  RejectionDetails rejection_details_;
   std::string local_spake_message_;
   bool spake_message_sent_ = false;
   std::string outgoing_verification_hash_;
   std::string auth_key_;
   std::string expected_verification_hash_;
-
-  DISALLOW_COPY_AND_ASSIGN(Spake2Authenticator);
 };
 
 }  // namespace protocol

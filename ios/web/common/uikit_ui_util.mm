@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,27 +6,27 @@
 
 #import <UIKit/UIKit.h>
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "base/apple/foundation_util.h"
 
 UIWindow* GetAnyKeyWindow() {
-#if !defined(__IPHONE_13_0) || __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_13_0
-  return [UIApplication sharedApplication].keyWindow;
-#else
-  NSArray<UIWindow*>* windows = [UIApplication sharedApplication].windows;
-  for (UIWindow* window in windows) {
-    if (window.isKeyWindow)
-      return window;
+  for (UIScene* scene in UIApplication.sharedApplication.connectedScenes) {
+    UIWindowScene* windowScene =
+        base::apple::ObjCCastStrict<UIWindowScene>(scene);
+    // Find a key window if it exists.
+    for (UIWindow* window in windowScene.windows) {
+      if (window.keyWindow) {
+        return window;
+      }
+    }
   }
+
   return nil;
-#endif
 }
 
 UIInterfaceOrientation GetInterfaceOrientation() {
-#if !defined(__IPHONE_13_0) || __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_13_0
-  return [[UIApplication sharedApplication] statusBarOrientation];
-#else
-  return GetAnyKeyWindow().windowScene.interfaceOrientation;
-#endif
+  if (@available(iOS 16.0, *)) {
+    return GetAnyKeyWindow().windowScene.effectiveGeometry.interfaceOrientation;
+  } else {
+    return GetAnyKeyWindow().windowScene.interfaceOrientation;
+  }
 }

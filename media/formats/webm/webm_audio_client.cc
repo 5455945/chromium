@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,8 @@
 
 namespace media {
 
-WebMAudioClient::WebMAudioClient(MediaLog* media_log) : media_log_(media_log) {
+WebMAudioClient::WebMAudioClient(MediaLog* media_log)
+    : media_log_(MediaLog::CloneSafely(media_log)) {
   Reset();
 }
 
@@ -32,11 +33,11 @@ bool WebMAudioClient::InitializeConfig(
   DCHECK(config);
   SampleFormat sample_format = kSampleFormatPlanarF32;
 
-  AudioCodec audio_codec = kUnknownAudioCodec;
+  AudioCodec audio_codec = AudioCodec::kUnknown;
   if (codec_id == "A_VORBIS") {
-    audio_codec = kCodecVorbis;
+    audio_codec = AudioCodec::kVorbis;
   } else if (codec_id == "A_OPUS") {
-    audio_codec = kCodecOpus;
+    audio_codec = AudioCodec::kOpus;
   } else {
     MEDIA_LOG(ERROR, media_log_) << "Unsupported audio codec_id " << codec_id;
     return false;
@@ -49,13 +50,14 @@ bool WebMAudioClient::InitializeConfig(
   if (channels_ == -1)
     channels_ = 1;
 
-  ChannelLayout channel_layout =
-      channels_ > 8 ? CHANNEL_LAYOUT_DISCRETE : GuessChannelLayout(channels_);
+  ChannelLayoutConfig channel_layout = ChannelLayoutConfig::Guess(channels_);
 
-  if (channel_layout == CHANNEL_LAYOUT_UNSUPPORTED) {
+  if (channel_layout.channel_layout() == CHANNEL_LAYOUT_UNSUPPORTED) {
     MEDIA_LOG(ERROR, media_log_) << "Unsupported channel count " << channels_;
     return false;
   }
+
+  CHECK_EQ(channel_layout.channels(), channels_);
 
   int samples_per_second = samples_per_second_;
   if (output_samples_per_second_ > 0)
@@ -63,7 +65,7 @@ bool WebMAudioClient::InitializeConfig(
 
   // Always use 48kHz for OPUS.  See the "Input Sample Rate" section of the
   // spec: http://tools.ietf.org/html/draft-terriberry-oggopus-01#page-11
-  if (audio_codec == kCodecOpus) {
+  if (audio_codec == AudioCodec::kOpus) {
     samples_per_second = 48000;
     sample_format = kSampleFormatF32;
   }
@@ -77,12 +79,11 @@ bool WebMAudioClient::InitializeConfig(
                               base::Time::kNanosecondsPerSecond);
   }
 
-  config->Initialize(audio_codec, sample_format, channel_layout,
-                     samples_per_second, codec_private, encryption_scheme,
-                     base::TimeDelta::FromMicroseconds(
-                         (seek_preroll != -1 ? seek_preroll : 0) / 1000),
-                     codec_delay_in_frames);
-  config->SetChannelsForDiscrete(channels_);
+  config->Initialize(
+      audio_codec, sample_format, channel_layout, samples_per_second,
+      codec_private, encryption_scheme,
+      base::Microseconds((seek_preroll != -1 ? seek_preroll : 0) / 1000),
+      codec_delay_in_frames);
   return config->IsValidConfig();
 }
 
@@ -101,7 +102,7 @@ bool WebMAudioClient::OnUInt(int id, int64_t val) {
 }
 
 bool WebMAudioClient::OnFloat(int id, double val) {
-  double* dst = NULL;
+  double* dst = nullptr;
 
   switch (id) {
     case kWebMIdSamplingFrequency:

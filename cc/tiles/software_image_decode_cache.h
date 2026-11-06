@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "base/containers/mru_cache.h"
-#include "base/memory/ref_counted.h"
+#include "base/containers/hashing_lru_cache.h"
 #include "base/numerics/safe_math.h"
 #include "base/thread_annotations.h"
 #include "base/trace_event/memory_dump_provider.h"
@@ -31,22 +30,24 @@ class CC_EXPORT SoftwareImageDecodeCache
   using CacheKey = Utils::CacheKey;
   using CacheKeyHash = Utils::CacheKeyHash;
 
-  enum class DecodeTaskType { USE_IN_RASTER_TASKS, USE_OUT_OF_RASTER_TASKS };
-
   // Identifies whether a decode task performed decode work, or was fulfilled /
   // failed trivially.
   enum class TaskProcessingResult { kFullDecode, kLockOnly, kCancelled };
 
   SoftwareImageDecodeCache(SkColorType color_type,
-                           size_t locked_memory_limit_bytes,
-                           PaintImage::GeneratorClientId generator_client_id);
+                           size_t locked_memory_limit_bytes);
   ~SoftwareImageDecodeCache() override;
 
   // ImageDecodeCache overrides.
-  TaskResult GetTaskForImageAndRef(const DrawImage& image,
+  // |client_id| is not used by the SoftwareImageDecodeCache for both of these
+  // tasks.
+  TaskResult GetTaskForImageAndRef(ClientId client_id,
+                                   const DrawImage& image,
                                    const TracingInfo& tracing_info) override;
   TaskResult GetOutOfRasterDecodeTaskForImageAndRef(
-      const DrawImage& image) override;
+      ClientId client_id,
+      const DrawImage& image,
+      bool speculative = false) override;
   void UnrefImage(const DrawImage& image) override;
   DecodedDrawImage GetDecodedImageForDraw(const DrawImage& image) override;
   void DrawWithImageFinished(const DrawImage& image,
@@ -59,21 +60,22 @@ class CC_EXPORT SoftwareImageDecodeCache
   size_t GetMaximumMemoryLimitBytes() const override;
   bool UseCacheForDrawImage(const DrawImage& image) const override;
   void RecordStats() override {}
+  ClientId GenerateClientId() override;
 
   // Decode the given image and store it in the cache. This is only called by an
   // image decode task from a worker thread.
   TaskProcessingResult DecodeImageInTask(const CacheKey& key,
                                          const PaintImage& paint_image,
-                                         DecodeTaskType task_type);
+                                         TaskType task_type);
 
-  void OnImageDecodeTaskCompleted(const CacheKey& key,
-                                  DecodeTaskType task_type);
+  void OnImageDecodeTaskCompleted(const CacheKey& key, TaskType task_type);
 
   // MemoryDumpProvider overrides.
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
                     base::trace_event::ProcessMemoryDump* pmd) override;
 
   size_t GetNumCacheEntriesForTesting();
+  size_t GetMaxNumCacheEntriesForTesting();
 
  private:
   using CacheEntry = Utils::CacheEntry;
@@ -96,8 +98,8 @@ class CC_EXPORT SoftwareImageDecodeCache
     base::CheckedNumeric<size_t> current_usage_bytes_;
   };
 
-  using ImageMRUCache = base::
-      HashingMRUCache<CacheKey, std::unique_ptr<CacheEntry>, CacheKeyHash>;
+  using ImageLRUCache = base::
+      HashingLRUCache<CacheKey, std::unique_ptr<CacheEntry>, CacheKeyHash>;
 
   // Get the decoded draw image for the given key and paint_image. Note that
   // when used internally, we still require that DrawWithImageFinished() is
@@ -115,7 +117,8 @@ class CC_EXPORT SoftwareImageDecodeCache
   // if it was public (ie, all of the locks need to be properly acquired).
   TaskResult GetTaskForImageAndRefInternal(const DrawImage& image,
                                            const TracingInfo& tracing_info,
-                                           DecodeTaskType type)
+                                           TaskType type,
+                                           bool speculative)
       LOCKS_EXCLUDED(lock_);
 
   CacheEntry* AddCacheEntry(const CacheKey& key)
@@ -129,18 +132,18 @@ class CC_EXPORT SoftwareImageDecodeCache
       EXCLUSIVE_LOCKS_REQUIRED(lock_);
   void RemoveBudgetForImage(const CacheKey& key, CacheEntry* entry)
       EXCLUSIVE_LOCKS_REQUIRED(lock_);
-  absl::optional<CacheKey> FindCachedCandidate(const CacheKey& key)
+  std::optional<CacheKey> FindCachedCandidate(const CacheKey& key)
       EXCLUSIVE_LOCKS_REQUIRED(lock_);
 
   void UnrefImage(const CacheKey& key) EXCLUSIVE_LOCKS_REQUIRED(lock_);
 
   SkColorType GetColorTypeForPaintImage(
-      const gfx::ColorSpace& target_color_space,
+      const TargetColorParams& target_color_params,
       const PaintImage& paint_image);
 
   base::Lock lock_;
   // Decoded images and ref counts (predecode path).
-  ImageMRUCache decoded_images_ GUARDED_BY(lock_);
+  ImageLRUCache decoded_images_ GUARDED_BY(lock_);
 
   // A map of PaintImage::FrameKey to the ImageKeys for cached decodes of this
   // PaintImage.

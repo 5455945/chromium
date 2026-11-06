@@ -1,14 +1,20 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_PERFORMANCE_MANAGER_POLICIES_BACKGROUND_TAB_LOADING_POLICY_H_
 #define CHROME_BROWSER_PERFORMANCE_MANAGER_POLICIES_BACKGROUND_TAB_LOADING_POLICY_H_
 
+#include <map>
+#include <optional>
 #include <vector>
 
-#include "base/memory/memory_pressure_listener.h"
+#include "base/functional/callback.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory_coordinator/memory_consumer.h"
 #include "components/performance_manager/public/graph/graph.h"
+#include "components/performance_manager/public/graph/graph_registered.h"
 #include "components/performance_manager/public/graph/node_data_describer.h"
 #include "components/performance_manager/public/graph/page_node.h"
 #include "components/performance_manager/public/graph/system_node.h"
@@ -23,18 +29,23 @@ class PageLoader;
 FORWARD_DECLARE_TEST(BackgroundTabLoadingBrowserTest,
                      RestoredTabsAreLoadedGradually);
 class BackgroundTabLoadingBrowserTest;
+class SiteDataReader;
 
 namespace policies {
 
 // This policy manages loading of background tabs created by session restore. It
 // is responsible for assigning priorities and controlling the load of
 // background tab loading at all times.
-class BackgroundTabLoadingPolicy : public GraphOwned,
-                                   public NodeDataDescriberDefaultImpl,
-                                   public PageNode::ObserverDefaultImpl,
-                                   public SystemNode::ObserverDefaultImpl {
+class BackgroundTabLoadingPolicy
+    : public GraphOwnedAndRegistered<BackgroundTabLoadingPolicy>,
+      public NodeDataDescriberDefaultImpl,
+      public PageNodeObserver,
+      public base::PassiveMemoryConsumer {
  public:
-  BackgroundTabLoadingPolicy();
+  // `all_restored_tabs_loaded_callback` is invoked when all tabs passed to
+  // ScheduleLoadForRestoredTabs() are loaded.
+  explicit BackgroundTabLoadingPolicy(
+      base::RepeatingClosure all_restored_tabs_loaded_callback);
   ~BackgroundTabLoadingPolicy() override;
   BackgroundTabLoadingPolicy(const BackgroundTabLoadingPolicy& other) = delete;
   BackgroundTabLoadingPolicy& operator=(const BackgroundTabLoadingPolicy&) =
@@ -45,59 +56,89 @@ class BackgroundTabLoadingPolicy : public GraphOwned,
   void OnTakenFromGraph(Graph* graph) override;
 
   // PageNodeObserver implementation:
-  void OnLoadingStateChanged(const PageNode* page_node) override;
+  void OnLoadingStateChanged(const PageNode* page_node,
+                             PageNode::LoadingState previous_state) override;
   void OnBeforePageNodeRemoved(const PageNode* page_node) override;
 
-  // Schedules the PageNodes in |page_nodes| to be loaded when appropriate.
-  void ScheduleLoadForRestoredTabs(std::vector<PageNode*> page_nodes);
+  // Holds data about a PageNode being added to this policy.
+  struct PageNodeData {
+    explicit PageNodeData(
+        base::WeakPtr<PageNode> page_node,
+        GURL main_frame_url = GURL(),
+        blink::mojom::PermissionStatus notification_permission_status =
+            blink::mojom::PermissionStatus::ASK);
+    PageNodeData(PageNodeData&& other);
+    PageNodeData& operator=(PageNodeData&& other);
+    PageNodeData(const PageNodeData& other);
+    PageNodeData& operator=(const PageNodeData& other);
+    ~PageNodeData();
+
+    base::WeakPtr<PageNode> page_node;
+    GURL main_frame_url;
+    blink::mojom::PermissionStatus notification_permission_status;
+  };
+
+  // Schedules the PageNodes in |page_node_and_permission_vector| to be loaded
+  // when appropriate.
+  void ScheduleLoadForRestoredTabs(
+      std::vector<PageNodeData> page_node_and_permission_vector);
 
   void SetMockLoaderForTesting(std::unique_ptr<mechanism::PageLoader> loader);
+  void SetMaxLoadedTabCountForTesting(size_t max_tabs_to_load);
   void SetMaxSimultaneousLoadsForTesting(size_t loading_slots);
   void SetFreeMemoryForTesting(size_t free_memory_mb);
   void ResetPolicyForTesting();
 
-  // Returns the instance of BackgroundTabLoadingPolicy within the graph.
-  static BackgroundTabLoadingPolicy* GetInstance();
-
  private:
   friend class ::performance_manager::BackgroundTabLoadingBrowserTest;
+  friend class BackgroundTabLoadingPolicyTest;
 
-  // Holds a handful of data about a tab which is used to prioritize it during
-  // session restore.
+  // Holds data about a PageNode waiting to be loaded by this policy.
   struct PageNodeToLoadData {
-    explicit PageNodeToLoadData(PageNode* page_node);
-    PageNodeToLoadData(const PageNodeToLoadData&) = delete;
+    explicit PageNodeToLoadData(const PageNode* page_node);
     ~PageNodeToLoadData();
+
+    // Move-only.
+    PageNodeToLoadData(const PageNodeToLoadData&) = delete;
     PageNodeToLoadData& operator=(const PageNodeToLoadData&) = delete;
+    PageNodeToLoadData(PageNodeToLoadData&&) = default;
+    PageNodeToLoadData& operator=(PageNodeToLoadData&&) = default;
+
+    // Returns true if the data about this PageNode indicates it uses background
+    // communication.
+    bool UsesBackgroundCommunication() const;
 
     // Keeps a pointer to the corresponding PageNode.
-    const PageNode* page_node;
+    raw_ptr<const PageNode> page_node;
 
     // A higher value here means the tab has higher priority for restoring.
-    float score = 0.0f;
+    std::optional<float> score;
 
-    // Indicates whether or not the tab communicates with the user even when it
-    // is in the background (tab title changes, favicons, etc).
-    // It is initialized to nullopt and set asynchronously to the proper value.
-    absl::optional<bool> used_in_bg;
+    // Whether the tab updates its title or favicon when backgrounded.
+    // Initialized to nullopt and set asynchronously with the proper value from
+    // the sites database.
+    std::optional<bool> updates_title_or_favicon_in_bg;
   };
 
   // Comparator used to sort PageNodeToLoadData.
   struct ScoredTabComparator;
 
   // NodeDataDescriber implementation:
-  base::Value DescribePageNodeData(const PageNode* node) const override;
-  base::Value DescribeSystemNodeData(const SystemNode* node) const override;
+  base::DictValue DescribePageNodeData(const PageNode* node) const override;
+  base::DictValue DescribeSystemNodeData(const SystemNode* node) const override;
 
-  // SystemNodeObserver:
-  void OnMemoryPressure(
-      base::MemoryPressureListener::MemoryPressureLevel new_level) override;
+  // base::PassiveMemoryConsumer implementation:
+  void OnUpdateMemoryLimit() override;
+
+  // Returns the SiteDataReader instance for |page_node|, if any. Virtual for
+  // testing.
+  virtual SiteDataReader* GetSiteDataReader(const PageNode* page_node) const;
 
   // Determines whether or not the given PageNode should be loaded. If this
   // returns false, then the policy no longer attempts to load |page_node| and
   // removes it from the policy's internal state. This is called immediately
   // prior to trying to load the PageNode.
-  bool ShouldLoad(const PageNode* page_node);
+  bool ShouldLoad(const PageNodeToLoadData& page_node_data);
 
   // This will initialize |page_node_to_load_data->used_in_bg| to the proper
   // value, score the tab and call DispatchNotifyAllTabsScoredIfNeeded().
@@ -109,9 +150,9 @@ class BackgroundTabLoadingPolicy : public GraphOwned,
   // Calculates a |score| for the given tab.
   void ScoreTab(PageNodeToLoadData* page_node_to_load_data);
 
-  // Schedule the task that will initialize |PageNodeToLoadData::used_in_bg|
-  // from the local site characteristics database.
-  void SetUsedInBackgroundAsync(PageNodeToLoadData* page_node_to_load_data);
+  // Schedule the task that looks up whether `page_node` was used in the
+  // background from the local site characteristics database.
+  void SetUsedInBackgroundAsync(const PageNode* page_node);
 
   // Invoke "NotifyAllTabsScored" if all tabs are scored.
   void DispatchNotifyAllTabsScoredIfNeeded();
@@ -120,8 +161,12 @@ class BackgroundTabLoadingPolicy : public GraphOwned,
   void NotifyAllTabsScored();
 
   // Move the PageNode from |page_nodes_to_load_| to
-  // |page_nodes_load_initiated_| and make the call to load the PageNode.
+  // |page_nodes_load_initiated_| and make the call to load the PageNode. If the
+  // PageNode is a split view, all tabs in the split will be loaded.
   void InitiateLoad(const PageNode* page_node);
+
+  // Helper to load a single PageNode.
+  void InitiateSinglePageLoad(const PageNode* page_node);
 
   // Removes the PageNode from all the sets of PageNodes that the policy is
   // tracking.
@@ -143,24 +188,50 @@ class BackgroundTabLoadingPolicy : public GraphOwned,
   // Compute the amount of free memory on the system.
   size_t GetFreePhysicalMemoryMib() const;
 
-  // Helper function for a vector of PageNodeToLoadData.
-  void ErasePageNodeToLoadData(const PageNode* page_node);
+  // If `page_node` is in the set of page nodes to load, removes it and returns
+  // true.
+  bool ErasePageNodeToLoadData(const PageNode* page_node);
+
+  // Returns the `PageNodeToLoadData` for `page_node` if it exists, nullptr
+  // otherwise.
   PageNodeToLoadData* FindPageNodeToLoadData(const PageNode* page_node);
+
+  // Returns true if there are restored tabs that must be loaded by this policy
+  // and aren't fully loaded yet.
+  bool HasRestoredTabsToLoad() const;
+
+  // Updates `has_restored_tabs_to_load_` to match `HasRestoredTabsToLoad()` and
+  // invokes `all_restored_tabs_loaded_callback_` if needed.
+  void UpdateHasRestoredTabsToLoad();
+
+  // The callback to invoke when all restored tabs are loaded.
+  const base::RepeatingClosure all_restored_tabs_loaded_callback_;
+
+  // Whether there are restored tabs that that must be loaded by this policy and
+  // aren't fully loaded yet.
+  //
+  // Set to true when ScheduleLoadForRestoredTabs() is invoked. Set to false
+  // when HasRestoredTabsToLoad() becomes false.
+  bool has_restored_tabs_to_load_ = false;
 
   // The mechanism used to load the pages.
   std::unique_ptr<performance_manager::mechanism::PageLoader> page_loader_;
 
+  base::MemoryConsumerRegistration memory_consumer_registration_;
+
   // The set of PageNodes that have been restored for which we need to schedule
   // loads.
-  std::vector<std::unique_ptr<PageNodeToLoadData>> page_nodes_to_load_;
+  std::vector<PageNodeToLoadData> page_nodes_to_load_;
 
   // The set of PageNodes that BackgroundTabLoadingPolicy has initiated loading,
   // and for which we are waiting for the loading to actually start. This signal
   // will be received from |OnIsLoadingChanged|.
-  std::vector<const PageNode*> page_nodes_load_initiated_;
+  std::vector<raw_ptr<const PageNode, VectorExperimental>>
+      page_nodes_load_initiated_;
 
-  // The set of PageNodes that are currently loading.
-  std::vector<const PageNode*> page_nodes_loading_;
+  // PageNodes that are currently loading, mapped to a boolean indicating
+  // whether this policy was responsible for scheduling the load.
+  std::map<const PageNode*, bool> page_nodes_loading_;
 
   // The number of simultaneous tab loads that are permitted by policy. This
   // is computed based on the number of cores on the machine.
@@ -178,18 +249,21 @@ class BackgroundTabLoadingPolicy : public GraphOwned,
   // Used to overwrite the amount of free memory available on the system.
   size_t free_memory_mb_for_testing_ = 0;
 
-  // The minimum total number of restored tabs to load.
+  // The minimum total number of restored tabs to load, unless overridden in a
+  // test.
   static constexpr uint32_t kMinTabsToLoad = 4;
+  uint32_t min_tabs_to_load_ = kMinTabsToLoad;
 
-  // The maximum total number of restored tabs to load.
+  // The maximum total number of restored tabs to load, unless overridden in a
+  // test.
   static constexpr uint32_t kMaxTabsToLoad = 20;
+  uint32_t max_tabs_to_load_ = kMaxTabsToLoad;
 
   // The minimum amount of memory to keep free.
   static constexpr uint32_t kDesiredAmountOfFreeMemoryMb = 150;
 
   // The maximum time since last use of a tab in order for it to be loaded.
-  static constexpr base::TimeDelta kMaxTimeSinceLastUseToLoad =
-      base::TimeDelta::FromDays(30);
+  static constexpr base::TimeDelta kMaxTimeSinceLastUseToLoad = base::Days(30);
 
   // Lower bound for the maximum number of tabs to load simultaneously.
   static constexpr uint32_t kMinSimultaneousTabLoads = 1;
@@ -206,6 +280,7 @@ class BackgroundTabLoadingPolicy : public GraphOwned,
   // after the policy object is destroyed.
   base::WeakPtrFactory<BackgroundTabLoadingPolicy> weak_factory_{this};
 
+  FRIEND_TEST_ALL_PREFIXES(BackgroundTabLoadingPolicyTest, MaxTabsToRestore);
   FRIEND_TEST_ALL_PREFIXES(BackgroundTabLoadingPolicyTest,
                            ShouldLoad_MaxTabsToRestore);
   FRIEND_TEST_ALL_PREFIXES(BackgroundTabLoadingPolicyTest,
@@ -213,6 +288,22 @@ class BackgroundTabLoadingPolicy : public GraphOwned,
   FRIEND_TEST_ALL_PREFIXES(BackgroundTabLoadingPolicyTest,
                            ShouldLoad_FreeMemory);
   FRIEND_TEST_ALL_PREFIXES(BackgroundTabLoadingPolicyTest, ShouldLoad_OldTab);
+  FRIEND_TEST_ALL_PREFIXES(BackgroundTabLoadingPolicyTest,
+                           ShouldLoad_SiteEngagement);
+  FRIEND_TEST_ALL_PREFIXES(BackgroundTabLoadingPolicyTest,
+                           ScheduleLoadForRestoredTabsWithLoadingStatusChanged);
+  FRIEND_TEST_ALL_PREFIXES(BackgroundTabLoadingPolicySiteEngagementTest,
+                           ShouldLoad_NoBackgroundCommunication);
+  FRIEND_TEST_ALL_PREFIXES(BackgroundTabLoadingPolicySiteEngagementTest,
+                           ShouldLoad_NotificationPermission);
+  FRIEND_TEST_ALL_PREFIXES(BackgroundTabLoadingPolicySiteEngagementTest,
+                           ShouldLoad_UpdatesTitleOrFaviconInBackground);
+  FRIEND_TEST_ALL_PREFIXES(
+      BackgroundTabLoadingPolicyScheduleLoadTest,
+      ScheduleLoadForRestoredTabs_WithoutNotificationPermission);
+  FRIEND_TEST_ALL_PREFIXES(
+      BackgroundTabLoadingPolicyScheduleLoadTest,
+      ScheduleLoadForRestoredTabs_WithNotificationPermission);
   FRIEND_TEST_ALL_PREFIXES(
       ::performance_manager::BackgroundTabLoadingBrowserTest,
       RestoredTabsAreLoadedGradually);

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,10 @@
 #define IOS_WEB_PUBLIC_INIT_WEB_MAIN_H_
 
 #include <memory>
+#include <string>
+#include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "ios/web/public/init/web_main_delegate.h"
 
 namespace web {
@@ -17,20 +19,20 @@ class WebMainRunner;
 struct WebMainParams {
   WebMainParams();
   explicit WebMainParams(WebMainDelegate* delegate);
+
+  WebMainParams(const WebMainParams&) = delete;
+  WebMainParams& operator=(const WebMainParams&) = delete;
+
   ~WebMainParams();
 
   // WebMainParams is moveable.
   WebMainParams(WebMainParams&& other);
   WebMainParams& operator=(WebMainParams&& other);
 
-  WebMainDelegate* delegate;
+  raw_ptr<WebMainDelegate> delegate;
 
-  bool register_exit_manager;
-
-  int argc;
-  const char** argv;
-
-  DISALLOW_COPY_AND_ASSIGN(WebMainParams);
+  bool register_exit_manager = true;
+  std::vector<std::string> args;
 };
 
 // Encapsulates any setup and initialization that is needed by common
@@ -44,6 +46,8 @@ class WebMain {
  public:
   explicit WebMain(WebMainParams params);
   ~WebMain();
+
+  int Startup();
 
  private:
   std::unique_ptr<WebMainRunner> web_main_runner_;

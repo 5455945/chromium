@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -142,3 +142,7 @@ INTERRUPT_REASON(USER_SHUTDOWN, 41)
 // The browser crashed.
 // Internal use only:  resume pending downloads if possible.
 INTERRUPT_REASON(CRASH, 50)
+
+// Local download blocked. For enterprise use; the download will be redirected
+// to cloud storage.
+INTERRUPT_REASON(LOCAL_DOWNLOAD_BLOCKED, 51)

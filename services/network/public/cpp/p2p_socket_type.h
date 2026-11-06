@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,17 +18,16 @@
 namespace network {
 
 enum P2PSocketOption {
-  P2P_SOCKET_OPT_RCVBUF,  // Receive buffer size.
-  P2P_SOCKET_OPT_SNDBUF,  // Send buffer size.
-  P2P_SOCKET_OPT_DSCP,    // DSCP code.
+  P2P_SOCKET_OPT_RCVBUF,    // Receive buffer size.
+  P2P_SOCKET_OPT_SNDBUF,    // Send buffer size.
+  P2P_SOCKET_OPT_DSCP,      // DSCP code.
+  P2P_SOCKET_OPT_RECV_ECN,  // Enable ECN receiving.
   P2P_SOCKET_OPT_MAX
 };
 
 // Type of P2P Socket.
 enum P2PSocketType {
   P2P_SOCKET_UDP,
-  P2P_SOCKET_TCP_SERVER,
-  P2P_SOCKET_STUN_TCP_SERVER,
   P2P_SOCKET_TCP_CLIENT,
   P2P_SOCKET_STUN_TCP_CLIENT,
   P2P_SOCKET_SSLTCP_CLIENT,
@@ -68,7 +67,7 @@ struct P2PSendPacketMetrics {
   int32_t rtc_packet_id = -1;
 
   // The time the packet was sent. Should be set using the webrtc clock
-  // rtc::TimeMillis()
+  // webrtc::TimeMillis()
   int64_t send_time_ms = -1;
 };
 
@@ -88,13 +87,13 @@ struct P2PPortRange {
 struct P2PPacketInfo {
   P2PPacketInfo() {}
   P2PPacketInfo(const net::IPEndPoint& destination,
-                const rtc::PacketOptions& packet_options,
+                const webrtc::AsyncSocketPacketOptions& packet_options,
                 uint64_t packet_id)
       : destination(destination),
         packet_options(packet_options),
         packet_id(packet_id) {}
   net::IPEndPoint destination;
-  rtc::PacketOptions packet_options;
+  webrtc::AsyncSocketPacketOptions packet_options;
   uint64_t packet_id;
 };
 

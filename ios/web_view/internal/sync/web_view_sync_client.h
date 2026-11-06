@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,78 +7,56 @@
 
 #include <memory>
 
-#include "base/macros.h"
-#include "base/memory/weak_ptr.h"
-#include "base/single_thread_task_runner.h"
-#include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
-#include "components/browser_sync/browser_sync_client.h"
-#include "components/browser_sync/profile_sync_components_factory_impl.h"
-#include "components/password_manager/core/browser/password_store.h"
-#include "ios/web_view/internal/web_view_browser_state.h"
+#include "components/browser_sync/sync_engine_factory_impl.h"
+#include "components/sync/service/sync_client.h"
+
+namespace network_time {
+class NetworkTimeTracker;
+}  // namespace network_time
+
+namespace syncer {
+class DeviceInfoSyncService;
+class DataTypeStoreService;
+}  // namespace syncer
 
 namespace ios_web_view {
 
-class WebViewSyncClient : public browser_sync::BrowserSyncClient {
+class WebViewSyncClient : public syncer::SyncClient {
  public:
-  static std::unique_ptr<WebViewSyncClient> Create(
-      WebViewBrowserState* browser_state);
-
   explicit WebViewSyncClient(
-      autofill::AutofillWebDataService* profile_web_data_service,
-      autofill::AutofillWebDataService* account_web_data_service,
-      password_manager::PasswordStore* profile_password_store,
-      password_manager::PasswordStore* account_password_store,
       PrefService* pref_service,
       signin::IdentityManager* identity_manager,
-      syncer::ModelTypeStoreService* model_type_store_service,
+      syncer::DataTypeStoreService* data_type_store_service,
       syncer::DeviceInfoSyncService* device_info_sync_service,
-      invalidation::InvalidationService* invalidation_service,
       syncer::SyncInvalidationsService* sync_invalidations_service);
+
+  WebViewSyncClient(const WebViewSyncClient&) = delete;
+  WebViewSyncClient& operator=(const WebViewSyncClient&) = delete;
+
   ~WebViewSyncClient() override;
 
-  // BrowserSyncClient implementation.
+  // SyncClient implementation.
   PrefService* GetPrefService() override;
   signin::IdentityManager* GetIdentityManager() override;
+  network_time::NetworkTimeTracker* GetNetworkTimeTracker() override;
   base::FilePath GetLocalSyncBackendFolder() override;
-  syncer::ModelTypeStoreService* GetModelTypeStoreService() override;
-  syncer::DeviceInfoSyncService* GetDeviceInfoSyncService() override;
-  bookmarks::BookmarkModel* GetBookmarkModel() override;
-  favicon::FaviconService* GetFaviconService() override;
-  history::HistoryService* GetHistoryService() override;
-  send_tab_to_self::SendTabToSelfSyncService* GetSendTabToSelfSyncService()
-      override;
-  sync_preferences::PrefServiceSyncable* GetPrefServiceSyncable() override;
-  sync_sessions::SessionSyncService* GetSessionSyncService() override;
-  base::RepeatingClosure GetPasswordStateChangedCallback() override;
-  syncer::DataTypeController::TypeVector CreateDataTypeControllers(
-      syncer::SyncService* sync_service) override;
-  invalidation::InvalidationService* GetInvalidationService() override;
   syncer::SyncInvalidationsService* GetSyncInvalidationsService() override;
-  syncer::TrustedVaultClient* GetTrustedVaultClient() override;
-  BookmarkUndoService* GetBookmarkUndoService() override;
+  trusted_vault::TrustedVaultClient* GetTrustedVaultClient() override;
   scoped_refptr<syncer::ExtensionsActivity> GetExtensionsActivity() override;
-  base::WeakPtr<syncer::ModelTypeControllerDelegate>
-  GetControllerDelegateForModelType(syncer::ModelType type) override;
-  syncer::SyncApiComponentFactory* GetSyncApiComponentFactory() override;
-  syncer::SyncTypePreferenceProvider* GetPreferenceProvider() override;
-  void OnLocalSyncTransportDataCleared() override;
+  syncer::SyncEngineFactory* GetSyncEngineFactory() override;
+  bool IsCustomPassphraseAllowed() override;
+  void RegisterTrustedVaultAutoUpgradeSyntheticFieldTrial(
+      const syncer::TrustedVaultAutoUpgradeSyntheticFieldTrialGroup& group)
+      override;
+  bool IsMetricsAndCrashReportingEnabled() override;
 
  private:
-  autofill::AutofillWebDataService* profile_web_data_service_;
-  autofill::AutofillWebDataService* account_web_data_service_;
-  password_manager::PasswordStore* profile_password_store_;
-  password_manager::PasswordStore* account_password_store_;
-  PrefService* pref_service_;
-  signin::IdentityManager* identity_manager_;
-  syncer::ModelTypeStoreService* model_type_store_service_;
-  syncer::DeviceInfoSyncService* device_info_sync_service_;
-  invalidation::InvalidationService* invalidation_service_;
-  syncer::SyncInvalidationsService* sync_invalidations_service_;
+  const raw_ptr<PrefService> pref_service_;
+  const raw_ptr<signin::IdentityManager> identity_manager_;
+  const raw_ptr<syncer::SyncInvalidationsService> sync_invalidations_service_;
 
-  std::unique_ptr<browser_sync::ProfileSyncComponentsFactoryImpl>
-      component_factory_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebViewSyncClient);
+  browser_sync::SyncEngineFactoryImpl engine_factory_;
+  std::unique_ptr<trusted_vault::TrustedVaultClient> trusted_vault_client_;
 };
 
 }  // namespace ios_web_view

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,10 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "media/base/video_frame.h"
@@ -22,8 +23,11 @@
 #include "third_party/blink/renderer/modules/mediastream/mock_media_stream_video_source.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_component.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_source.h"
+#include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
 #include "third_party/blink/renderer/platform/testing/io_task_runner_testing_platform_support.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 using ::testing::_;
 using ::testing::AtLeast;
@@ -35,12 +39,12 @@ namespace blink {
 
 class MediaStreamVideoRendererSinkTest : public testing::Test {
  public:
-  MediaStreamVideoRendererSinkTest()
-      : mock_source_(new MockMediaStreamVideoSource()) {
+  MediaStreamVideoRendererSinkTest() {
+    auto mock_source = std::make_unique<MockMediaStreamVideoSource>();
+    mock_source_ = mock_source.get();
     media_stream_source_ = MakeGarbageCollected<MediaStreamSource>(
-        String::FromUTF8("dummy_source_id"), MediaStreamSource::kTypeVideo,
-        String::FromUTF8("dummy_source_name"), false /* remote */);
-    media_stream_source_->SetPlatformSource(base::WrapUnique(mock_source_));
+        "dummy_source_id", MediaStreamSource::kTypeVideo, "dummy_source_name",
+        false /* remote */, std::move(mock_source));
     WebMediaStreamTrack web_track = MediaStreamVideoTrack::CreateVideoTrack(
         mock_source_, WebPlatformMediaStreamSource::ConstraintsOnceCallback(),
         true);
@@ -48,17 +52,23 @@ class MediaStreamVideoRendererSinkTest : public testing::Test {
     mock_source_->StartMockedSource();
     base::RunLoop().RunUntilIdle();
 
-    media_stream_video_renderer_sink_ = new MediaStreamVideoRendererSink(
-        media_stream_component_,
-        ConvertToBaseRepeatingCallback(CrossThreadBindRepeating(
-            &MediaStreamVideoRendererSinkTest::RepaintCallback,
-            CrossThreadUnretained(this))),
-        Platform::Current()->GetIOTaskRunner(),
-        scheduler::GetSingleThreadTaskRunnerForTesting());
+    media_stream_video_renderer_sink_ =
+        base::MakeRefCounted<MediaStreamVideoRendererSink>(
+            media_stream_component_,
+            ConvertToBaseRepeatingCallback(CrossThreadBindRepeating(
+                &MediaStreamVideoRendererSinkTest::RepaintCallback,
+                CrossThreadUnretained(this))),
+            Platform::Current()->GetIOTaskRunner(),
+            scheduler::GetSingleThreadTaskRunnerForTesting());
     base::RunLoop().RunUntilIdle();
 
     EXPECT_TRUE(IsInStoppedState());
   }
+
+  MediaStreamVideoRendererSinkTest(const MediaStreamVideoRendererSinkTest&) =
+      delete;
+  MediaStreamVideoRendererSinkTest& operator=(
+      const MediaStreamVideoRendererSinkTest&) = delete;
 
   void TearDown() override {
     media_stream_video_renderer_sink_ = nullptr;
@@ -75,17 +85,17 @@ class MediaStreamVideoRendererSinkTest : public testing::Test {
   bool IsInStartedState() const {
     RunIOUntilIdle();
     return media_stream_video_renderer_sink_->GetStateForTesting() ==
-           MediaStreamVideoRendererSink::STARTED;
+           MediaStreamVideoRendererSink::kStarted;
   }
   bool IsInStoppedState() const {
     RunIOUntilIdle();
     return media_stream_video_renderer_sink_->GetStateForTesting() ==
-           MediaStreamVideoRendererSink::STOPPED;
+           MediaStreamVideoRendererSink::kStopped;
   }
   bool IsInPausedState() const {
     RunIOUntilIdle();
     return media_stream_video_renderer_sink_->GetStateForTesting() ==
-           MediaStreamVideoRendererSink::PAUSED;
+           MediaStreamVideoRendererSink::kPaused;
   }
 
   void OnVideoFrame(scoped_refptr<media::VideoFrame> frame) {
@@ -95,6 +105,7 @@ class MediaStreamVideoRendererSinkTest : public testing::Test {
     RunIOUntilIdle();
   }
 
+  test::TaskEnvironment task_environment_;
   scoped_refptr<MediaStreamVideoRendererSink> media_stream_video_renderer_sink_;
 
  protected:
@@ -104,19 +115,18 @@ class MediaStreamVideoRendererSinkTest : public testing::Test {
 
  private:
   void RunIOUntilIdle() const {
-    // |media_stream_component_| uses IO thread to send frames to sinks. Make
-    // sure that tasks on IO thread are completed before moving on.
+    // |media_stream_component_| uses video task runner to send frames to sinks.
+    // Make sure that tasks on video task runner are completed before moving on.
     base::RunLoop run_loop;
-    Platform::Current()->GetIOTaskRunner()->PostTaskAndReply(
-        FROM_HERE, base::BindOnce([] {}), run_loop.QuitClosure());
+    PostCrossThreadTaskAndReply(*Platform::Current()->GetIOTaskRunner(),
+                                FROM_HERE, CrossThreadBindOnce([] {}),
+                                CrossThreadOnceClosure(run_loop.QuitClosure()));
     run_loop.Run();
     base::RunLoop().RunUntilIdle();
   }
 
   Persistent<MediaStreamSource> media_stream_source_;
-  MockMediaStreamVideoSource* mock_source_;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaStreamVideoRendererSinkTest);
+  raw_ptr<MockMediaStreamVideoSource, DanglingUntriaged> mock_source_;
 };
 
 // Checks that the initialization-destruction sequence works fine.
@@ -154,14 +164,15 @@ class MediaStreamVideoRendererSinkTransparencyTest
     : public MediaStreamVideoRendererSinkTest {
  public:
   MediaStreamVideoRendererSinkTransparencyTest() {
-    media_stream_video_renderer_sink_ = new MediaStreamVideoRendererSink(
-        media_stream_component_,
-        ConvertToBaseRepeatingCallback(CrossThreadBindRepeating(
-            &MediaStreamVideoRendererSinkTransparencyTest::
-                VerifyTransparentFrame,
-            CrossThreadUnretained(this))),
-        Platform::Current()->GetIOTaskRunner(),
-        scheduler::GetSingleThreadTaskRunnerForTesting());
+    media_stream_video_renderer_sink_ =
+        base::MakeRefCounted<MediaStreamVideoRendererSink>(
+            media_stream_component_,
+            ConvertToBaseRepeatingCallback(CrossThreadBindRepeating(
+                &MediaStreamVideoRendererSinkTransparencyTest::
+                    VerifyTransparentFrame,
+                CrossThreadUnretained(this))),
+            Platform::Current()->GetIOTaskRunner(),
+            scheduler::GetSingleThreadTaskRunnerForTesting());
   }
 
   void VerifyTransparentFrame(scoped_refptr<media::VideoFrame> frame) {

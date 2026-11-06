@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <memory>
 
+#include "third_party/blink/renderer/platform/geometry/path_builder.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 
 namespace blink {
@@ -83,7 +84,7 @@ RasterShapeIntervals::ComputeShapeMarginIntervals(int shape_margin) const {
                                              std::max(shape_margin, Offset()));
   MarginIntervalGenerator margin_interval_generator(shape_margin);
 
-  for (int y = Bounds().Y(); y < Bounds().MaxY(); ++y) {
+  for (int y = Bounds().y(); y < Bounds().bottom(); ++y) {
     const IntShapeInterval& interval_at_y = IntervalAt(y);
     if (interval_at_y.IsEmpty())
       continue;
@@ -93,7 +94,7 @@ RasterShapeIntervals::ComputeShapeMarginIntervals(int shape_margin) const {
     int margin_y1 = std::min(MaxY(), y + shape_margin + 1);
 
     for (int margin_y = y - 1; margin_y >= margin_y0; --margin_y) {
-      if (margin_y > Bounds().Y() &&
+      if (margin_y > Bounds().y() &&
           IntervalAt(margin_y).Contains(interval_at_y))
         break;
       result->IntervalAt(margin_y).Unite(
@@ -103,7 +104,7 @@ RasterShapeIntervals::ComputeShapeMarginIntervals(int shape_margin) const {
     result->IntervalAt(y).Unite(margin_interval_generator.IntervalAt(y));
 
     for (int margin_y = y + 1; margin_y < margin_y1; ++margin_y) {
-      if (margin_y < Bounds().MaxY() &&
+      if (margin_y < Bounds().bottom() &&
           IntervalAt(margin_y).Contains(interval_at_y))
         break;
       result->IntervalAt(margin_y).Unite(
@@ -116,18 +117,20 @@ RasterShapeIntervals::ComputeShapeMarginIntervals(int shape_margin) const {
 }
 
 void RasterShapeIntervals::InitializeBounds() {
-  bounds_ = IntRect();
+  bounds_ = gfx::Rect();
   for (int y = MinY(); y < MaxY(); ++y) {
     const IntShapeInterval& interval_at_y = IntervalAt(y);
     if (interval_at_y.IsEmpty())
       continue;
-    bounds_.Unite(IntRect(interval_at_y.X1(), y, interval_at_y.Width(), 1));
+    bounds_.Union(gfx::Rect(interval_at_y.X1(), y, interval_at_y.Width(), 1));
   }
 }
 
-void RasterShapeIntervals::BuildBoundsPath(Path& path) const {
-  int max_y = Bounds().MaxY();
-  for (int y = Bounds().Y(); y < max_y; y++) {
+Path RasterShapeIntervals::BuildBoundsPath() const {
+  PathBuilder builder;
+
+  int max_y = Bounds().bottom();
+  for (int y = Bounds().y(); y < max_y; y++) {
     if (IntervalAt(y).IsEmpty())
       continue;
 
@@ -137,9 +140,12 @@ void RasterShapeIntervals::BuildBoundsPath(Path& path) const {
       if (IntervalAt(end_y).IsEmpty() || IntervalAt(end_y) != extent)
         break;
     }
-    path.AddRect(FloatRect(extent.X1(), y, extent.Width(), end_y - y));
+    builder.AddRect(gfx::PointF(extent.X1(), y),
+                    gfx::PointF(extent.X2(), end_y));
     y = end_y - 1;
   }
+
+  return builder.Finalize();
 }
 
 const RasterShapeIntervals& RasterShape::MarginIntervals() const {
@@ -147,9 +153,9 @@ const RasterShapeIntervals& RasterShape::MarginIntervals() const {
   if (!ShapeMargin())
     return *intervals_;
 
-  int shape_margin_int = clampTo<int>(ceil(ShapeMargin()), 0);
+  int shape_margin_int = ClampTo<int>(ceil(ShapeMargin()), 0);
   int max_shape_margin_int =
-      std::max(margin_rect_size_.Width(), margin_rect_size_.Height()) *
+      std::max(margin_rect_size_.width(), margin_rect_size_.height()) *
       sqrtf(2);
   if (!margin_intervals_)
     margin_intervals_ = intervals_->ComputeShapeMarginIntervals(
@@ -167,11 +173,11 @@ LineSegment RasterShape::GetExcludedInterval(LayoutUnit logical_top,
   int y1 = logical_top.ToInt();
   int y2 = (logical_top + logical_height).ToInt();
   DCHECK_GE(y2, y1);
-  if (y2 < intervals.Bounds().Y() || y1 >= intervals.Bounds().MaxY())
+  if (y2 < intervals.Bounds().y() || y1 >= intervals.Bounds().bottom())
     return LineSegment();
 
-  y1 = std::max(y1, intervals.Bounds().Y());
-  y2 = std::min(y2, intervals.Bounds().MaxY());
+  y1 = std::max(y1, intervals.Bounds().y());
+  y2 = std::min(y2, intervals.Bounds().bottom());
   IntShapeInterval excluded_interval;
 
   if (y1 == y2) {

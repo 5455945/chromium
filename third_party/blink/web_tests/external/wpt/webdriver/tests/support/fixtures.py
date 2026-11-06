@@ -2,100 +2,64 @@ import copy
 import json
 import os
 
-import asyncio
 import pytest
 import webdriver
 
-from urllib.parse import urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 
-from tests.support import defaults
-from tests.support.helpers import cleanup_session, deep_update
+from tests.support.helpers import deep_update, is_wayland
+from tests.support.web_extension import EXTENSION_DATA
 from tests.support.inline import build_inline
 from tests.support.http_request import HTTPRequest
-from tests.support.sync import Poll
+from tests.support.keys import Keys
 
-
+# The webdriver session can outlive a pytest session
 _current_session = None
-_custom_session = False
+
+
+def get_current_session():
+    return _current_session
+
+
+def set_current_session(session):
+    global _current_session
+    _current_session = session
 
 
 def pytest_configure(config):
     # register the capabilities marker
-    config.addinivalue_line("markers",
-        "capabilities: mark test to use capabilities")
+    config.addinivalue_line(
+        "markers",
+        "capabilities: mark test to use capabilities"
+    )
+
+
+def pytest_sessionfinish():
+    # Cleanup at the end of a test run
+    if get_current_session() is not None:
+        get_current_session().end()
+        set_current_session(None)
 
 
 @pytest.fixture
-def capabilities():
+def default_capabilities():
     """Default capabilities to use for a new WebDriver session."""
     return {}
 
 
-def pytest_generate_tests(metafunc):
-    if "capabilities" in metafunc.fixturenames:
-        marker = metafunc.definition.get_closest_marker(name="capabilities")
-        if marker:
-            metafunc.parametrize("capabilities", marker.args, ids=None)
-
-
-# Ensure that the event loop is restarted once per session rather than the default  of once per test
-# if we don't do this, tests will try to reuse a closed event loop and fail with an error that the "future
-# belongs to a different loop"
-@pytest.fixture(scope="session")
-def event_loop():
-    """Change event_loop fixture to session level."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
-
-
 @pytest.fixture
-def add_event_listeners(session):
-    """Register listeners for tracked events on element."""
-    def add_event_listeners(element, tracked_events):
-        element.session.execute_script("""
-            let element = arguments[0];
-            let trackedEvents = arguments[1];
+def capabilities(request, default_capabilities):
+    """Merges default capabilities with any test-specific capabilities from a marker."""
+    marker = request.node.get_closest_marker("capabilities")
+    if marker and marker.args:
+        # Ensure the first positional argument is a dictionary
+        assert isinstance(
+            marker.args[0], dict), "capabilities marker must use a dictionary"
+        caps = copy.deepcopy(default_capabilities)
+        deep_update(caps, marker.args[0])
+        return caps
 
-            if (!("events" in window)) {
-              window.events = [];
-            }
-
-            for (var i = 0; i < trackedEvents.length; i++) {
-              element.addEventListener(trackedEvents[i], function (event) {
-                window.events.push(event.type);
-              });
-            }
-            """, args=(element, tracked_events))
-    return add_event_listeners
-
-
-@pytest.fixture
-def create_cookie(session, url):
-    """Create a cookie"""
-    def create_cookie(name, value, **kwargs):
-        if kwargs.get("path", None) is not None:
-            session.url = url(kwargs["path"])
-
-        session.set_cookie(name, value, **kwargs)
-        return session.cookies(name)
-
-    return create_cookie
-
-
-@pytest.fixture
-def create_frame(session):
-    """Create an `iframe` element in the current browsing context and insert it
-    into the document. Return a reference to the newly-created element."""
-    def create_frame():
-        append = """
-            var frame = document.createElement('iframe');
-            document.body.appendChild(frame);
-            return frame;
-        """
-        return session.execute_script(append)
-
-    return create_frame
+    return default_capabilities  # Use defaults if no marker is present
 
 
 @pytest.fixture
@@ -103,129 +67,73 @@ def http(configuration):
     return HTTPRequest(configuration["host"], configuration["port"])
 
 
-@pytest.fixture
-def server_config():
-    with open(os.environ.get("WD_SERVER_CONFIG_FILE"), "r") as f:
+@pytest.fixture(scope="session")
+def full_configuration():
+    """Get test configuration information. Keys are:
+
+    host - WebDriver server host.
+    port -  WebDriver server port.
+    capabilities - Capabilities passed when creating the WebDriver session
+    timeout_multiplier - Multiplier for timeout values
+    webdriver - Dict with keys `binary`: path to webdriver binary, and
+                `args`: Additional command line arguments passed to the webdriver
+                binary. This doesn't include all the required arguments e.g. the
+                port.
+    wptserve - Configuration of the wptserve servers."""
+
+    with open(os.environ.get("WDSPEC_CONFIG_FILE"), "r") as f:
         return json.load(f)
 
 
 @pytest.fixture(scope="session")
-def configuration():
-    host = os.environ.get("WD_HOST", defaults.DRIVER_HOST)
-    port = int(os.environ.get("WD_PORT", str(defaults.DRIVER_PORT)))
-    capabilities = json.loads(os.environ.get("WD_CAPABILITIES", "{}"))
-
-    return {
-        "host": host,
-        "port": port,
-        "capabilities": capabilities
-    }
+def server_config(full_configuration):
+    return full_configuration["wptserve"]
 
 
-async def reset_current_session_if_necessary(caps, request_bidi):
-    global _current_session
+@pytest.fixture(scope="session")
+def configuration(full_configuration):
+    """Configuation minus server config.
 
-    # If there is a session with different capabilities active or the current session
-    # is of different type than the one we would like to create, end it now.
-    if _current_session is not None:
-        is_bidi = isinstance(_current_session, webdriver.BidiSession)
-        if is_bidi != request_bidi or not _current_session.match(caps):
+    This makes logging easier to read."""
+
+    config = full_configuration.copy()
+    del config["wptserve"]
+
+    return config
+
+
+async def reset_current_session_if_necessary(caps):
+    # If there is a session with different requested capabilities active than
+    # the one we would like to create, end it now.
+    session = get_current_session()
+    if session is not None:
+        if not session.match(caps):
+            is_bidi = isinstance(session, webdriver.BidiSession)
             if is_bidi:
-                await _current_session.end()
+                await session.end()
             else:
-                _current_session.end()
-            _current_session = None
-
-
-@pytest.fixture(scope="function")
-async def session(capabilities, configuration, request):
-    """Create and start a session for a test that does not itself test session creation.
-
-    By default the session will stay open after each test, but we always try to start a
-    new one and assume that if that fails there is already a valid session. This makes it
-    possible to recover from some errors that might leave the session in a bad state, but
-    does not demand that we start a new session per test."""
-    global _current_session
-
-    # Update configuration capabilities with custom ones from the
-    # capabilities fixture, which can be set by tests
-    caps = copy.deepcopy(configuration["capabilities"])
-    deep_update(caps, capabilities)
-    caps = {"alwaysMatch": caps}
-
-    await reset_current_session_if_necessary(caps, False)
-
-    if _current_session is None:
-        _current_session = webdriver.Session(
-            configuration["host"],
-            configuration["port"],
-            capabilities=caps)
-    try:
-        _current_session.start()
-
-    except webdriver.error.SessionNotCreatedException:
-        if not _current_session.session_id:
-            raise
-
-    # Enforce a fixed default window size and position
-    _current_session.window.size = defaults.WINDOW_SIZE
-    _current_session.window.position = defaults.WINDOW_POSITION
-
-    yield _current_session
-
-    cleanup_session(_current_session)
-
-
-@pytest.fixture(scope="function")
-async def bidi_session(capabilities, configuration, request):
-    """Create and start a bidi session for a test that does not itself test
-    bidi session creation.
-    By default the session will stay open after each test, but we always try to start a
-    new one and assume that if that fails there is already a valid session. This makes it
-    possible to recover from some errors that might leave the session in a bad state, but
-    does not demand that we start a new session per test."""
-    global _current_session
-
-    # Update configuration capabilities with custom ones from the
-    # capabilities fixture, which can be set by tests
-    caps = copy.deepcopy(configuration["capabilities"])
-    deep_update(caps, capabilities)
-    caps = {"alwaysMatch": caps}
-
-    await reset_current_session_if_necessary(caps, True)
-
-    if _current_session is None:
-        _current_session = webdriver.Session(
-            configuration["host"],
-            configuration["port"],
-            capabilities=caps,
-            enable_bidi=True)
-
-    try:
-        _current_session.start()
-        await _current_session.bidi_session.start()
-    except webdriver.error.SessionNotCreatedException:
-        if not _current_session.session_id:
-            raise
-
-    # Enforce a fixed default window size and position
-    _current_session.window.size = defaults.WINDOW_SIZE
-    _current_session.window.position = defaults.WINDOW_POSITION
-
-    yield _current_session.bidi_session
-
-    await _current_session.bidi_session.end()
-    cleanup_session(_current_session)
+                session.end()
+            set_current_session(None)
 
 
 @pytest.fixture(scope="function")
 def current_session():
-    return _current_session
+    return get_current_session()
+
+
+@pytest.fixture
+def is_wayland_headful(configuration):
+    return is_wayland() and not configuration.get("headless", False)
+
+
+@pytest.fixture
+def target_platform(configuration):
+    return configuration["target_platform"]
 
 
 @pytest.fixture
 def url(server_config):
-    def url(path, protocol="http", domain="", subdomain="", query="", fragment=""):
+    def url(path, protocol="https", domain="", subdomain="", query="", fragment=""):
         domain = server_config["domains"][domain][subdomain]
         port = server_config["ports"][protocol][0]
         host = "{0}:{1}".format(domain, port)
@@ -235,93 +143,16 @@ def url(server_config):
 
 
 @pytest.fixture
-def create_dialog(session):
-    """Create a dialog (one of "alert", "prompt", or "confirm") and provide a
-    function to validate that the dialog has been "handled" (either accepted or
-    dismissed) by returning some value."""
-
-    def create_dialog(dialog_type, text=None):
-        assert dialog_type in ("alert", "confirm", "prompt"), (
-            "Invalid dialog type: '%s'" % dialog_type)
-
-        if text is None:
-            text = ""
-
-        assert isinstance(text, str), "`text` parameter must be a string"
-
-        # Script completes itself when the user prompt has been opened.
-        # For prompt() dialogs, add a value for the 'default' argument,
-        # as some user agents (IE, for example) do not produce consistent
-        # values for the default.
-        session.execute_async_script("""
-            let dialog_type = arguments[0];
-            let text = arguments[1];
-
-            setTimeout(function() {
-              if (dialog_type == 'prompt') {
-                window.dialog_return_value = window[dialog_type](text, '');
-              } else {
-                window.dialog_return_value = window[dialog_type](text);
-              }
-            }, 0);
-            """, args=(dialog_type, text))
-
-        wait = Poll(
-            session,
-            timeout=15,
-            ignored_exceptions=webdriver.NoSuchAlertException,
-            message="No user prompt with text '{}' detected".format(text))
-        wait.until(lambda s: s.alert.text == text)
-
-    return create_dialog
-
-
-@pytest.fixture
-def closed_frame(session, url):
-    original_handle = session.window_handle
-    new_handle = session.new_window()
-
-    session.window_handle = new_handle
-
-    session.url = url("/webdriver/tests/support/html/frames.html")
-
-    subframe = session.find.css("#sub-frame", all=False)
-    session.switch_frame(subframe)
-
-    deleteframe = session.find.css("#delete-frame", all=False)
-    session.switch_frame(deleteframe)
-
-    button = session.find.css("#remove-parent", all=False)
-    button.click()
-
-    yield
-
-    session.window.close()
-    assert new_handle not in session.handles, "Unable to close window {}".format(new_handle)
-
-    session.window_handle = original_handle
-
-
-@pytest.fixture
-def closed_window(session, inline):
-    original_handle = session.window_handle
-    new_handle = session.new_window()
-
-    session.window_handle = new_handle
-    session.url = inline("<input id='a' value='b'>")
-    element = session.find.css("input", all=False)
-
-    session.window.close()
-    assert new_handle not in session.handles, "Unable to close window {}".format(new_handle)
-
-    yield (original_handle, element)
-
-    session.window_handle = original_handle
+def modifier_key(current_session):
+    if current_session.capabilities["platformName"] == "mac":
+        return Keys.META
+    else:
+        return Keys.CONTROL
 
 
 @pytest.fixture
 def inline(url):
-    """Takes a source extract and produces well-formed documents.
+    """Take a source extract and produces well-formed documents.
 
     Based on the desired document type, the extract is embedded with
     predefined boilerplate in order to produce well-formed documents.
@@ -348,9 +179,231 @@ def inline(url):
 
 
 @pytest.fixture
+def extension_data(current_session):
+    browser_name = current_session.capabilities["browserName"]
+
+    return EXTENSION_DATA[browser_name]
+
+
+@pytest.fixture
 def iframe(inline):
-    """Inlines document extract as the source document of an <iframe>."""
+    """Inline document extract as the source document of an <iframe>."""
     def iframe(src, **kwargs):
         return "<iframe src='{}'></iframe>".format(inline(src, **kwargs))
 
     return iframe
+
+
+@pytest.fixture
+def get_actions_origin_page(inline):
+    """Create a test page for action origin tests, recording mouse coordinates
+    automatically on window.coords."""
+
+    def get_actions_origin_page(inner_style, outer_style=""):
+        return inline(
+            f"""
+          <meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1">
+          <div id="outer" style="{outer_style}"
+               onmousemove="window.coords = {{x: event.clientX, y: event.clientY}}">
+            <div id="inner" style="{inner_style}"></div>
+          </div>
+        """
+        )
+
+    return get_actions_origin_page
+
+
+@pytest.fixture
+def get_test_page(iframe, inline):
+    def get_test_page(
+        as_frame=False,
+        frame_doc=None,
+        shadow_doc=None,
+        nested_shadow_dom=False,
+        shadow_root_mode="open",
+        **kwargs
+    ):
+        if frame_doc is None:
+            frame_doc = """<div id="in-frame"><input type="checkbox"/></div>"""
+
+        if shadow_doc is None:
+            shadow_doc = """<div id="in-shadow-dom"><input type="checkbox"/></div>"""
+
+        definition_inner_shadow_dom = ""
+        if nested_shadow_dom:
+            definition_inner_shadow_dom = f"""
+                customElements.define('inner-custom-element',
+                    class extends HTMLElement {{
+                        constructor() {{
+                            super();
+                            this.attachShadow({{mode: "{shadow_root_mode}"}}).innerHTML = `
+                                {shadow_doc}
+                            `;
+                        }}
+                    }}
+                );
+            """
+            shadow_doc = """
+                <style>
+                    inner-custom-element {
+                        display:block; width:20px; height:20px;
+                    }
+                </style>
+                <div id="in-nested-shadow-dom">
+                    <inner-custom-element></inner-custom-element>
+                </div>
+                """
+
+        page_data = f"""
+            <!-- This is used for tests which check the event position synthesized via
+                TestDriver. Therefore, if the page is initially scaled to non-100%,
+                TestDriver needs to floor the specified position so that the event may be
+                fired at different position. Thus, we need to fix the scale here. -->
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+
+            <style>
+                custom-element {{
+                    display:block; width:20px; height:20px;
+                }}
+            </style>
+            <div id="with-children"><p><span></span></p><br/></div>
+            <div id="with-text-node">Lorem</div>
+            <div id="with-comment"><!-- Comment --></div>
+
+            <input id="button" type="button"/>
+            <input id="checkbox" type="checkbox"/>
+            <input id="file" type="file"/>
+            <input id="hidden" type="hidden"/>
+            <input id="text" type="text"/>
+
+            {iframe(frame_doc, **kwargs)}
+
+            <img />
+            <svg></svg>
+
+            <custom-element id="custom-element"></custom-element>
+            <script>
+                var svg = document.querySelector("svg");
+                svg.setAttributeNS("http://www.w3.org/2000/svg", "svg:foo", "bar");
+
+                customElements.define("custom-element",
+                    class extends HTMLElement {{
+                        constructor() {{
+                            super();
+                            const shadowRoot = this.attachShadow({{mode: "{shadow_root_mode}"}});
+                            shadowRoot.innerHTML = `{shadow_doc}`;
+
+                            // Save shadow root on window to access it in case of `closed` mode.
+                            window._shadowRoot = shadowRoot;
+                        }}
+                    }}
+                );
+                {definition_inner_shadow_dom}
+            </script>"""
+
+        if as_frame:
+            iframe_data = iframe(page_data, **kwargs)
+            return inline(iframe_data, **kwargs)
+        else:
+            return inline(page_data, **kwargs)
+
+    return get_test_page
+
+
+@pytest.fixture
+def test_origin(url):
+    return url("")
+
+
+@pytest.fixture
+def test_alt_origin(url):
+    return url("", domain="alt")
+
+
+@pytest.fixture
+def test_page(inline):
+    return inline("<div>foo</div>")
+
+
+@pytest.fixture
+def test_page2(inline):
+    return inline("<div>bar</div>")
+
+
+@pytest.fixture
+def test_page_cross_origin(inline):
+    return inline("<div>bar</div>", domain="alt")
+
+
+@pytest.fixture
+def test_page_multiple_frames(inline, test_page, test_page2):
+    return inline(
+        f"<iframe src='{test_page}'></iframe><iframe src='{test_page2}'></iframe>"
+    )
+
+
+@pytest.fixture
+def test_page_nested_frames(inline, test_page_same_origin_frame):
+    return inline(f"<iframe src='{test_page_same_origin_frame}'></iframe>")
+
+
+@pytest.fixture
+def test_page_cross_origin_frame(inline, test_page_cross_origin):
+    return inline(f"<iframe src='{test_page_cross_origin}'></iframe>")
+
+
+@pytest.fixture
+def test_page_same_origin_frame(inline, test_page):
+    return inline(f"<iframe src='{test_page}'></iframe>")
+
+
+@pytest.fixture
+def test_actions_wheel_page(url):
+    def _test_actions_wheel_page(events=None, **kwargs):
+        """Build the URL for the wheel actions test page.
+
+        :param events: Optional list of event types ("wheel", "scroll",
+            "scrollend") to register listeners for. Defaults to all of them.
+        """
+        base = "/webdriver/tests/support/html/wheel/test_actions.html"
+
+        if "iframe_domain" in kwargs:
+            domain = kwargs.pop("iframe_domain")
+            origin = urlsplit(url("", domain=domain))
+            kwargs["iframe_origin"] = f"{origin.scheme}://{origin.netloc}"
+
+        if events is not None:
+            kwargs["events"] = ",".join(events)
+
+        params = "&".join(f"{k}={v}" for k, v in kwargs.items())
+
+        return url(f"{base}?{params}" if params else base)
+
+    return _test_actions_wheel_page
+
+
+@pytest.fixture
+def test_page_with_pdf_js(inline):
+    """Prepare an url to load a PDF document in the browser using pdf.js"""
+    def test_page_with_pdf_js(encoded_pdf_data):
+        return inline("""
+<!doctype html>
+<script src="/_pdf_js/pdf.js"></script>
+<canvas></canvas>
+<script>
+async function getText() {
+  const pages = [];
+  const loadingTask = pdfjsLib.getDocument({data: atob("%s")});
+  const pdf = await loadingTask.promise;
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+    const page = await pdf.getPage(pageNumber);
+    const textContent = await page.getTextContent();
+    const text = textContent.items.map(x => x.str).join("");
+    pages.push(text);
+  }
+  return pages;
+}
+</script>
+""" % encoded_pdf_data)
+
+    return test_page_with_pdf_js

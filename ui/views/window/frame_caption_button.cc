@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,29 @@
 
 #include <memory>
 #include <utility>
+#include <variant>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "cc/paint/paint_flags.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/color/color_id.h"
+#include "ui/color/color_variant.h"
 #include "ui/gfx/animation/slide_animation.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/geometry/rrect_f.h"
 #include "ui/gfx/paint_vector_icon.h"
-#include "ui/gfx/rrect_f.h"
 #include "ui/views/animation/flood_fill_ink_drop_ripple.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/animation/ink_drop_highlight.h"
 #include "ui/views/animation/ink_drop_impl.h"
 #include "ui/views/animation/ink_drop_ripple.h"
+#include "ui/views/controls/button/button.h"
 #include "ui/views/controls/highlight_path_generator.h"
+#include "ui/views/property_effects.h"
 #include "ui/views/window/hit_test_utils.h"
 
 namespace views {
@@ -52,7 +59,7 @@ class FrameCaptionButton::HighlightPathGenerator
   ~HighlightPathGenerator() override = default;
 
   // views::HighlightPathGenerator:
-  absl::optional<gfx::RRectF> GetRoundRect(const gfx::RectF& rect) override {
+  std::optional<gfx::RRectF> GetRoundRect(const gfx::RectF& rect) override {
     gfx::Rect bounds = gfx::ToRoundedRect(rect);
     bounds.Inset(frame_caption_button_->GetInkdropInsets(bounds.size()));
     return gfx::RRectF(gfx::RectF(bounds),
@@ -60,7 +67,7 @@ class FrameCaptionButton::HighlightPathGenerator
   }
 
  private:
-  FrameCaptionButton* const frame_caption_button_;
+  const raw_ptr<FrameCaptionButton> frame_caption_button_;
 };
 
 FrameCaptionButton::FrameCaptionButton(PressedCallback callback,
@@ -79,13 +86,13 @@ FrameCaptionButton::FrameCaptionButton(PressedCallback callback,
   SetHasInkDropActionOnClick(true);
   InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::ON);
   InkDrop::Get(this)->SetVisibleOpacity(kInkDropVisibleOpacity);
-  UpdateInkDropBaseColor();
   InkDrop::UseInkDropWithoutAutoHighlight(InkDrop::Get(this),
                                           /*highlight_on_hover=*/false);
   InkDrop::Get(this)->SetCreateRippleCallback(base::BindRepeating(
       [](FrameCaptionButton* host) -> std::unique_ptr<views::InkDropRipple> {
         return std::make_unique<views::FloodFillInkDropRipple>(
-            host->size(), host->GetInkdropInsets(host->size()),
+            InkDrop::Get(host), host->size(),
+            host->GetInkdropInsets(host->size()),
             InkDrop::Get(host)->GetInkDropCenterBasedOnLastEvent(),
             InkDrop::Get(host)->GetBaseColor(),
             InkDrop::Get(host)->GetVisibleOpacity());
@@ -127,9 +134,17 @@ float FrameCaptionButton::GetInactiveButtonColorAlphaRatio() {
 
 void FrameCaptionButton::SetImage(CaptionButtonIcon icon,
                                   Animate animate,
-                                  const gfx::VectorIcon& icon_definition) {
+                                  const gfx::VectorIcon& icon_definition,
+                                  std::optional<int> icon_size) {
+  // If the button is not yet in a widget, OnThemeChanged() will call back
+  // here once it is, updating the color as needed.
+  const SkColor icon_color = GetIconColor();
+
   gfx::ImageSkia new_icon_image =
-      gfx::CreateVectorIcon(icon_definition, GetButtonColor(background_color_));
+      icon_size.has_value()
+          ? gfx::CreateVectorIcon(icon_definition, icon_size.value(),
+                                  icon_color)
+          : gfx::CreateVectorIcon(icon_definition, icon_color);
 
   // The early return is dependent on |animate| because callers use SetImage()
   // with Animate::kNo to progress the crossfade animation to the end.
@@ -139,30 +154,33 @@ void FrameCaptionButton::SetImage(CaptionButtonIcon icon,
     return;
   }
 
-  if (animate == Animate::kYes)
+  if (animate == Animate::kYes) {
     crossfade_icon_image_ = icon_image_;
+  }
 
   icon_ = icon;
   icon_definition_ = &icon_definition;
   icon_image_ = new_icon_image;
+  icon_size_ = icon_size;
 
   if (animate == Animate::kYes) {
     swap_images_animation_->Reset(0);
-    swap_images_animation_->SetSlideDuration(
-        base::TimeDelta::FromMilliseconds(200));
+    swap_images_animation_->SetSlideDuration(base::Milliseconds(200));
     swap_images_animation_->Show();
   } else {
     swap_images_animation_->Reset(1);
   }
 
-  SchedulePaint();
+  if (GetWidget()) {
+    SchedulePaint();
+  }
 }
 
 bool FrameCaptionButton::IsAnimatingImageSwap() const {
   return swap_images_animation_->is_animating();
 }
 
-void FrameCaptionButton::SetAlpha(int alpha) {
+void FrameCaptionButton::SetAlpha(SkAlpha alpha) {
   if (alpha_ != alpha) {
     alpha_ = alpha;
     SchedulePaint();
@@ -173,8 +191,8 @@ void FrameCaptionButton::OnGestureEvent(ui::GestureEvent* event) {
   // Button does not become pressed when the user drags off and then back
   // onto the button. Make FrameCaptionButton pressed in this case because this
   // behavior is more consistent with AlternateFrameSizeButton.
-  if (event->type() == ui::ET_GESTURE_SCROLL_BEGIN ||
-      event->type() == ui::ET_GESTURE_SCROLL_UPDATE) {
+  if (event->type() == ui::EventType::kGestureScrollBegin ||
+      event->type() == ui::EventType::kGestureScrollUpdate) {
     if (HitTestPoint(event->location())) {
       SetState(STATE_PRESSED);
       RequestFocus();
@@ -182,7 +200,7 @@ void FrameCaptionButton::OnGestureEvent(ui::GestureEvent* event) {
     } else {
       SetState(STATE_NORMAL);
     }
-  } else if (event->type() == ui::ET_GESTURE_SCROLL_END) {
+  } else if (event->type() == ui::EventType::kGestureScrollEnd) {
     if (HitTestPoint(event->location())) {
       SetState(STATE_HOVERED);
       NotifyClick(*event);
@@ -190,8 +208,9 @@ void FrameCaptionButton::OnGestureEvent(ui::GestureEvent* event) {
     }
   }
 
-  if (!event->handled())
+  if (!event->handled()) {
     Button::OnGestureEvent(event);
+  }
 }
 
 views::PaintInfo::ScaleType FrameCaptionButton::GetPaintScaleType() const {
@@ -199,27 +218,45 @@ views::PaintInfo::ScaleType FrameCaptionButton::GetPaintScaleType() const {
 }
 
 void FrameCaptionButton::SetBackgroundColor(SkColor background_color) {
-  if (background_color_ == background_color)
+  if (std::holds_alternative<BackgroundColor>(color_) &&
+      std::get<BackgroundColor>(color_) == background_color) {
     return;
+  }
 
-  background_color_ = background_color;
-  // Refresh the icon since the color may have changed.
-  if (icon_definition_)
-    SetImage(icon_, Animate::kNo, *icon_definition_);
-  UpdateInkDropBaseColor();
-
-  OnPropertyChanged(&background_color_, kPropertyEffectsPaint);
+  color_ = background_color;
+  MaybeRefreshIconAndInkdropBaseColor();
 }
 
 SkColor FrameCaptionButton::GetBackgroundColor() const {
-  return background_color_;
+  return std::get<BackgroundColor>(color_);
+}
+
+void FrameCaptionButton::SetIconColor(ui::ColorVariant icon_color) {
+  if (std::holds_alternative<ui::ColorVariant>(color_) &&
+      std::get<ui::ColorVariant>(color_) == icon_color) {
+    return;
+  }
+
+  color_ = icon_color;
+  MaybeRefreshIconAndInkdropBaseColor();
+}
+
+SkColor FrameCaptionButton::GetIconColor() const {
+  if (std::holds_alternative<BackgroundColor>(color_)) {
+    return GetButtonColor(std::get<BackgroundColor>(color_));
+  }
+  const ui::ColorVariant& icon_color = std::get<ui::ColorVariant>(color_);
+  if (icon_color.IsLogical() && !GetColorProvider()) {
+    return gfx::kPlaceholderColor;
+  }
+  return icon_color.ResolveToSkColor(GetColorProvider());
 }
 
 void FrameCaptionButton::SetInkDropCornerRadius(int ink_drop_corner_radius) {
   ink_drop_corner_radius_ = ink_drop_corner_radius;
   // Changes to |ink_drop_corner_radius| will affect the ink drop. Therefore
   // this effect is handled by the ink drop.
-  OnPropertyChanged(&ink_drop_corner_radius_, kPropertyEffectsNone);
+  OnPropertyChanged(&ink_drop_corner_radius_, PropertyEffects::kNone);
 }
 
 int FrameCaptionButton::GetInkDropCornerRadius() const {
@@ -229,14 +266,15 @@ int FrameCaptionButton::GetInkDropCornerRadius() const {
 base::CallbackListSubscription
 FrameCaptionButton::AddBackgroundColorChangedCallback(
     PropertyChangedCallback callback) {
-  return AddPropertyChangedCallback(&background_color_, callback);
+  return AddPropertyChangedCallback(&color_, callback);
 }
 
 void FrameCaptionButton::SetPaintAsActive(bool paint_as_active) {
-  if (paint_as_active == paint_as_active_)
+  if (paint_as_active == paint_as_active_) {
     return;
+  }
   paint_as_active_ = paint_as_active;
-  OnPropertyChanged(&paint_as_active_, kPropertyEffectsPaint);
+  OnPropertyChanged(&paint_as_active_, PropertyEffects::kPaint);
 }
 
 bool FrameCaptionButton::GetPaintAsActive() const {
@@ -261,12 +299,30 @@ gfx::Size FrameCaptionButton::GetInkDropSize() const {
   return gfx::Size(2 * GetInkDropCornerRadius(), 2 * GetInkDropCornerRadius());
 }
 
+gfx::Insets FrameCaptionButton::GetInkdropInsets(
+    const gfx::Size& button_size) const {
+  return gfx::Insets::VH((button_size.height() - GetInkDropSize().height()) / 2,
+                         (button_size.width() - GetInkDropSize().width()) / 2);
+}
+
+void FrameCaptionButton::MaybeRefreshIconAndInkdropBaseColor() {
+  if (!GetColorProvider()) {
+    return;
+  }
+
+  if (icon_definition_) {
+    SetImage(icon_, Animate::kNo, *icon_definition_, icon_size_);
+  }
+  UpdateInkDropBaseColor();
+}
+
 void FrameCaptionButton::PaintButtonContents(gfx::Canvas* canvas) {
   constexpr SkAlpha kHighlightVisibleOpacity = 0x14;
   SkAlpha highlight_alpha = SK_AlphaTRANSPARENT;
   if (hover_animation().is_animating()) {
-    highlight_alpha = hover_animation().CurrentValueBetween(
-        SK_AlphaTRANSPARENT, kHighlightVisibleOpacity);
+    highlight_alpha =
+        static_cast<SkAlpha>(hover_animation().CurrentValueBetween(
+            SK_AlphaTRANSPARENT, kHighlightVisibleOpacity));
   } else if (GetState() == STATE_HOVERED || GetState() == STATE_PRESSED) {
     // Painting a circular highlight in both "hovered" and "pressed" states
     // simulates and ink drop highlight mode of
@@ -281,46 +337,59 @@ void FrameCaptionButton::PaintButtonContents(gfx::Canvas* canvas) {
     // maximized state or vice versa. https://crbug.com/840901.
     cc::PaintFlags flags;
     flags.setColor(InkDrop::Get(this)->GetBaseColor());
-    flags.setAlpha(highlight_alpha);
+    flags.setAlphaf(highlight_alpha / 255.0f);
     DrawHighlight(canvas, flags);
   }
 
-  int icon_alpha = swap_images_animation_->CurrentValueBetween(0, 255);
-  int crossfade_icon_alpha = 0;
-  if (icon_alpha < static_cast<int>(kFadeOutRatio * 255))
-    crossfade_icon_alpha = static_cast<int>(255 - icon_alpha / kFadeOutRatio);
+  SkAlpha icon_alpha =
+      static_cast<SkAlpha>(swap_images_animation_->CurrentValueBetween(
+          SK_AlphaTRANSPARENT, SK_AlphaOPAQUE));
+  SkAlpha crossfade_icon_alpha = 0;
+  if (icon_alpha < base::ClampRound<SkAlpha>(kFadeOutRatio * SK_AlphaOPAQUE)) {
+    crossfade_icon_alpha =
+        base::ClampRound<SkAlpha>(SK_AlphaOPAQUE - icon_alpha / kFadeOutRatio);
+  }
 
-  int centered_origin_x = (width() - icon_image_.width()) / 2;
-  int centered_origin_y = (height() - icon_image_.height()) / 2;
+  gfx::Rect icon_bounds = GetContentsBounds();
+  icon_bounds.ClampToCenteredSize(icon_image_.size());
+  const int icon_bounds_x = icon_bounds.x();
+  const int icon_bounds_y = icon_bounds.y();
 
   if (crossfade_icon_alpha > 0 && !crossfade_icon_image_.isNull()) {
     canvas->SaveLayerAlpha(GetAlphaForIcon(alpha_));
     cc::PaintFlags flags;
-    flags.setAlpha(icon_alpha);
-    DrawIconContents(canvas, icon_image_, centered_origin_x, centered_origin_y,
-                     flags);
+    flags.setAlphaf(icon_alpha / 255.0f);
+    DrawIconContents(canvas, icon_image_, icon_bounds_x, icon_bounds_y, flags);
 
-    flags.setAlpha(crossfade_icon_alpha);
+    flags.setAlphaf(crossfade_icon_alpha / 255.0f);
     flags.setBlendMode(SkBlendMode::kPlus);
-    DrawIconContents(canvas, crossfade_icon_image_, centered_origin_x,
-                     centered_origin_y, flags);
+    DrawIconContents(canvas, crossfade_icon_image_, icon_bounds_x,
+                     icon_bounds_y, flags);
     canvas->Restore();
   } else {
-    if (!swap_images_animation_->is_animating())
+    if (!swap_images_animation_->is_animating()) {
       icon_alpha = alpha_;
+    }
     cc::PaintFlags flags;
-    flags.setAlpha(GetAlphaForIcon(icon_alpha));
-    DrawIconContents(canvas, icon_image_, centered_origin_x, centered_origin_y,
-                     flags);
+    flags.setAlphaf(GetAlphaForIcon(icon_alpha) / 255.0f);
+    DrawIconContents(canvas, icon_image_, icon_bounds_x, icon_bounds_y, flags);
   }
 }
 
-int FrameCaptionButton::GetAlphaForIcon(int base_alpha) const {
-  if (!GetEnabled())
-    return base_alpha * kDisabledButtonAlphaRatio;
+void FrameCaptionButton::OnThemeChanged() {
+  views::Button::OnThemeChanged();
 
-  if (paint_as_active_)
+  MaybeRefreshIconAndInkdropBaseColor();
+}
+
+SkAlpha FrameCaptionButton::GetAlphaForIcon(SkAlpha base_alpha) const {
+  if (!GetEnabled()) {
+    return base::ClampRound<SkAlpha>(base_alpha * kDisabledButtonAlphaRatio);
+  }
+
+  if (paint_as_active_) {
     return base_alpha;
+  }
 
   // Paint icons as active when they are hovered over or pressed.
   double inactive_alpha = GetInactiveButtonColorAlphaRatio();
@@ -331,17 +400,12 @@ int FrameCaptionButton::GetAlphaForIcon(int base_alpha) const {
   } else if (GetState() == STATE_PRESSED || GetState() == STATE_HOVERED) {
     inactive_alpha = 1.0f;
   }
-  return base_alpha * inactive_alpha;
-}
-
-gfx::Insets FrameCaptionButton::GetInkdropInsets(
-    const gfx::Size& button_size) const {
-  return gfx::Insets((button_size.height() - GetInkDropSize().height()) / 2,
-                     (button_size.width() - GetInkDropSize().width()) / 2);
+  return base::ClampRound<SkAlpha>(base_alpha * inactive_alpha);
 }
 
 void FrameCaptionButton::UpdateInkDropBaseColor() {
   using color_utils::GetColorWithMaxContrast;
+
   // A typical implementation would simply do
   // GetColorWithMaxContrast(background_color_).  However, this could look odd
   // if we use a light button glyph and dark ink drop or vice versa.  So
@@ -349,13 +413,12 @@ void FrameCaptionButton::UpdateInkDropBaseColor() {
   // glyph color.
   // TODO(pkasting): It would likely be better to make the button glyph always
   // be an alpha-blended version of GetColorWithMaxContrast(background_color_).
-  const SkColor button_color = GetButtonColor(background_color_);
+  const SkColor button_color = GetIconColor();
   InkDrop::Get(this)->SetBaseColor(
       GetColorWithMaxContrast(GetColorWithMaxContrast(button_color)));
 }
 
-BEGIN_METADATA(FrameCaptionButton, Button)
-ADD_PROPERTY_METADATA(SkColor, BackgroundColor, ui::metadata::SkColorConverter)
+BEGIN_METADATA(FrameCaptionButton)
 ADD_PROPERTY_METADATA(int, InkDropCornerRadius)
 ADD_READONLY_PROPERTY_METADATA(CaptionButtonIcon, Icon)
 ADD_PROPERTY_METADATA(bool, PaintAsActive)
@@ -371,10 +434,10 @@ DEFINE_ENUM_CONVERTERS(
      u"CAPTION_BUTTON_ICON_MAXIMIZE_RESTORE"},
     {views::CaptionButtonIcon::CAPTION_BUTTON_ICON_CLOSE,
      u"CAPTION_BUTTON_ICON_CLOSE"},
-    {views::CaptionButtonIcon::CAPTION_BUTTON_ICON_LEFT_SNAPPED,
-     u"CAPTION_BUTTON_ICON_LEFT_SNAPPED"},
-    {views::CaptionButtonIcon::CAPTION_BUTTON_ICON_RIGHT_SNAPPED,
-     u"CAPTION_BUTTON_ICON_RIGHT_SNAPPED"},
+    {views::CaptionButtonIcon::CAPTION_BUTTON_ICON_LEFT_TOP_SNAPPED,
+     u"CAPTION_BUTTON_ICON_LEFT_TOP_SNAPPED"},
+    {views::CaptionButtonIcon::CAPTION_BUTTON_ICON_RIGHT_BOTTOM_SNAPPED,
+     u"CAPTION_BUTTON_ICON_RIGHT_BOTTOM_SNAPPED"},
     {views::CaptionButtonIcon::CAPTION_BUTTON_ICON_BACK,
      u"CAPTION_BUTTON_ICON_BACK"},
     {views::CaptionButtonIcon::CAPTION_BUTTON_ICON_LOCATION,
@@ -385,5 +448,9 @@ DEFINE_ENUM_CONVERTERS(
      u"CAPTION_BUTTON_ICON_ZOOM"},
     {views::CaptionButtonIcon::CAPTION_BUTTON_ICON_CENTER,
      u"CAPTION_BUTTON_ICON_CENTER"},
+    {views::CaptionButtonIcon::CAPTION_BUTTON_ICON_FLOAT,
+     u"CAPTION_BUTTON_ICON_FLOAT"},
+    {views::CaptionButtonIcon::CAPTION_BUTTON_ICON_CUSTOM,
+     u"CAPTION_BUTTON_ICON_CUSTOM"},
     {views::CaptionButtonIcon::CAPTION_BUTTON_ICON_COUNT,
      u"CAPTION_BUTTON_ICON_COUNT"})

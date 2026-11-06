@@ -1,13 +1,13 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MEDIA_BASE_AUDIO_BLOCK_FIFO_H_
 #define MEDIA_BASE_AUDIO_BLOCK_FIFO_H_
 
-#include "base/macros.h"
 #include "media/base/audio_bus.h"
 #include "media/base/media_export.h"
+#include "media/base/sample_format.h"
 
 namespace media {
 
@@ -21,12 +21,18 @@ class MEDIA_EXPORT AudioBlockFifo {
   // Creates a new AudioBlockFifo and allocates |blocks| memory, each block
   // of memory can store |channels| of length |frames| data.
   AudioBlockFifo(int channels, int frames, int blocks);
+
+  AudioBlockFifo(const AudioBlockFifo&) = delete;
+  AudioBlockFifo& operator=(const AudioBlockFifo&) = delete;
+
   virtual ~AudioBlockFifo();
 
   // Pushes interleaved audio data from |source| to the FIFO.
-  // The method will deinterleave the data into a audio bus.
+  // The method will deinterleave the data into an audio bus.
   // Push() will crash if the allocated space is insufficient.
-  void Push(const void* source, int frames, int bytes_per_sample);
+  void Push(base::span<const uint8_t> source,
+            int frames,
+            SampleFormat sample_format);
 
   // Pushes zeroed out frames to the FIFO.
   void PushSilence(int frames);
@@ -48,14 +54,19 @@ class MEDIA_EXPORT AudioBlockFifo {
   // Number of unfilled frames in the whole FIFO.
   int GetUnfilledFrames() const;
 
-  // Dynamically increase |blocks| of memory to the FIFO.
+  // Dynamically increases the FIFO capacity by `blocks` blocks.
+  // Note: Allocates heap memory and resizes internal storage, so this must not
+  // be called on real-time audio threads.
   void IncreaseCapacity(int blocks);
 
  private:
+  friend class AudioBlockFifoTest;
   // Common implementation for Push() and PushSilence.  if |source| is nullptr,
   // silence will be pushed. To push silence, set source and bytes_per_sample to
   // nullptr and 0 respectively.
-  void PushInternal(const void* source, int frames, int bytes_per_sample);
+  void PushInternal(base::span<const uint8_t> source,
+                    int frames,
+                    SampleFormat sample_format);
 
   // The actual FIFO is a vector of audio buses.
   std::vector<std::unique_ptr<AudioBus>> audio_blocks_;
@@ -68,18 +79,16 @@ class MEDIA_EXPORT AudioBlockFifo {
   const int block_frames_;
 
   // Used to keep track which block of memory to be written.
-  int write_block_;
+  int write_block_ = 0;
 
   // Used to keep track which block of memory to be consumed.
-  int read_block_;
+  int read_block_ = 0;
 
   // Number of available blocks of memory to be consumed.
-  int available_blocks_;
+  int available_blocks_ = 0;
 
   // Current write position in the current written block.
-  int write_pos_;
-
-  DISALLOW_COPY_AND_ASSIGN(AudioBlockFifo);
+  int write_pos_ = 0;
 };
 
 }  // namespace media

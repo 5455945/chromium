@@ -1,9 +1,11 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright 2010 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_BASE_ADDRESS_FAMILY_H_
 #define NET_BASE_ADDRESS_FAMILY_H_
+
+#include <string_view>
 
 #include "net/base/net_export.h"
 
@@ -40,6 +42,13 @@ NET_EXPORT AddressFamily GetAddressFamily(const IPAddress& address);
 
 // Maps the given AddressFamily to either AF_INET, AF_INET6 or AF_UNSPEC.
 NET_EXPORT int ConvertAddressFamily(AddressFamily address_family);
+
+// Maps AF_INET, AF_INET6 or AF_UNSPEC to an AddressFamily. Any other AF_ value
+// (or any other value) passed in results in NOTREACHED().
+NET_EXPORT AddressFamily ToAddressFamily(int family);
+
+// Returns a string representation of `address_family`. Used for histograms.
+NET_EXPORT std::string_view AddressFamilyToString(AddressFamily address_family);
 
 }  // namespace net
 

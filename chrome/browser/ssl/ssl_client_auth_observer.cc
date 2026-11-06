@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 
 #include "base/logging.h"
 #include "base/no_destructor.h"
-#include "chrome/browser/ssl/ssl_client_auth_metrics.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/client_certificate_delegate.h"
 #include "net/cert/x509_certificate.h"
@@ -22,15 +21,15 @@ SSLClientAuthObserver::SSLClientAuthObserver(
     : browser_context_(browser_context),
       cert_request_info_(cert_request_info),
       delegate_(std::move(delegate)) {
-  DCHECK(delegate_);
+  CHECK(delegate_, base::NotFatalUntil::M163);
 }
 
 SSLClientAuthObserver::~SSLClientAuthObserver() {
   // The caller is required to explicitly stop observing, but call
   // StopObserving() anyway to avoid a dangling pointer. (StopObserving() is
   // idempotent, so it may be called multiple times.)
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK_EQ(0u, GetActiveObservers().count(this));
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M163);
+  CHECK_EQ(0u, GetActiveObservers().count(this), base::NotFatalUntil::M163);
   StopObserving();
 }
 
@@ -39,14 +38,6 @@ void SSLClientAuthObserver::CertificateSelected(
     net::SSLPrivateKey* private_key) {
   if (!delegate_)
     return;
-
-  // CertificateSelected is called with a valid delegate any time that the
-  // selector is explicitly closed by the user. If the user closes the entire
-  // tab, CancelCertificateSelection() is called first, removing the delegate.
-  if (certificate)
-    LogClientAuthResult(ClientCertSelectionResult::kUserSelect);
-  else
-    LogClientAuthResult(ClientCertSelectionResult::kUserCancel);
 
   // Stop listening now that the delegate has been resolved. This is also to
   // avoid getting a self-notification.
@@ -68,10 +59,6 @@ void SSLClientAuthObserver::CancelCertificateSelection() {
   if (!delegate_)
     return;
 
-  // This code is only reached when the selector's tab is closed-- cancelling
-  // the selection box calls CertificateSelected(nullptr, nullptr) first.
-  LogClientAuthResult(ClientCertSelectionResult::kUserCloseTab);
-
   // Stop observing now that the delegate has been resolved.
   StopObserving();
   delegate_.reset();
@@ -83,13 +70,12 @@ void SSLClientAuthObserver::CertificateSelectedWithOtherObserver(
     net::X509Certificate* certificate,
     net::SSLPrivateKey* private_key) {
   DVLOG(1) << "SSLClientAuthObserver::Observe " << this;
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M163);
 
   if (browser_context != browser_context_)
     return;
 
-  if (!cert_request_info->host_and_port.Equals(
-          cert_request_info_->host_and_port)) {
+  if (cert_request_info->host_and_port != cert_request_info_->host_and_port) {
     return;
   }
 
@@ -102,12 +88,12 @@ void SSLClientAuthObserver::CertificateSelectedWithOtherObserver(
 }
 
 void SSLClientAuthObserver::StartObserving() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M163);
   GetActiveObservers().insert(this);
 }
 
 void SSLClientAuthObserver::StopObserving() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M163);
   GetActiveObservers().erase(this);
 }
 

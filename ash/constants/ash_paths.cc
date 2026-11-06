@@ -1,16 +1,18 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/constants/ash_paths.h"
 
+#include "base/base_paths.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/path_service.h"
 #include "base/system/sys_info.h"
 #include "build/branding_buildflags.h"
+#include "build/chromeos_buildflags.h"
 
-namespace chromeos {
+namespace ash {
 
 namespace {
 
@@ -21,11 +23,18 @@ const base::FilePath::CharType kDefaultAppOrderFileName[] =
     FILE_PATH_LITERAL("/usr/share/chromium/default_app_order.json");
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
+// This must be kept in sync with the "arc" sub directory of
+// chrome::DIR_STANDALONE_EXTERNAL_EXTENSIONS defined in
+// chrome/common/chrome_paths.cc.
+const base::FilePath::CharType kArcDefaultAppsDir[] =
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+    FILE_PATH_LITERAL("/usr/share/google-chrome/extensions/arc");
+#else
+    FILE_PATH_LITERAL("/usr/share/chromium/extensions/arc");
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+
 const base::FilePath::CharType kMachineHardwareInfoFileName[] =
     FILE_PATH_LITERAL("/tmp/machine-info");
-
-const base::FilePath::CharType kVpdFileName[] = FILE_PATH_LITERAL(
-    "/mnt/stateful_partition/unencrypted/cache/vpd/filtered.txt");
 
 const base::FilePath::CharType kUptimeFileName[] =
     FILE_PATH_LITERAL("/proc/uptime");
@@ -35,6 +44,15 @@ const base::FilePath::CharType kUpdateRebootNeededUptimeFile[] =
 
 const base::FilePath::CharType kStartupCustomizationManifestFile[] =
     FILE_PATH_LITERAL("/opt/oem/etc/startup_manifest.json");
+
+const base::FilePath::CharType kTPMFirmwareUpdateLocation[] =
+    FILE_PATH_LITERAL("/run/tpm_firmware_update_location");
+
+const base::FilePath::CharType kTPMFirmwareUpdateSRKVulnerableROCA[] =
+    FILE_PATH_LITERAL("/run/tpm_firmware_update_srk_vulnerable_roca");
+
+const base::FilePath::CharType kDeviceRefreshTokenFileName[] =
+    FILE_PATH_LITERAL("device_refresh_token");
 
 const base::FilePath::CharType kDeviceLocalAccountExtensionDir[] =
     FILE_PATH_LITERAL("/var/cache/device_local_account_extensions");
@@ -60,11 +78,22 @@ const base::FilePath::CharType kSigninProfileComponentPolicy[] =
 const base::FilePath::CharType kSigninProfileExtensionsDir[] =
     FILE_PATH_LITERAL("/var/cache/signin_profile_extensions");
 
-const base::FilePath::CharType kPreinstalledComponents[] =
-    FILE_PATH_LITERAL("/mnt/stateful_partition/unencrypted/");
-
 const base::FilePath::CharType kDevicePolicyExternalDataDir[] =
     FILE_PATH_LITERAL("/var/cache/device_policy_external_data");
+
+const base::FilePath::CharType kDevicePolicyScreensaverDataDir[] =
+    FILE_PATH_LITERAL("/var/cache/managed_screensaver");
+
+const base::FilePath::CharType kDeviceLocalAccountIwaCacheDir[] =
+    FILE_PATH_LITERAL("/var/cache/device_local_account_iwa");
+
+#if BUILDFLAG(IS_CHROMEOS_DEVICE)
+const base::FilePath::CharType kCryptohomeMountRoot[] =
+    FILE_PATH_LITERAL("/home/user");
+#else
+const base::FilePath::CharType kFakeCryptohomeMountRootDirname[] =
+    FILE_PATH_LITERAL(".home_user");
+#endif  // BUILDFLAG(IS_CHROMEOS_DEVICE)
 
 bool PathProvider(int key, base::FilePath* result) {
   switch (key) {
@@ -74,9 +103,6 @@ bool PathProvider(int key, base::FilePath* result) {
     case FILE_MACHINE_INFO:
       *result = base::FilePath(kMachineHardwareInfoFileName);
       break;
-    case FILE_VPD:
-      *result = base::FilePath(kVpdFileName);
-      break;
     case FILE_UPTIME:
       *result = base::FilePath(kUptimeFileName);
       break;
@@ -85,6 +111,41 @@ bool PathProvider(int key, base::FilePath* result) {
       break;
     case FILE_STARTUP_CUSTOMIZATION_MANIFEST:
       *result = base::FilePath(kStartupCustomizationManifestFile);
+      break;
+    case FILE_TPM_FIRMWARE_UPDATE_LOCATION:
+      *result = base::FilePath(kTPMFirmwareUpdateLocation);
+      break;
+    case FILE_TPM_FIRMWARE_UPDATE_SRK_VULNERABLE_ROCA:
+      *result = base::FilePath(kTPMFirmwareUpdateSRKVulnerableROCA);
+      break;
+    case FILE_DEVICE_REFRESH_TOKEN: {
+      base::FilePath cur;
+      if (!base::PathService::Get(DIR_USER_DATA, &cur)) {
+        return false;
+      }
+      *result = cur.Append(kDeviceRefreshTokenFileName);
+      break;
+    }
+    case DIR_RESOURCES: {
+      base::FilePath cur;
+      if (!base::PathService::Get(base::DIR_ASSETS, &cur)) {
+        return false;
+      }
+      *result = cur.Append(FILE_PATH_LITERAL("resources"));
+      break;
+    }
+    case DIR_HOMEDIR_MOUNT:
+#if BUILDFLAG(IS_CHROMEOS_DEVICE)
+      *result = base::FilePath(kCryptohomeMountRoot);
+#else
+    {
+      base::FilePath cur;
+      if (!base::PathService::Get(DIR_USER_DATA, &cur)) {
+        return false;
+      }
+      *result = cur.Append(kFakeCryptohomeMountRootDirname);
+    }
+#endif  // BUILDFLAG(IS_CHROMEOS_DEVICE)
       break;
     case DIR_DEVICE_LOCAL_ACCOUNT_EXTENSIONS:
       *result = base::FilePath(kDeviceLocalAccountExtensionDir);
@@ -110,15 +171,40 @@ bool PathProvider(int key, base::FilePath* result) {
     case DIR_SIGNIN_PROFILE_EXTENSIONS:
       *result = base::FilePath(kSigninProfileExtensionsDir);
       break;
-    case DIR_PREINSTALLED_COMPONENTS:
-      *result = base::FilePath(kPreinstalledComponents);
-      break;
     case DIR_DEVICE_POLICY_EXTERNAL_DATA:
       *result = base::FilePath(kDevicePolicyExternalDataDir);
       break;
+    case DIR_DEVICE_POLICY_SCREENSAVER_DATA:
+      *result = base::FilePath(kDevicePolicyScreensaverDataDir);
+      break;
+    case DIR_DEVICE_LOCAL_ACCOUNT_IWA_CACHE:
+      *result = base::FilePath(kDeviceLocalAccountIwaCacheDir);
+      break;
+
+    case DIR_WALLPAPERS: {
+      base::FilePath cur;
+      if (!base::PathService::Get(DIR_USER_DATA, &cur)) {
+        return false;
+      }
+      *result = cur.Append(FILE_PATH_LITERAL("wallpapers"));
+      break;
+    }
+    case DIR_CUSTOM_WALLPAPERS: {
+      base::FilePath cur;
+      if (!base::PathService::Get(DIR_USER_DATA, &cur)) {
+        return false;
+      }
+      *result = cur.Append(FILE_PATH_LITERAL("custom_wallpapers"));
+      break;
+    }
+    case DIR_ARC_DEFAULT_APPS:
+      *result = base::FilePath(kArcDefaultAppsDir);
+      break;
+
     default:
       return false;
   }
+
   return true;
 }
 
@@ -138,8 +224,6 @@ void RegisterStubPathOverrides(const base::FilePath& stubs_dir) {
   base::PathService::OverrideAndCreateIfNeeded(
       FILE_MACHINE_INFO, parent.AppendASCII("stub_machine-info"), is_absolute,
       create);
-  base::PathService::OverrideAndCreateIfNeeded(
-      FILE_VPD, parent.AppendASCII("stub_vpd"), is_absolute, create);
   base::PathService::Override(
       DIR_DEVICE_LOCAL_ACCOUNT_EXTENSIONS,
       parent.AppendASCII("stub_device_local_account_extensions"));
@@ -161,6 +245,9 @@ void RegisterStubPathOverrides(const base::FilePath& stubs_dir) {
   base::PathService::Override(
       DIR_DEVICE_POLICY_EXTERNAL_DATA,
       parent.AppendASCII("stub_device_policy_external_data"));
+  base::PathService::Override(
+      DIR_DEVICE_POLICY_SCREENSAVER_DATA,
+      parent.AppendASCII("stub_device_policy_screensaver_data"));
 }
 
-}  // namespace chromeos
+}  // namespace ash

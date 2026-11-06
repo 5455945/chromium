@@ -1,4 +1,4 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -27,8 +27,6 @@ source_set("lib") {
     "memory_instrumentation/switches.h",
   ]
 
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
-
   public_deps = [
     "//base",
     "//mojo/public/cpp/bindings",
@@ -49,6 +47,7 @@ source_set("tests") {
     "memory_instrumentation/global_dump_graph_converter_unittest.cc",
     "memory_instrumentation/graph_unittest.cc",
     "memory_instrumentation/memory_dump_map_converter_unittest.cc",
+    "public/cpp/memory_instrumentation/client_process_impl_unittest.cc",
     "public/cpp/memory_instrumentation/memory_instrumentation_mojom_traits_unittest.cc",
     "public/cpp/memory_instrumentation/os_metrics_unittest.cc",
     "public/cpp/memory_instrumentation/tracing_integration_unittest.cc",
@@ -62,8 +61,8 @@ source_set("tests") {
     "//components/ukm:test_support",
     "//mojo/public/cpp/bindings",
     "//services/resource_coordinator/public/cpp:resource_coordinator_cpp",
-    "//services/resource_coordinator/public/cpp/memory_instrumentation:memory_instrumentation",
-    "//services/tracing:tests",
+    "//services/resource_coordinator/public/cpp/memory_instrumentation",
+    "//services/tracing:test_utils",
     "//testing/gmock",
     "//testing/gtest",
   ]

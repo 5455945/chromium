@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "components/sync_user_events/user_event_service.h"
 
 namespace syncer {
@@ -17,17 +16,17 @@ namespace syncer {
 class NoOpUserEventService : public UserEventService {
  public:
   NoOpUserEventService();
+
+  NoOpUserEventService(const NoOpUserEventService&) = delete;
+  NoOpUserEventService& operator=(const NoOpUserEventService&) = delete;
+
   ~NoOpUserEventService() override;
 
   // UserEventService implementation.
   void RecordUserEvent(
       std::unique_ptr<sync_pb::UserEventSpecifics> specifics) override;
-  void RecordUserEvent(const sync_pb::UserEventSpecifics& specifics) override;
-  base::WeakPtr<syncer::ModelTypeControllerDelegate> GetControllerDelegate()
+  base::WeakPtr<syncer::DataTypeControllerDelegate> GetControllerDelegate()
       override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(NoOpUserEventService);
 };
 
 }  // namespace syncer

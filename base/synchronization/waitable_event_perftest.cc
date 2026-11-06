@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "base/threading/simple_thread.h"
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
@@ -38,6 +39,10 @@ perf_test::PerfResultReporter SetUpReporter(const std::string& story_name) {
 class TraceWaitableEvent {
  public:
   TraceWaitableEvent() = default;
+
+  TraceWaitableEvent(const TraceWaitableEvent&) = delete;
+  TraceWaitableEvent& operator=(const TraceWaitableEvent&) = delete;
+
   ~TraceWaitableEvent() = default;
 
   void Signal() {
@@ -54,9 +59,9 @@ class TraceWaitableEvent {
     ++wait_samples_;
   }
 
-  bool TimedWaitUntil(const TimeTicks& end_time) {
+  bool TimedWaitUntil(TimeTicks end_time) {
     ElapsedTimer timer;
-    const bool signaled = event_.TimedWait(end_time - timer.Begin());
+    const bool signaled = event_.TimedWait(end_time - timer.start_time());
     total_wait_time_ += timer.Elapsed();
     ++wait_samples_;
     return signaled;
@@ -77,8 +82,6 @@ class TraceWaitableEvent {
 
   size_t signal_samples_ = 0U;
   size_t wait_samples_ = 0U;
-
-  DISALLOW_COPY_AND_ASSIGN(TraceWaitableEvent);
 };
 
 class SignalerThread : public SimpleThread {
@@ -88,14 +91,19 @@ class SignalerThread : public SimpleThread {
         waiter_(waiter),
         signaler_(signaler) {}
 
+  SignalerThread(const SignalerThread&) = delete;
+  SignalerThread& operator=(const SignalerThread&) = delete;
+
   ~SignalerThread() override = default;
 
   void Run() override {
     while (!stop_event_.IsSignaled()) {
-      if (waiter_)
+      if (waiter_) {
         waiter_->Wait();
-      if (signaler_)
+      }
+      if (signaler_) {
         signaler_->Signal();
+      }
     }
   }
 
@@ -105,9 +113,8 @@ class SignalerThread : public SimpleThread {
 
  private:
   WaitableEvent stop_event_;
-  TraceWaitableEvent* waiter_;
-  TraceWaitableEvent* signaler_;
-  DISALLOW_COPY_AND_ASSIGN(SignalerThread);
+  raw_ptr<TraceWaitableEvent> waiter_;
+  raw_ptr<TraceWaitableEvent> signaler_;
 };
 
 void PrintPerfWaitableEvent(const TraceWaitableEvent* event,
@@ -174,7 +181,7 @@ TEST(WaitableEventPerfTest, Throughput) {
   SignalerThread thread(nullptr, &event);
   thread.Start();
 
-  const TimeTicks end_time = TimeTicks::Now() + TimeDelta::FromSeconds(1);
+  const TimeTicks end_time = TimeTicks::Now() + Seconds(1);
   size_t count = 0;
   while (event.TimedWaitUntil(end_time)) {
     ++count;

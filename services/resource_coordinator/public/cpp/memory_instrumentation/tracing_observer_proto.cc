@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,6 @@
 #include "base/trace_event/traced_value.h"
 #include "base/tracing/trace_time.h"
 #include "build/build_config.h"
-#include "services/tracing/public/cpp/perfetto/perfetto_producer.h"
 #include "services/tracing/public/cpp/perfetto/perfetto_traced_process.h"
 #include "third_party/perfetto/protos/perfetto/trace/memory_graph.pbzero.h"
 #include "third_party/perfetto/protos/perfetto/trace/profiling/smaps.pbzero.h"
@@ -34,29 +33,35 @@ perfetto::protos::pbzero::MemoryTrackerSnapshot::LevelOfDetail
 MemoryDumpLevelOfDetailToProto(
     const base::trace_event::MemoryDumpLevelOfDetail& level_of_detail) {
   switch (level_of_detail) {
-    case base::trace_event::MemoryDumpLevelOfDetail::BACKGROUND:
+    case base::trace_event::MemoryDumpLevelOfDetail::kBackground:
       return perfetto::protos::pbzero::MemoryTrackerSnapshot::DETAIL_BACKGROUND;
-    case base::trace_event::MemoryDumpLevelOfDetail::LIGHT:
+    case base::trace_event::MemoryDumpLevelOfDetail::kLight:
       return perfetto::protos::pbzero::MemoryTrackerSnapshot::DETAIL_LIGHT;
-    case base::trace_event::MemoryDumpLevelOfDetail::DETAILED:
+    case base::trace_event::MemoryDumpLevelOfDetail::kDetailed:
       return perfetto::protos::pbzero::MemoryTrackerSnapshot::DETAIL_FULL;
   }
   NOTREACHED();
-  return perfetto::protos::pbzero::MemoryTrackerSnapshot::DETAIL_BACKGROUND;
 }
 
 }  // namespace
 
-TracingObserverProto::TracingObserverProto(
-    base::trace_event::TraceLog* trace_log,
-    base::trace_event::MemoryDumpManager* memory_dump_manager)
-    : TracingObserver(trace_log, memory_dump_manager),
-      tracing::PerfettoTracedProcess::DataSourceBase(
-          tracing::mojom::kMemoryInstrumentationDataSourceName) {
-  tracing::PerfettoTracedProcess::Get()->AddDataSource(this);
+// static
+TracingObserverProto* TracingObserverProto::GetInstance() {
+  static base::NoDestructor<TracingObserverProto> instance;
+  return instance.get();
 }
 
+TracingObserverProto::TracingObserverProto() = default;
+
 TracingObserverProto::~TracingObserverProto() = default;
+
+void TracingObserverProto::ResetForTesting() {
+  // Running NoDestructor::get() after destroying its contents leads to errors
+  // on CFI bots. So we save the pointer before destruction.
+  TracingObserverProto* instance = GetInstance();
+  instance->~TracingObserverProto();
+  new (instance) TracingObserverProto;
+}
 
 bool TracingObserverProto::AddChromeDumpToTraceIfEnabled(
     const base::trace_event::MemoryDumpRequestArgs& args,
@@ -66,20 +71,27 @@ bool TracingObserverProto::AddChromeDumpToTraceIfEnabled(
   if (!ShouldAddToTrace(args))
     return false;
 
-  base::AutoLock lock(writer_lock_);
+  auto write_packet = [&](perfetto::TraceWriter::TracePacketHandle handle) {
+    handle->set_timestamp(timestamp.since_origin().InNanoseconds());
+    handle->set_timestamp_clock_id(base::tracing::kTraceClockId);
+    perfetto::protos::pbzero::MemoryTrackerSnapshot* memory_snapshot =
+        handle->set_memory_tracker_snapshot();
+    memory_snapshot->set_level_of_detail(
+        MemoryDumpLevelOfDetailToProto(args.level_of_detail));
+    process_memory_dump->SerializeAllocatorDumpsInto(memory_snapshot, pid);
+  };
 
-  if (!trace_writer_)
-    return false;
+  DataSourceProxy::Trace([&](DataSourceProxy::TraceContext ctx) {
+    write_packet(ctx.NewTracePacket());
+  });
+  Flush({});
 
-  perfetto::TraceWriter::TracePacketHandle handle =
-      trace_writer_->NewTracePacket();
-  handle->set_timestamp(timestamp.since_origin().InNanoseconds());
-  handle->set_timestamp_clock_id(base::tracing::kTraceClockId);
-  perfetto::protos::pbzero::MemoryTrackerSnapshot* memory_snapshot =
-      handle->set_memory_tracker_snapshot();
-  memory_snapshot->set_level_of_detail(
-      MemoryDumpLevelOfDetailToProto(args.level_of_detail));
-  process_memory_dump->SerializeAllocatorDumpsInto(memory_snapshot, pid);
+  {
+    base::AutoLock lock(on_chrome_dump_callback_lock_);
+    if (on_chrome_dump_callback_for_testing_) {
+      std::move(on_chrome_dump_callback_for_testing_).Run();
+    }
+  }
 
   return true;
 }
@@ -93,70 +105,44 @@ bool TracingObserverProto::AddOsDumpToTraceIfEnabled(
   if (!ShouldAddToTrace(args))
     return false;
 
-  base::AutoLock lock(writer_lock_);
+  auto write_process_stats_packet =
+      [&](perfetto::TraceWriter::TracePacketHandle process_stats_packet) {
+        process_stats_packet->set_timestamp(
+            timestamp.since_origin().InNanoseconds());
+        process_stats_packet->set_timestamp_clock_id(
+            base::tracing::kTraceClockId);
+        perfetto::protos::pbzero::ProcessStats* process_stats =
+            process_stats_packet->set_process_stats();
+        perfetto::protos::pbzero::ProcessStats::Process* process =
+            process_stats->add_processes();
+        process->set_pid(static_cast<int>(pid));
 
-  if (!trace_writer_)
-    return false;
+        OsDumpAsProtoInto(process, os_dump);
 
-  perfetto::TraceWriter::TracePacketHandle process_stats_packet =
-      trace_writer_->NewTracePacket();
-  process_stats_packet->set_timestamp(timestamp.since_origin().InNanoseconds());
-  process_stats_packet->set_timestamp_clock_id(base::tracing::kTraceClockId);
-  perfetto::protos::pbzero::ProcessStats* process_stats =
-      process_stats_packet->set_process_stats();
-  perfetto::protos::pbzero::ProcessStats::Process* process =
-      process_stats->add_processes();
-  process->set_pid(static_cast<int>(pid));
+        process_stats_packet->Finalize();
+      };
 
-  OsDumpAsProtoInto(process, os_dump);
+  auto write_memory_maps_packet =
+      [&](perfetto::TraceWriter::TracePacketHandle smaps_packet) {
+        smaps_packet->set_timestamp(timestamp.since_origin().InNanoseconds());
+        smaps_packet->set_timestamp_clock_id(base::tracing::kTraceClockId);
+        perfetto::protos::pbzero::SmapsPacket* smaps =
+            smaps_packet->set_smaps_packet();
+        smaps->set_pid(static_cast<uint32_t>(pid));
 
-  process_stats_packet->Finalize();
+        MemoryMapsAsProtoInto(memory_maps, smaps, false);
 
-  if (memory_maps.size()) {
-    perfetto::TraceWriter::TracePacketHandle smaps_packet =
-        trace_writer_->NewTracePacket();
-    smaps_packet->set_timestamp(timestamp.since_origin().InNanoseconds());
-    smaps_packet->set_timestamp_clock_id(base::tracing::kTraceClockId);
-    perfetto::protos::pbzero::SmapsPacket* smaps =
-        smaps_packet->set_smaps_packet();
-    smaps->set_pid(static_cast<uint32_t>(pid));
+        smaps_packet->Finalize();
+      };
 
-    MemoryMapsAsProtoInto(memory_maps, smaps, false);
-
-    smaps_packet->Finalize();
-  }
+  DataSourceProxy::Trace([&](DataSourceProxy::TraceContext ctx) {
+    write_process_stats_packet(ctx.NewTracePacket());
+    if (memory_maps.size())
+      write_memory_maps_packet(ctx.NewTracePacket());
+  });
+  Flush({});
 
   return true;
-}
-
-void TracingObserverProto::StartTracingImpl(
-    tracing::PerfettoProducer* producer,
-    const perfetto::DataSourceConfig& data_source_config) {
-  base::AutoLock lock(writer_lock_);
-  // We rely on concurrent setup of TraceLog categories by the
-  // TraceEventDataSource so don't look at the trace config ourselves.
-  trace_writer_ =
-      producer->CreateTraceWriter(data_source_config.target_buffer());
-}
-
-void TracingObserverProto::StopTracingImpl(
-    base::OnceClosure stop_complete_callback) {
-  // Scope to avoid reentrancy in case from the stop callback.
-  {
-    base::AutoLock lock(writer_lock_);
-    trace_writer_.reset();
-  }
-
-  if (stop_complete_callback) {
-    std::move(stop_complete_callback).Run();
-  }
-}
-
-void TracingObserverProto::Flush(
-    base::RepeatingClosure flush_complete_callback) {
-  base::AutoLock lock(writer_lock_);
-  if (trace_writer_)
-    trace_writer_->Flush();
 }
 
 void TracingObserverProto::MemoryMapsAsProtoInto(
@@ -183,7 +169,7 @@ void TracingObserverProto::MemoryMapsAsProtoInto(
         ApplyPathFiltering(region->mapped_file, is_argument_filtering_enabled));
 
 // The following stats are only well defined on Linux-derived OSes.
-#if !defined(OS_MAC) && !defined(OS_WIN)
+#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_WIN)
     entry->set_proportional_resident_kb(
         region->byte_stats_proportional_resident / 1024);
     entry->set_private_dirty_kb(region->byte_stats_private_dirty_resident /
@@ -197,6 +183,12 @@ void TracingObserverProto::MemoryMapsAsProtoInto(
     entry->set_swap_kb(region->byte_stats_swapped / 1024);
 #endif
   }
+}
+
+void TracingObserverProto::SetOnChromeDumpCallbackForTesting(
+    OnChromeDumpCallback callback) {
+  base::AutoLock lock(on_chrome_dump_callback_lock_);
+  on_chrome_dump_callback_for_testing_ = std::move(callback);
 }
 
 }  // namespace memory_instrumentation

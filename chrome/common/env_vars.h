@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,14 +9,17 @@
 
 namespace env_vars {
 
-extern const char kHeadless[];
-extern const char kLogFileName[];
-extern const char kMetroConnected[];
-extern const char kSessionLogDir[];
-extern const char kShowRestart[];
-extern const char kRestartInfo[];
-extern const char kRtlLocale[];
-extern const char kLtrLocale[];
+// We call running in unattended mode (for automated testing) "headless".
+// This mode can be enabled using this variable or by the kNoErrorDialogs
+// switch.
+inline constexpr char kHeadless[] = "CHROME_HEADLESS";
+
+// The name of the log file.
+inline constexpr char kLogFileName[] = "CHROME_LOG_FILE";
+
+// Flag indicating if metro viewer is connected to browser instance.
+// As of now there is only one metro viewer instance per browser.
+inline constexpr char kMetroConnected[] = "CHROME_METRO_CONNECTED";
 
 }  // namespace env_vars
 

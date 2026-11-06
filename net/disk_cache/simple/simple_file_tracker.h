@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,21 +6,25 @@
 #define NET_DISK_CACHE_SIMPLE_SIMPLE_FILE_TRACKER_H_
 
 #include <stdint.h>
+
 #include <algorithm>
+#include <array>
 #include <list>
 #include <memory>
 #include <unordered_map>
 #include <vector>
 
+#include "base/containers/linked_list.h"
 #include "base/files/file.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
 #include "base/synchronization/lock.h"
 #include "net/base/net_export.h"
+#include "net/disk_cache/cache_file.h"
 #include "net/disk_cache/simple/simple_entry_format.h"
 
 namespace disk_cache {
 
+class BackendFileOperations;
 class SimpleSynchronousEntry;
 
 // This keeps track of all the files SimpleCache has open, across all the
@@ -46,10 +50,14 @@ class NET_EXPORT_PRIVATE SimpleFileTracker {
    public:
     FileHandle();
     FileHandle(FileHandle&& other);
+
+    FileHandle(const FileHandle&) = delete;
+    FileHandle& operator=(const FileHandle&) = delete;
+
     ~FileHandle();
     FileHandle& operator=(FileHandle&& other);
-    base::File* operator->() const;
-    base::File* get() const;
+    CacheFile* operator->() const;
+    CacheFile* get() const;
     // Returns true if this handle points to a valid file. This should normally
     // be the first thing called on the object, after getting it from
     // SimpleFileTracker::Acquire.
@@ -60,18 +68,17 @@ class NET_EXPORT_PRIVATE SimpleFileTracker {
     FileHandle(SimpleFileTracker* file_tracker,
                const SimpleSynchronousEntry* entry,
                SimpleFileTracker::SubFile subfile,
-               base::File* file);
+               CacheFile* file);
 
     // All the pointer fields are nullptr in the default/moved away from form.
-    SimpleFileTracker* file_tracker_ = nullptr;
-    const SimpleSynchronousEntry* entry_ = nullptr;
+    raw_ptr<SimpleFileTracker> file_tracker_ = nullptr;
+    raw_ptr<const SimpleSynchronousEntry> entry_ = nullptr;
     SimpleFileTracker::SubFile subfile_;
-    base::File* file_ = nullptr;
-    DISALLOW_COPY_AND_ASSIGN(FileHandle);
+    raw_ptr<CacheFile> file_ = nullptr;
   };
 
   struct EntryFileKey {
-    EntryFileKey() {}
+    EntryFileKey() = default;
     explicit EntryFileKey(uint64_t hash) : entry_hash(hash) {}
 
     uint64_t entry_hash = 0;
@@ -86,7 +93,11 @@ class NET_EXPORT_PRIVATE SimpleFileTracker {
 
   // The default limit here is half of what's available on our target OS where
   // Chrome has the lowest limit.
-  SimpleFileTracker(int file_limit = 512);
+  explicit SimpleFileTracker(int file_limit = 512);
+
+  SimpleFileTracker(const SimpleFileTracker&) = delete;
+  SimpleFileTracker& operator=(const SimpleFileTracker&) = delete;
+
   ~SimpleFileTracker();
 
   // Established |file| as what's backing |subfile| for |owner|. This is
@@ -96,7 +107,7 @@ class NET_EXPORT_PRIVATE SimpleFileTracker {
   // destroyed. |file->IsValid()| must be true.
   void Register(const SimpleSynchronousEntry* owner,
                 SubFile subfile,
-                std::unique_ptr<base::File> file);
+                std::unique_ptr<CacheFile> file);
 
   // Lends out a file to SimpleSynchronousEntry for use. SimpleFileTracker
   // will ensure that it doesn't close the file until the handle is destroyed.
@@ -105,7 +116,9 @@ class NET_EXPORT_PRIVATE SimpleFileTracker {
   // pressure, and that open may have failed. This should not be called twice
   // with the exact same arguments until the handle returned from the previous
   // such call is destroyed.
-  FileHandle Acquire(const SimpleSynchronousEntry* owner, SubFile subfile);
+  FileHandle Acquire(BackendFileOperations* file_operations,
+                     const SimpleSynchronousEntry* owner,
+                     SubFile subfile);
 
   // Tells SimpleFileTracker that SimpleSynchronousEntry will not be interested
   // in the file further, so it can be closed and forgotten about.  It's OK to
@@ -129,7 +142,7 @@ class NET_EXPORT_PRIVATE SimpleFileTracker {
   bool IsEmptyForTesting();
 
  private:
-  struct TrackedFiles {
+  struct TrackedFiles : public base::UnsafeLinkNode<TrackedFiles> {
     // We can potentially run through this state machine multiple times for
     // FILE_1, as that's often missing, so SimpleSynchronousEntry can sometimes
     // close and remove the file for an empty stream, then re-open it on actual
@@ -152,6 +165,8 @@ class NET_EXPORT_PRIVATE SimpleFileTracker {
     // is still relevant.
     bool HasOpenFiles() const;
 
+    bool InLRUList() const;
+    void RemoveIfLinked();
     // We use pointers to SimpleSynchronousEntry two ways:
     // 1) As opaque keys. This is handy as it avoids having to compare paths in
     //    case multiple backends use the same key. Since we access the
@@ -160,7 +175,7 @@ class NET_EXPORT_PRIVATE SimpleFileTracker {
     // 2) To get info on the caller of our operation.
     //    Accessing |owner| from any other TrackedFiles would be unsafe (as it
     //    may be doing its own thing in a different thread).
-    const SimpleSynchronousEntry* owner;
+    raw_ptr<const SimpleSynchronousEntry> owner;
     EntryFileKey key;
 
     // Some of these may be nullptr, if they are not open. Non-null pointers
@@ -168,15 +183,9 @@ class NET_EXPORT_PRIVATE SimpleFileTracker {
     // Note that these are stored indirect since we hand out pointers to these,
     // and we don't want those to become invalid if some other thread appends
     // things here.
-    std::unique_ptr<base::File> files[kSimpleEntryTotalFileCount];
+    std::array<std::unique_ptr<CacheFile>, kSimpleEntryTotalFileCount> files;
 
-    State state[kSimpleEntryTotalFileCount];
-    std::list<TrackedFiles*>::iterator position_in_lru;
-
-    // true if position_in_lru is valid. For entries where we closed everything,
-    // we try not to keep them in the LRU so that we don't have to constantly
-    // rescan them.
-    bool in_lru;
+    std::array<State, kSimpleEntryTotalFileCount> state;
   };
 
   // Marks the file that was previously returned by Acquire as eligible for
@@ -188,16 +197,18 @@ class NET_EXPORT_PRIVATE SimpleFileTracker {
 
   // Handles state transition of closing file (when we are not deferring it),
   // and moves the file out. Note that this may delete |*owners_files|.
-  std::unique_ptr<base::File> PrepareClose(TrackedFiles* owners_files,
-                                           int file_index);
+  std::unique_ptr<CacheFile> PrepareClose(TrackedFiles* owners_files,
+                                          int file_index);
 
   // If too many files are open, picks some to close, and moves them to
   // |*files_to_close|, updating other state as appropriate.
   void CloseFilesIfTooManyOpen(
-      std::vector<std::unique_ptr<base::File>>* files_to_close);
+      std::vector<std::unique_ptr<CacheFile>>* files_to_close);
 
   // Tries to reopen given file, updating |*owners_files| if successful.
-  void ReopenFile(TrackedFiles* owners_files, SubFile subfile);
+  void ReopenFile(BackendFileOperations* file_operations,
+                  TrackedFiles* owners_files,
+                  SubFile subfile);
 
   // Makes sure the entry is marked as most recently used, adding it to LRU
   // if needed.
@@ -206,10 +217,13 @@ class NET_EXPORT_PRIVATE SimpleFileTracker {
   base::Lock lock_;
   std::unordered_map<uint64_t, std::vector<std::unique_ptr<TrackedFiles>>>
       tracked_files_;
-  std::list<TrackedFiles*> lru_;
-
+  // base::LinkedList (an intrusive linked list) is used instead of std::list to
+  // avoid allocating a separate node object for each TrackedFiles. In an
+  // intrusive list, the next/previous pointers are stored directly in
+  // TrackedFiles (via base::LinkNode), reducing overhead and improving
+  // performance for LRU operations.
+  base::UnsafeLinkedList<TrackedFiles> lru_;
   int file_limit_;
-
   // How many actually open files we are using.
   // Note that when a thread commits to closing a file, but hasn't actually
   // executed the close yet, the file is no longer counted as open here, so this
@@ -218,8 +232,6 @@ class NET_EXPORT_PRIVATE SimpleFileTracker {
   // number of threads, and getting it exact would require re-acquiring the
   // lock after closing the file.
   int open_files_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(SimpleFileTracker);
 };
 
 }  // namespace disk_cache

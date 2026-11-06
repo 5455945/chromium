@@ -1,25 +1,35 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/web_applications/daily_metrics_helper.h"
 
+#include <stdint.h>
+
+#include <vector>
+
+#include "base/numerics/clamped_math.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "chrome/browser/web_applications/test/web_app_test.h"
+#include "chrome/test/base/testing_profile.h"
 #include "components/ukm/test_ukm_recorder.h"
+#include "content/public/test/browser_task_environment.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
+#include "services/metrics/public/mojom/ukm_interface.mojom.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
+#if BUILDFLAG(IS_MAC)
+#include "base/mac/mac_util.h"
+#endif
+
 namespace web_app {
 
 namespace {
 
-using base::Time;
-using base::TimeDelta;
 using testing::Contains;
 using testing::Key;
 using testing::Not;
@@ -49,17 +59,20 @@ class DailyMetricsHelperTest : public WebAppTest {
     SkipOriginCheckForTesting();
   }
 
+  void FlushOldRecordsAndUpdate(DailyInteraction record) {
+    web_app::FlushOldRecordsAndUpdate(record, profile());
+  }
+
   void RecordSomethingTheNextDaySoItEmits() {
-    task_environment()->FastForwardBy(TimeDelta::FromDays(1));
+    task_environment()->FastForwardBy(base::Days(1));
     DailyInteraction record(GURL("http://this.should.not.be.emitted.com/"));
-    FlushOldRecordsAndUpdate(record, profile());
+    FlushOldRecordsAndUpdate(record);
   }
 
   DailyMetricsHelperTest(const DailyMetricsHelperTest&) = delete;
   DailyMetricsHelperTest& operator=(const DailyMetricsHelperTest&) = delete;
 
   ukm::TestAutoSetUkmRecorder ukm_recorder_;
-
 };
 
 }  // namespace
@@ -67,16 +80,23 @@ class DailyMetricsHelperTest : public WebAppTest {
 TEST_F(DailyMetricsHelperTest, NothingEmittedForCallsInOneDay) {
   DailyInteraction record(GURL("http://some.url/"));
 
-  FlushOldRecordsAndUpdate(record, profile());
-  FlushOldRecordsAndUpdate(record, profile());
-  FlushOldRecordsAndUpdate(record, profile());
+  FlushOldRecordsAndUpdate(record);
+  FlushOldRecordsAndUpdate(record);
+  FlushOldRecordsAndUpdate(record);
 
   EXPECT_EQ(ukm_recorder_.entries_count(), 0U);
 }
 
 TEST_F(DailyMetricsHelperTest, EmitsOldRecordsOnFirstCallNextDay) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/434660312): Re-enable on macOS 26 once issues with
+  // unexpected test timeout failures are resolved.
+  if (base::mac::MacOSMajorVersion() == 26) {
+    GTEST_SKIP() << "Disabled on macOS Tahoe.";
+  }
+#endif
   DailyInteraction record1(GURL("http://some.url/1"));
-  FlushOldRecordsAndUpdate(record1, profile());
+  FlushOldRecordsAndUpdate(record1);
 
   RecordSomethingTheNextDaySoItEmits();
 
@@ -87,15 +107,22 @@ TEST_F(DailyMetricsHelperTest, EmitsOldRecordsOnFirstCallNextDay) {
 }
 
 TEST_F(DailyMetricsHelperTest, EmitsOncePerUrl) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/434660312): Re-enable on macOS 26 once issues with
+  // unexpected test timeout failures are resolved.
+  if (base::mac::MacOSMajorVersion() == 26) {
+    GTEST_SKIP() << "Disabled on macOS Tahoe.";
+  }
+#endif
   {
     DailyInteraction record(GURL("http://some.url/1"));
-    FlushOldRecordsAndUpdate(record, profile());
-    FlushOldRecordsAndUpdate(record, profile());
-    FlushOldRecordsAndUpdate(record, profile());
+    FlushOldRecordsAndUpdate(record);
+    FlushOldRecordsAndUpdate(record);
+    FlushOldRecordsAndUpdate(record);
   }
   {
     DailyInteraction record(GURL("http://some.url/2"));
-    FlushOldRecordsAndUpdate(record, profile());
+    FlushOldRecordsAndUpdate(record);
   }
 
   RecordSomethingTheNextDaySoItEmits();
@@ -104,23 +131,30 @@ TEST_F(DailyMetricsHelperTest, EmitsOncePerUrl) {
 }
 
 TEST_F(DailyMetricsHelperTest, EmitsLatestValuePerUrl) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/434660312): Re-enable on macOS 26 once issues with
+  // unexpected test timeout failures are resolved.
+  if (base::mac::MacOSMajorVersion() == 26) {
+    GTEST_SKIP() << "Disabled on macOS Tahoe.";
+  }
+#endif
   {
     DailyInteraction record1(GURL("http://some.url/1"));
     record1.install_source = 1;
-    FlushOldRecordsAndUpdate(record1, profile());
+    FlushOldRecordsAndUpdate(record1);
   }
   DailyInteraction record1(GURL("http://some.url/1"));
   record1.install_source = 2;
-  FlushOldRecordsAndUpdate(record1, profile());
+  FlushOldRecordsAndUpdate(record1);
 
   {
     DailyInteraction record2(GURL("http://some.url/2"));
     record2.install_source = 3;
-    FlushOldRecordsAndUpdate(record2, profile());
+    FlushOldRecordsAndUpdate(record2);
   }
   DailyInteraction record2(GURL("http://some.url/2"));
   record2.install_source = 4;
-  FlushOldRecordsAndUpdate(record2, profile());
+  FlushOldRecordsAndUpdate(record2);
 
   RecordSomethingTheNextDaySoItEmits();
 
@@ -135,9 +169,16 @@ TEST_F(DailyMetricsHelperTest, EmitsLatestValuePerUrl) {
 
 // Ensure last-recorded values are used for non-summed features.
 TEST_F(DailyMetricsHelperTest, EmitsLatestValues) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/434660312): Re-enable on macOS 26 once issues with
+  // unexpected test timeout failures are resolved.
+  if (base::mac::MacOSMajorVersion() == 26) {
+    GTEST_SKIP() << "Disabled on macOS Tahoe.";
+  }
+#endif
   // Record with default values.
   DailyInteraction record1(GURL("http://some.url/1"));
-  FlushOldRecordsAndUpdate(record1, profile());
+  FlushOldRecordsAndUpdate(record1);
 
   // Update with non-default values.
   DailyInteraction record2(GURL("http://some.url/1"));
@@ -145,12 +186,12 @@ TEST_F(DailyMetricsHelperTest, EmitsLatestValues) {
   record2.install_source = 1;
   record2.effective_display_mode = 2;
   record2.promotable = true;
-  FlushOldRecordsAndUpdate(record2, profile());
+  FlushOldRecordsAndUpdate(record2);
 
   RecordSomethingTheNextDaySoItEmits();
 
   EXPECT_EQ(ukm_recorder_.entries_count(), 1U);
-  auto* entry = ukm_recorder_.GetEntriesByName(UkmEntry::kEntryName)[0];
+  auto* entry = ukm_recorder_.GetEntriesByName(UkmEntry::kEntryName)[0].get();
   ukm::TestAutoSetUkmRecorder::ExpectEntryMetric(
       entry, UkmEntry::kInstalledName, true);
   ukm::TestAutoSetUkmRecorder::ExpectEntryMetric(
@@ -162,24 +203,31 @@ TEST_F(DailyMetricsHelperTest, EmitsLatestValues) {
 }
 
 TEST_F(DailyMetricsHelperTest, EmitsSumsForDurationsAndSessions) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/434660312): Re-enable on macOS 26 once issues with
+  // unexpected test timeout failures are resolved.
+  if (base::mac::MacOSMajorVersion() == 26) {
+    GTEST_SKIP() << "Disabled on macOS Tahoe.";
+  }
+#endif
   // Default values are 0s
   DailyInteraction record(GURL("http://some.url/1"));
-  FlushOldRecordsAndUpdate(record, profile());
+  FlushOldRecordsAndUpdate(record);
 
-  record.foreground_duration = TimeDelta::FromHours(1);
-  record.background_duration = TimeDelta::FromHours(2);
+  record.foreground_duration = base::Hours(1);
+  record.background_duration = base::Hours(2);
   record.num_sessions = 3;
-  FlushOldRecordsAndUpdate(record, profile());
+  FlushOldRecordsAndUpdate(record);
 
-  record.foreground_duration = TimeDelta::FromHours(4);
-  record.background_duration = TimeDelta::FromHours(5);
+  record.foreground_duration = base::Hours(4);
+  record.background_duration = base::Hours(5);
   record.num_sessions = 6;
-  FlushOldRecordsAndUpdate(record, profile());
+  FlushOldRecordsAndUpdate(record);
 
   RecordSomethingTheNextDaySoItEmits();
 
   ASSERT_EQ(ukm_recorder_.entries_count(), 1U);
-  auto* entry = ukm_recorder_.GetEntriesByName(UkmEntry::kEntryName)[0];
+  auto* entry = ukm_recorder_.GetEntriesByName(UkmEntry::kEntryName)[0].get();
   // 50 linear buckets per day, ie buckets of 1728 seconds,
   // 1+4 = 5 hours = 18000 seconds, bucketed into 10th bucket is 17280.
   ukm::TestAutoSetUkmRecorder::ExpectEntryMetric(
@@ -193,19 +241,26 @@ TEST_F(DailyMetricsHelperTest, EmitsSumsForDurationsAndSessions) {
 }
 
 TEST_F(DailyMetricsHelperTest, EmitsClampedSumsForExtremeDurations) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/434660312): Re-enable on macOS 26 once issues with
+  // unexpected test timeout failures are resolved.
+  if (base::mac::MacOSMajorVersion() == 26) {
+    GTEST_SKIP() << "Disabled on macOS Tahoe.";
+  }
+#endif
   DailyInteraction record(GURL("http://some.url/1"));
-  record.foreground_duration = TimeDelta::FromSeconds(1);
-  record.background_duration = TimeDelta::FromHours(20);
-  FlushOldRecordsAndUpdate(record, profile());
+  record.foreground_duration = base::Seconds(1);
+  record.background_duration = base::Hours(20);
+  FlushOldRecordsAndUpdate(record);
 
-  record.foreground_duration = TimeDelta::FromSeconds(3);
-  record.background_duration = TimeDelta::FromHours(15);
-  FlushOldRecordsAndUpdate(record, profile());
+  record.foreground_duration = base::Seconds(3);
+  record.background_duration = base::Hours(15);
+  FlushOldRecordsAndUpdate(record);
 
   RecordSomethingTheNextDaySoItEmits();
 
   ASSERT_EQ(ukm_recorder_.entries_count(), 1U);
-  auto* entry = ukm_recorder_.GetEntriesByName(UkmEntry::kEntryName)[0];
+  auto* entry = ukm_recorder_.GetEntriesByName(UkmEntry::kEntryName)[0].get();
   // 50 linear buckets per day, ie buckets of 1728 seconds,
   // 1+3 = 4 seconds, bucketed into 1st bucket so min value of 1.
   ukm::TestAutoSetUkmRecorder::ExpectEntryMetric(
@@ -217,14 +272,21 @@ TEST_F(DailyMetricsHelperTest, EmitsClampedSumsForExtremeDurations) {
 }
 
 TEST_F(DailyMetricsHelperTest, DoesNotEmitZeroDurationsOrSessions) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/434660312): Re-enable on macOS 26 once issues with
+  // unexpected test timeout failures are resolved.
+  if (base::mac::MacOSMajorVersion() == 26) {
+    GTEST_SKIP() << "Disabled on macOS Tahoe.";
+  }
+#endif
   DailyInteraction record1(GURL("http://some.url/1"));
-  FlushOldRecordsAndUpdate(record1, profile());
+  FlushOldRecordsAndUpdate(record1);
 
   RecordSomethingTheNextDaySoItEmits();
 
   auto entries = ukm_recorder_.GetEntriesByName(UkmEntry::kEntryName);
   ASSERT_EQ(entries.size(), 1U);
-  auto* entry = entries[0];
+  auto* entry = entries[0].get();
   ukm_recorder_.ExpectEntrySourceHasUrl(entries[0], record1.start_url);
   ASSERT_THAT(entry->metrics,
               Not(Contains(Key(UkmEntry::kForegroundDurationNameHash))));

@@ -29,43 +29,48 @@
 #include "third_party/blink/renderer/platform/audio/hrtf_kernel.h"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "third_party/blink/renderer/platform/audio/audio_channel.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 
 namespace blink {
+
+namespace {
 
 // Takes the input AudioChannel as an input impulse response and calculates the
 // average group delay.  This represents the initial delay before the most
 // energetic part of the impulse response.  The sample-frame delay is removed
 // from the impulseP impulse response, and this value  is returned.  The length
 // of the passed in AudioChannel must be a power of 2.
-static float ExtractAverageGroupDelay(AudioChannel* channel,
-                                      size_t analysis_fft_size) {
+float ExtractAverageGroupDelay(AudioChannel* channel,
+                               unsigned analysis_fft_size) {
   DCHECK(channel);
 
-  float* impulse_p = channel->MutableData();
-
-  DCHECK_GE(channel->length(), analysis_fft_size);
+  base::span<float> impulse_span =
+      channel->MutableSpan().first(analysis_fft_size);
 
   // Check for power-of-2.
   DCHECK_EQ(1UL << static_cast<unsigned>(log2(analysis_fft_size)),
             analysis_fft_size);
 
   FFTFrame estimation_frame(analysis_fft_size);
-  estimation_frame.DoFFT(impulse_p);
+  estimation_frame.DoFFT(impulse_span);
 
-  float frame_delay =
-      clampTo<float>(estimation_frame.ExtractAverageGroupDelay());
-  estimation_frame.DoInverseFFT(impulse_p);
+  const float frame_delay =
+      ClampTo<float>(estimation_frame.ExtractAverageGroupDelay());
+  estimation_frame.DoInverseFFT(impulse_span);
 
   return frame_delay;
 }
 
+}  // namespace
+
 HRTFKernel::HRTFKernel(AudioChannel* channel,
-                       size_t fft_size,
+                       unsigned fft_size,
                        float sample_rate)
     : frame_delay_(0), sample_rate_(sample_rate) {
   DCHECK(channel);
@@ -73,16 +78,17 @@ HRTFKernel::HRTFKernel(AudioChannel* channel,
   // Determine the leading delay (average group delay) for the response.
   frame_delay_ = ExtractAverageGroupDelay(channel, fft_size / 2);
 
-  float* impulse_response = channel->MutableData();
-  size_t response_length = channel->length();
+  base::span<float> impulse_response = channel->MutableSpan();
+  const uint32_t response_length = channel->length();
 
   // We need to truncate to fit into 1/2 the FFT size (with zero padding) in
   // order to do proper convolution.
   // Truncate if necessary to max impulse response length allowed by FFT.
-  size_t truncated_response_length = std::min(response_length, fft_size / 2);
+  const unsigned truncated_response_length =
+      std::min(response_length, fft_size / 2);
 
   // Quick fade-out (apply window) at truncation point
-  unsigned number_of_fade_out_frames = static_cast<unsigned>(
+  const unsigned number_of_fade_out_frames = static_cast<unsigned>(
       sample_rate / 4410);  // 10 sample-frames @44.1KHz sample-rate
   DCHECK_LT(number_of_fade_out_frames, truncated_response_length);
   for (unsigned i = truncated_response_length - number_of_fade_out_frames;
@@ -94,7 +100,7 @@ HRTFKernel::HRTFKernel(AudioChannel* channel,
   }
 
   fft_frame_ = std::make_unique<FFTFrame>(fft_size);
-  fft_frame_->DoPaddedFFT(impulse_response, truncated_response_length);
+  fft_frame_->DoPaddedFFT(impulse_response.first(truncated_response_length));
 }
 
 // Interpolates two kernels with x: 0 -> 1 and returns the result.
@@ -106,20 +112,17 @@ std::unique_ptr<HRTFKernel> HRTFKernel::CreateInterpolatedKernel(
   DCHECK(kernel2);
   DCHECK_GE(x, 0.0);
   DCHECK_LT(x, 1.0);
-  x = clampTo(x, 0.0f, 1.0f);
+  DCHECK_EQ(kernel1->sample_rate_, kernel2->sample_rate_);
 
-  float sample_rate1 = kernel1->SampleRate();
-  float sample_rate2 = kernel2->SampleRate();
-  DCHECK_EQ(sample_rate1, sample_rate2);
-
-  float frame_delay =
-      (1 - x) * kernel1->FrameDelay() + x * kernel2->FrameDelay();
+  x = ClampTo(x, 0.0f, 1.0f);
+  const float frame_delay =
+      std::lerp(kernel1->FrameDelay(), kernel2->FrameDelay(), x);
 
   std::unique_ptr<FFTFrame> interpolated_frame =
       FFTFrame::CreateInterpolatedFrame(*kernel1->FftFrame(),
                                         *kernel2->FftFrame(), x);
   return std::make_unique<HRTFKernel>(std::move(interpolated_frame),
-                                      frame_delay, sample_rate1);
+                                      frame_delay, kernel1->sample_rate_);
 }
 
 }  // namespace blink

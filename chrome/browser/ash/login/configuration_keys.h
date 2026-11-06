@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,10 @@
 
 #include "base/values.h"
 
-namespace chromeos {
+namespace ash {
 namespace configuration {
 // Configuration keys that are used to automate OOBE screens go here.
 // Please keep keys grouped by screens and ordered according to OOBE flow.
-
-extern const char kSkipHIDDetection[];
 
 extern const char kLanguage[];
 extern const char kInputMethod[];
@@ -24,6 +22,7 @@ extern const char kDemoModePreferencesNext[];
 extern const char kNetworkSelectGUID[];
 extern const char kNetworkOfflineDemo[];
 extern const char kNetworkUseConnected[];
+extern const char kNetworkConfig[];
 
 extern const char kDeviceRequisition[];
 
@@ -32,15 +31,16 @@ extern const char kEULAAutoAccept[];
 
 extern const char kArcTosAutoAccept[];
 
-extern const char kUpdateSkipUpdate[];
-
-extern const char kWizardAutoEnroll[];
-
 extern const char kRestoreAfterRollback[];
-extern const char kEnrollmentToken[];
 extern const char kEnrollmentAssetId[];
 extern const char kEnrollmentLocation[];
 extern const char kEnrollmentAutoAttributes[];
+extern const char kEnrollmentToken[];
+extern const char kSkipEnrollmentSuccessScreen[];
+extern const char kSkipUpdateOptOutScreen[];
+extern const char kSkipHIDScreen[];
+
+extern const char kSource[];
 
 enum class ConfigurationHandlerSide : unsigned int {
   HANDLER_JS,    // Handled by JS code
@@ -51,30 +51,12 @@ enum class ConfigurationHandlerSide : unsigned int {
 
 // Checks if configuration is valid (all fields have correct types, no extra
 // fields).
-bool ValidateConfiguration(const base::Value& configuration);
+bool ValidateConfiguration(const base::DictValue& configuration);
 
-// Copies only fields handled by particular `side` from `configuration` to
-// `filtered_result`.
-void FilterConfiguration(const base::Value& configuration,
-                         ConfigurationHandlerSide side,
-                         base::Value& filtered_result);
-}  // namespace configuration
-}  // namespace chromeos
-
-// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
-// source migration is finished.
-namespace ash {
-namespace configuration {
-using ::chromeos::configuration::kDeviceRequisition;
-using ::chromeos::configuration::kEnableDemoMode;
-using ::chromeos::configuration::kEnrollmentAssetId;
-using ::chromeos::configuration::kEnrollmentAutoAttributes;
-using ::chromeos::configuration::kEnrollmentLocation;
-using ::chromeos::configuration::kEnrollmentToken;
-using ::chromeos::configuration::kRestoreAfterRollback;
-using ::chromeos::configuration::kSkipHIDDetection;
-using ::chromeos::configuration::kUpdateSkipUpdate;
-using ::chromeos::configuration::kWizardAutoEnroll;
+// Returns a dictionary with only fields handled by particular `side` from
+// `configuration`.
+base::DictValue FilterConfiguration(const base::DictValue& configuration,
+                                    ConfigurationHandlerSide side);
 }  // namespace configuration
 }  // namespace ash
 

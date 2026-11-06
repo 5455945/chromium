@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,98 +7,85 @@
 #include <windows.h>
 
 #include <tlhelp32.h>
+#include <wincrypt.h>
 #include <wintrust.h>
 
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <string>
+#include <string_view>
 
+#include "base/containers/heap_array.h"
 #include "base/environment.h"
 #include "base/files/file.h"
 #include "base/i18n/case_conversion.h"
 #include "base/logging.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/scoped_generic.h"
-#include "base/strings/string_piece.h"
+#include "base/strings/strcat.h"
+#include "base/strings/strcat_win.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/win/pe_image_reader.h"
 #include "base/win/scoped_handle.h"
-#include "base/win/wincrypt_shim.h"
+#include "crypto/scoped_capi_types.h"
 
 // This must be after wincrypt and wintrust.
 #include <mscat.h>
 
 namespace {
 
-// Helper for scoped tracking an HCERTSTORE.
-struct ScopedHCERTSTORETraits {
-  static HCERTSTORE InvalidValue() { return nullptr; }
-  static void Free(HCERTSTORE store) { ::CertCloseStore(store, 0); }
-};
-using ScopedHCERTSTORE =
-    base::ScopedGeneric<HCERTSTORE, ScopedHCERTSTORETraits>;
-
-// Helper for scoped tracking an HCRYPTMSG.
-struct ScopedHCRYPTMSGTraits {
-  static HCRYPTMSG InvalidValue() { return nullptr; }
-  static void Free(HCRYPTMSG message) { ::CryptMsgClose(message); }
-};
-using ScopedHCRYPTMSG = base::ScopedGeneric<HCRYPTMSG, ScopedHCRYPTMSGTraits>;
-
 // Returns the "Subject" field from the digital signature in the provided
 // binary, if any is present. Returns an empty string on failure.
 std::u16string GetSubjectNameInFile(const base::FilePath& filename) {
-  ScopedHCERTSTORE store;
-  ScopedHCRYPTMSG message;
-
   // Find the crypto message for this filename.
-  {
-    HCERTSTORE temp_store = nullptr;
-    HCRYPTMSG temp_message = nullptr;
-    bool result =
-        !!CryptQueryObject(CERT_QUERY_OBJECT_FILE, filename.value().c_str(),
-                           CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
-                           CERT_QUERY_FORMAT_FLAG_BINARY, 0, nullptr, nullptr,
-                           nullptr, &temp_store, &temp_message, nullptr);
-    store.reset(temp_store);
-    message.reset(temp_message);
-    if (!result)
-      return std::u16string();
+  crypto::ScopedHCERTSTORE store;
+  crypto::ScopedHCRYPTMSG message;
+  if (!CryptQueryObject(
+          CERT_QUERY_OBJECT_FILE, filename.value().c_str(),
+          CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+          CERT_QUERY_FORMAT_FLAG_BINARY, 0, nullptr, nullptr, nullptr,
+          crypto::ScopedHCERTSTORE::Receiver(store).get(),
+          crypto::ScopedHCRYPTMSG::Receiver(message).get(), nullptr)) {
+    return std::u16string();
   }
 
   // Determine the size of the signer info data.
   DWORD signer_info_size = 0;
-  bool result = !!CryptMsgGetParam(message.get(), CMSG_SIGNER_INFO_PARAM, 0,
-                                   nullptr, &signer_info_size);
-  if (!result)
+  if (!CryptMsgGetParam(message.get(), CMSG_SIGNER_INFO_PARAM, 0, nullptr,
+                        &signer_info_size)) {
     return std::u16string();
+  }
 
   // Allocate enough space to hold the signer info.
-  std::unique_ptr<BYTE[]> signer_info_buffer(new BYTE[signer_info_size]);
+  base::HeapArray<uint8_t> signer_info_buffer =
+      base::HeapArray<uint8_t>::Uninit(signer_info_size);
   CMSG_SIGNER_INFO* signer_info =
-      reinterpret_cast<CMSG_SIGNER_INFO*>(signer_info_buffer.get());
+      reinterpret_cast<CMSG_SIGNER_INFO*>(signer_info_buffer.data());
 
   // Obtain the signer info.
-  result = !!CryptMsgGetParam(message.get(), CMSG_SIGNER_INFO_PARAM, 0,
-                              signer_info, &signer_info_size);
-  if (!result)
+  // SAFETY: `signer_info_buffer.size()` is the size of the allocation.
+  if (!UNSAFE_BUFFERS(CryptMsgGetParam(message.get(), CMSG_SIGNER_INFO_PARAM, 0,
+                                       signer_info, &signer_info_size))) {
     return std::u16string();
+  }
 
   // Search for the signer certificate.
   CERT_INFO CertInfo = {0};
-  PCCERT_CONTEXT cert_context = nullptr;
   CertInfo.Issuer = signer_info->Issuer;
   CertInfo.SerialNumber = signer_info->SerialNumber;
 
-  cert_context = CertFindCertificateInStore(
+  crypto::ScopedPCCERT_CONTEXT cert_context(CertFindCertificateInStore(
       store.get(), X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, 0,
-      CERT_FIND_SUBJECT_CERT, &CertInfo, nullptr);
+      CERT_FIND_SUBJECT_CERT, &CertInfo, nullptr));
   if (!cert_context)
     return std::u16string();
 
   // Determine the size of the Subject name.
-  DWORD subject_name_size = CertGetNameString(
-      cert_context, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, nullptr, nullptr, 0);
+  DWORD subject_name_size =
+      CertGetNameString(cert_context.get(), CERT_NAME_SIMPLE_DISPLAY_TYPE, 0,
+                        nullptr, nullptr, 0);
   if (!subject_name_size)
     return std::u16string();
 
@@ -106,9 +93,9 @@ std::u16string GetSubjectNameInFile(const base::FilePath& filename) {
   subject_name.resize(subject_name_size);
 
   // Get subject name.
-  if (!(CertGetNameString(cert_context, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0,
-                          nullptr, const_cast<LPWSTR>(subject_name.c_str()),
-                          subject_name_size))) {
+  if (!CertGetNameString(cert_context.get(), CERT_NAME_SIMPLE_DISPLAY_TYPE, 0,
+                         nullptr, const_cast<LPWSTR>(subject_name.c_str()),
+                         subject_name_size)) {
     return std::u16string();
   }
 
@@ -179,19 +166,20 @@ void GetCatalogCertificateInfo(const base::FilePath& filename,
       CreateFileW(filename.value().c_str(), GENERIC_READ,
                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                   nullptr, OPEN_EXISTING, 0, nullptr));
-  if (!file_handle.IsValid())
+  if (!file_handle.is_valid()) {
     return;
+  }
 
   // Get the size we need for our hash.
   DWORD hash_size = 0;
-  CryptCATAdminCalcHashFromFileHandle(file_handle.Get(), &hash_size, nullptr,
+  CryptCATAdminCalcHashFromFileHandle(file_handle.get(), &hash_size, nullptr,
                                       0);
   if (hash_size == 0)
     return;
 
   // Calculate the hash. If this fails then bail.
   std::vector<BYTE> buffer(hash_size);
-  if (!CryptCATAdminCalcHashFromFileHandle(file_handle.Get(), &hash_size,
+  if (!CryptCATAdminCalcHashFromFileHandle(file_handle.get(), &hash_size,
                                            buffer.data(), 0)) {
     return;
   }
@@ -227,7 +215,9 @@ void GetCatalogCertificateInfo(const base::FilePath& filename,
 
 }  // namespace
 
-const wchar_t kClassIdRegistryKeyFormat[] = L"CLSID\\%ls\\InProcServer32";
+std::wstring GuidToClsid(std::wstring_view guid) {
+  return base::StrCat({L"CLSID\\", guid, L"\\InProcServer32"});
+}
 
 // ModuleDatabase::CertificateInfo ---------------------------------------------
 
@@ -237,9 +227,10 @@ CertificateInfo::CertificateInfo() : type(Type::NO_CERTIFICATE) {}
 // found.
 void GetCertificateInfo(const base::FilePath& filename,
                         CertificateInfo* certificate_info) {
-  DCHECK_EQ(CertificateInfo::Type::NO_CERTIFICATE, certificate_info->type);
-  DCHECK(certificate_info->path.empty());
-  DCHECK(certificate_info->subject.empty());
+  CHECK_EQ(CertificateInfo::Type::NO_CERTIFICATE, certificate_info->type,
+           base::NotFatalUntil::M163);
+  CHECK(certificate_info->path.empty(), base::NotFatalUntil::M163);
+  CHECK(certificate_info->subject.empty(), base::NotFatalUntil::M163);
 
   GetCatalogCertificateInfo(filename, certificate_info);
   if (certificate_info->type == CertificateInfo::Type::CERTIFICATE_IN_CATALOG)
@@ -254,7 +245,7 @@ void GetCertificateInfo(const base::FilePath& filename,
   certificate_info->subject = subject;
 }
 
-bool IsMicrosoftModule(base::StringPiece16 subject) {
+bool IsMicrosoftModule(std::u16string_view subject) {
   static constexpr char16_t kMicrosoft[] = u"Microsoft ";
   return base::StartsWith(subject, kMicrosoft);
 }
@@ -265,11 +256,13 @@ StringMapping GetEnvironmentVariablesMapping(
 
   StringMapping string_mapping;
   for (const std::wstring& variable : environment_variables) {
-    std::string value;
-    if (environment->GetVar(base::WideToASCII(variable).c_str(), &value)) {
-      value = std::string(base::TrimString(value, "\\", base::TRIM_TRAILING));
+    std::optional<std::string> value =
+        environment->GetVar(base::WideToASCII(variable));
+    if (value.has_value()) {
+      std::string_view trimmed_value =
+          base::TrimString(value.value(), "\\", base::TRIM_TRAILING);
       string_mapping.push_back(std::make_pair(
-          base::i18n::ToLower(base::UTF8ToUTF16(value)),
+          base::i18n::ToLower(base::UTF8ToUTF16(trimmed_value)),
           u"%" + base::i18n::ToLower(base::AsString16(variable)) + u"%"));
     }
   }
@@ -280,11 +273,13 @@ StringMapping GetEnvironmentVariablesMapping(
 void CollapseMatchingPrefixInPath(const StringMapping& prefix_mapping,
                                   std::u16string* path) {
   const std::u16string path_copy = *path;
-  DCHECK_EQ(base::i18n::ToLower(path_copy), path_copy);
+  CHECK_EQ(base::i18n::ToLower(path_copy), path_copy,
+           base::NotFatalUntil::M163);
 
   size_t min_length = std::numeric_limits<size_t>::max();
   for (const auto& mapping : prefix_mapping) {
-    DCHECK_EQ(base::i18n::ToLower(mapping.first), mapping.first);
+    CHECK_EQ(base::i18n::ToLower(mapping.first), mapping.first,
+             base::NotFatalUntil::M163);
     if (base::StartsWith(path_copy, mapping.first)) {
       // Make sure the matching prefix is a full path component.
       if (path_copy[mapping.first.length()] != '\\' &&
@@ -308,24 +303,24 @@ bool GetModuleImageSizeAndTimeDateStamp(const base::FilePath& path,
                                         uint32_t* size_of_image,
                                         uint32_t* time_date_stamp) {
   base::File file(path, base::File::FLAG_OPEN | base::File::FLAG_READ);
-  if (!file.IsValid())
+  if (!file.IsValid()) {
     return false;
+  }
 
   // The values fetched here from the NT header live in the first 4k bytes of
   // the file in a well-formed dll.
   constexpr size_t kPageSize = 4096;
 
-  // Note: std::make_unique() is explicitly avoided because it does value-
-  //       initialization on arrays, which is not needed in this case.
-  auto buffer = std::unique_ptr<uint8_t[]>(new uint8_t[kPageSize]);
-  int bytes_read =
-      file.Read(0, reinterpret_cast<char*>(buffer.get()), kPageSize);
-  if (bytes_read == -1)
+  auto buffer = base::HeapArray<uint8_t>::Uninit(kPageSize);
+  std::optional<size_t> bytes_read = file.Read(0, buffer);
+  if (!bytes_read.has_value()) {
     return false;
+  }
 
   base::win::PeImageReader pe_image_reader;
-  if (!pe_image_reader.Initialize(buffer.get(), bytes_read))
+  if (!pe_image_reader.Initialize(buffer.first(bytes_read.value()))) {
     return false;
+  }
 
   *size_of_image = pe_image_reader.GetSizeOfImage();
   *time_date_stamp = pe_image_reader.GetCoffFileHeader()->TimeDateStamp;

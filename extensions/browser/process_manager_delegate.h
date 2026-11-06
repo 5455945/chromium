@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,15 +16,15 @@ class Extension;
 // Customization of ProcessManager for the extension system embedder.
 class ProcessManagerDelegate {
  public:
-  virtual ~ProcessManagerDelegate() {}
+  virtual ~ProcessManagerDelegate() = default;
 
   // Returns true if the embedder allows background pages for the given
-  // |context|.
+  // `context`.
   virtual bool AreBackgroundPagesAllowedForContext(
       content::BrowserContext* context) const = 0;
 
   // Returns true if the embedder allows background pages for the given
-  // |context|, and a given |extension|.
+  // `context`, and a given `extension`.
   virtual bool IsExtensionBackgroundPageAllowed(
       content::BrowserContext* context,
       const Extension& extension) const = 0;

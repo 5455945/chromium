@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define CONTENT_BROWSER_RENDERER_HOST_MEDIA_VIDEO_CAPTURE_PROVIDER_SWITCHER_H_
 
 #include "content/browser/renderer_host/media/video_capture_provider.h"
+#include "content/common/content_export.h"
 
 namespace content {
 
@@ -20,9 +21,32 @@ class CONTENT_EXPORT VideoCaptureProviderSwitcher
       std::unique_ptr<VideoCaptureProvider> other_types_capture_provider);
   ~VideoCaptureProviderSwitcher() override;
 
-  void GetDeviceInfosAsync(GetDeviceInfosCallback result_callback) override;
+  void GetDeviceInfosAsync(
+      media::mojom::VideoCaptureDeviceEnumerationMode enumeration_mode,
+      GetDeviceInfosCallback result_callback) override;
 
   std::unique_ptr<VideoCaptureDeviceLauncher> CreateDeviceLauncher() override;
+  std::unique_ptr<VideoCaptureDeviceLauncher>
+  CreateDeviceLauncherWithSharedMemoryBuffers() override;
+
+  void OpenNativeScreenCapturePicker(
+      content::DesktopMediaID::Type type,
+      base::OnceCallback<void(DesktopMediaID::Id)> created_callback,
+      base::OnceCallback<void(webrtc::DesktopCapturer::Source)> picker_callback,
+      base::OnceCallback<void()> cancel_callback,
+      base::OnceCallback<void()> error_callback,
+      base::OnceCallback<void(DesktopMediaID::Id)> stop_audio_callback)
+      override;
+
+  void CloseNativeScreenCapturePicker(DesktopMediaID device_id) override;
+
+#if BUILDFLAG(IS_MAC)
+  void GetApplicationAudioCaptureId(
+      DesktopMediaID::Id session_id,
+      base::OnceCallback<void(
+          const std::optional<desktop_capture::ApplicationAudioCaptureId>&)>
+          callback) override;
+#endif
 
  private:
   const std::unique_ptr<VideoCaptureProvider> media_device_capture_provider_;

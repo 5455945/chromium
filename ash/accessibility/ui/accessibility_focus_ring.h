@@ -1,9 +1,11 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_ACCESSIBILITY_UI_ACCESSIBILITY_FOCUS_RING_H_
 #define ASH_ACCESSIBILITY_UI_ACCESSIBILITY_FOCUS_RING_H_
+
+#include <array>
 
 #include "ash/ash_export.h"
 #include "ui/gfx/geometry/point.h"
@@ -104,7 +106,7 @@ struct ASH_EXPORT AccessibilityFocusRing {
 
   // Display coordinates for the focus ring. These are in the coordinate system
   // of the display on which the ring will be shown.
-  gfx::Point points[36];
+  std::array<gfx::Point, 36> points;
 
   // Bounds in screen coordinates for the focus ring.
   gfx::Rect bounds_in_screen;

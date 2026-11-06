@@ -1,36 +1,33 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/renderer_host/render_frame_host_delegate.h"
 
 #include <stddef.h>
+
 #include <memory>
 #include <string>
 #include <utility>
 
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
+#include "base/notreached.h"
 #include "build/build_config.h"
-#include "ipc/ipc_message.h"
+#include "content/browser/back_forward_cache/back_forward_cache_impl.h"
+#include "content/public/browser/cookie_access_details.h"
+#include "content/public/browser/global_routing_id.h"
+#include "content/public/browser/trust_token_access_details.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "third_party/blink/public/mojom/frame/fullscreen.mojom.h"
-#include "third_party/blink/public/mojom/frame/text_autosizer_page_info.mojom.h"
-#include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
-#include "ui/gfx/native_widget_types.h"
+#include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
+#include "ui/base/clipboard/clipboard_metadata.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
+#include "ui/gfx/native_ui_types.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
 namespace content {
-
-bool RenderFrameHostDelegate::OnMessageReceived(
-    RenderFrameHostImpl* render_frame_host,
-    const IPC::Message& message) {
-  return false;
-}
-
-const GURL& RenderFrameHostDelegate::GetMainFrameLastCommittedURL() {
-  return GURL::EmptyGURL();
-}
 
 bool RenderFrameHostDelegate::DidAddMessageToConsole(
     RenderFrameHostImpl* source_frame,
@@ -38,22 +35,28 @@ bool RenderFrameHostDelegate::DidAddMessageToConsole(
     const std::u16string& message,
     int32_t line_no,
     const std::u16string& source_id,
-    const absl::optional<std::u16string>& untrusted_stack_trace) {
+    const std::optional<std::u16string>& untrusted_stack_trace) {
   return false;
 }
 
-WebContents* RenderFrameHostDelegate::GetAsWebContents() {
-  return nullptr;
-}
-
 void RenderFrameHostDelegate::RequestMediaAccessPermission(
+    RenderFrameHostImpl* render_frame_host,
     const MediaStreamRequest& request,
     MediaResponseCallback callback) {
   LOG(ERROR) << "RenderFrameHostDelegate::RequestMediaAccessPermission: "
              << "Not supported.";
-  std::move(callback).Run(blink::MediaStreamDevices(),
+  std::move(callback).Run(blink::mojom::StreamDevicesSet(),
                           blink::mojom::MediaStreamRequestResult::NOT_SUPPORTED,
                           std::unique_ptr<MediaStreamUI>());
+}
+
+void RenderFrameHostDelegate::ProcessSelectAudioOutput(
+    const SelectAudioOutputRequest& request,
+    SelectAudioOutputCallback callback) {
+  LOG(ERROR) << "RenderFrameHostDelegate::ProcessSelectAudioOutput: "
+             << "Not supported.";
+  std::move(callback).Run(
+      base::unexpected(content::SelectAudioOutputError::kNotSupported));
 }
 
 bool RenderFrameHostDelegate::CheckMediaAccessPermission(
@@ -65,13 +68,12 @@ bool RenderFrameHostDelegate::CheckMediaAccessPermission(
   return false;
 }
 
-std::string RenderFrameHostDelegate::GetDefaultMediaDeviceID(
-    blink::mojom::MediaStreamType type) {
-  return std::string();
-}
-
 ui::AXMode RenderFrameHostDelegate::GetAccessibilityMode() {
   return ui::AXMode();
+}
+
+bool RenderFrameHostDelegate::ShouldIgnoreInputEvents() {
+  return false;
 }
 
 device::mojom::GeolocationContext*
@@ -79,18 +81,20 @@ RenderFrameHostDelegate::GetGeolocationContext() {
   return nullptr;
 }
 
-#if defined(OS_ANDROID)
+SurfaceEmbedConnector* RenderFrameHostDelegate::GetSurfaceEmbedConnector()
+    const {
+  return nullptr;
+}
+
+#if BUILDFLAG(IS_ANDROID) || (BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS))
 void RenderFrameHostDelegate::GetNFC(
-    RenderFrameHost* render_frame_host,
+    RenderFrameHostImpl* render_frame_host,
     mojo::PendingReceiver<device::mojom::NFC> receiver) {}
 #endif
 
-bool RenderFrameHostDelegate::CanEnterFullscreenMode() {
+bool RenderFrameHostDelegate::CanEnterFullscreenMode(
+    RenderFrameHostImpl* requesting_frame) {
   return true;
-}
-
-bool RenderFrameHostDelegate::HasEnteredFullscreenMode() {
-  return false;
 }
 
 void RenderFrameHostDelegate::FullscreenStateChanged(
@@ -98,21 +102,17 @@ void RenderFrameHostDelegate::FullscreenStateChanged(
     bool is_fullscreen,
     blink::mojom::FullscreenOptionsPtr options) {}
 
-bool RenderFrameHostDelegate::ShouldRouteMessageEvent(
-    RenderFrameHostImpl* target_rfh,
-    SiteInstance* source_site_instance) const {
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+bool RenderFrameHostDelegate::CanUseWindowingControls(RenderFrameHostImpl*) {
+  return false;
+}
+#endif
+
+bool RenderFrameHostDelegate::IsInnerWebContentsForGuest() {
   return false;
 }
 
-RenderFrameHostImpl*
-RenderFrameHostDelegate::GetFocusedFrameIncludingInnerWebContents() {
-  return nullptr;
-}
-
-std::unique_ptr<WebUIImpl>
-RenderFrameHostDelegate::CreateWebUIForRenderFrameHost(
-    RenderFrameHostImpl* frame_host,
-    const GURL& url) {
+RenderFrameHostImpl* RenderFrameHostDelegate::GetFocusedFrame() {
   return nullptr;
 }
 
@@ -121,7 +121,16 @@ FrameTree* RenderFrameHostDelegate::CreateNewWindow(
     const mojom::CreateNewWindowParams& params,
     bool is_new_browsing_instance,
     bool has_user_gesture,
-    SessionStorageNamespace* session_storage_namespace) {
+    SessionStorageNamespaceHandle* session_storage_namespace) {
+  return nullptr;
+}
+
+WebContents* RenderFrameHostDelegate::ShowCreatedWindow(
+    RenderFrameHostImpl* opener,
+    int main_frame_widget_route_id,
+    ui::mojom::WindowOpenDisposition disposition,
+    const blink::mojom::WindowFeatures& window_features,
+    bool user_gesture) {
   return nullptr;
 }
 
@@ -132,24 +141,15 @@ bool RenderFrameHostDelegate::ShouldAllowRunningInsecureContent(
   return false;
 }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 base::android::ScopedJavaLocalRef<jobject>
 RenderFrameHostDelegate::GetJavaRenderFrameHostDelegate() {
   return nullptr;
 }
 #endif
 
-bool RenderFrameHostDelegate::IsBeingDestroyed() {
-  return false;
-}
-
 Visibility RenderFrameHostDelegate::GetVisibility() {
   return Visibility::HIDDEN;
-}
-
-RenderFrameHostImpl* RenderFrameHostDelegate::GetMainFrameForInnerDelegate(
-    FrameTreeNode* frame_tree_node) {
-  return nullptr;
 }
 
 std::vector<FrameTreeNode*> RenderFrameHostDelegate::GetUnattachedOwnedNodes(
@@ -157,29 +157,25 @@ std::vector<FrameTreeNode*> RenderFrameHostDelegate::GetUnattachedOwnedNodes(
   return {};
 }
 
-media::MediaMetricsProvider::RecordAggregateWatchTimeCallback
-RenderFrameHostDelegate::GetRecordAggregateWatchTimeCallback() {
-  return base::NullCallback();
+void RenderFrameHostDelegate::IsClipboardPasteAllowedByPolicy(
+    const ClipboardEndpoint& source,
+    const ClipboardEndpoint& destination,
+    const ui::ClipboardMetadata& metadata,
+    ClipboardPasteData clipboard_paste_data,
+    IsClipboardPasteAllowedCallback callback) {
+  std::move(callback).Run(std::move(clipboard_paste_data));
 }
 
-void RenderFrameHostDelegate::IsClipboardPasteContentAllowed(
-    const GURL& url,
-    const ui::ClipboardFormatType& data_type,
-    const std::string& data,
-    IsClipboardPasteContentAllowedCallback callback) {
-  std::move(callback).Run(ClipboardPasteContentAllowed(true));
+std::optional<std::vector<std::u16string>>
+RenderFrameHostDelegate::GetClipboardTypesIfPolicyApplied(
+    const ui::ClipboardSequenceNumberToken& seqno) {
+  return std::nullopt;
 }
 
-void RenderFrameHostDelegate::OnTextAutosizerPageInfoChanged(
-    RenderFrameHostImpl* source,
-    blink::mojom::TextAutosizerPageInfoPtr page_info) {}
-
-bool RenderFrameHostDelegate::HasSeenRecentScreenOrientationChange() {
-  return false;
-}
-
-bool RenderFrameHostDelegate::IsTransientAllowFullscreenActive() const {
-  return false;
+bool RenderFrameHostDelegate::IsTransientActivationRequiredForHtmlFullscreen(
+    RenderFrameHostImpl* requesting_frame,
+    bool is_xr_overlay) {
+  return true;
 }
 
 bool RenderFrameHostDelegate::IsBackForwardCacheSupported() {
@@ -187,26 +183,14 @@ bool RenderFrameHostDelegate::IsBackForwardCacheSupported() {
 }
 
 RenderWidgetHostImpl* RenderFrameHostDelegate::CreateNewPopupWidget(
-    AgentSchedulingGroupHost& agent_scheduling_group,
+    base::SafeRef<SiteInstanceGroup> site_instance_group,
     int32_t route_id,
     mojo::PendingAssociatedReceiver<blink::mojom::PopupWidgetHost>
         blink_popup_widget_host,
     mojo::PendingAssociatedReceiver<blink::mojom::WidgetHost> blink_widget_host,
-    mojo::PendingAssociatedRemote<blink::mojom::Widget> blink_widget) {
+    mojo::PendingAssociatedRemote<blink::mojom::Widget> blink_widget,
+    GlobalRenderFrameHostId creator_frame_id) {
   return nullptr;
-}
-
-bool RenderFrameHostDelegate::ShowPopupMenu(
-    RenderFrameHostImpl* render_frame_host,
-    mojo::PendingRemote<blink::mojom::PopupMenuClient>* popup_client,
-    const gfx::Rect& bounds,
-    int32_t item_height,
-    double font_size,
-    int32_t selected_item,
-    std::vector<blink::mojom::MenuItemPtr>* menu_items,
-    bool right_aligned,
-    bool allow_multiple_selection) {
-  return false;
 }
 
 std::vector<RenderFrameHostImpl*>
@@ -215,12 +199,41 @@ RenderFrameHostDelegate::GetActiveTopLevelDocumentsInBrowsingContextGroup(
   return std::vector<RenderFrameHostImpl*>();
 }
 
+bool RenderFrameHostDelegate::IsBeingDestroyed() {
+  return false;
+}
+
 PrerenderHostRegistry* RenderFrameHostDelegate::GetPrerenderHostRegistry() {
   return nullptr;
 }
 
 bool RenderFrameHostDelegate::IsAllowedToGoToEntryAtOffset(int32_t offset) {
   return true;
+}
+
+bool RenderFrameHostDelegate::IsJavaScriptDialogShowing() const {
+  return false;
+}
+
+bool RenderFrameHostDelegate::ShouldIgnoreUnresponsiveRenderer() {
+  return false;
+}
+
+bool RenderFrameHostDelegate::IsPopup() const {
+  return false;
+}
+
+gfx::NativeWindow RenderFrameHostDelegate::GetOwnerNativeWindow() {
+  return gfx::NativeWindow();
+}
+
+media::PictureInPictureEventsInfo::AutoPipInfo
+RenderFrameHostDelegate::GetAutoPipInfo() const {
+  return media::PictureInPictureEventsInfo::AutoPipInfo();
+}
+
+BackForwardCacheImpl& RenderFrameHostDelegate::GetBackForwardCache() {
+  NOTREACHED();
 }
 
 }  // namespace content

@@ -1,4 +1,4 @@
-# Copyright 2013 The Chromium Authors. All rights reserved.
+# Copyright 2013 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -13,7 +13,7 @@ class LinuxHost(cr.Host):
   """The implementation of Host for linux."""
 
   ACTIVE = cr.Config.From(
-      GOOGLE_CODE='/usr/local/google/code',
+    GOOGLE_CODE='/usr/local/google/code',
   )
 
   def __init__(self):
@@ -27,8 +27,8 @@ class LinuxPlatform(cr.Platform):
   """The implementation of Platform for the linux target."""
 
   ACTIVE = cr.Config.From(
-      CR_BINARY=os.path.join('{CR_BUILD_DIR}', '{CR_BUILD_TARGET}'),
-      CHROME_DEVEL_SANDBOX='/usr/local/sbin/chrome-devel-sandbox',
+    CR_BINARY=os.path.join('{CR_BUILD_DIR}', '{CR_BUILD_TARGET}'),
+    CHROME_DEVEL_SANDBOX='/usr/local/sbin/chrome-devel-sandbox',
   )
 
   @property
@@ -38,7 +38,3 @@ class LinuxPlatform(cr.Platform):
   @property
   def priority(self):
     return 2
-
-  @property
-  def paths(self):
-    return ['{GOMA_DIR}']

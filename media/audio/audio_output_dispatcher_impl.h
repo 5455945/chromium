@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,7 +20,7 @@
 #include <vector>
 
 #include "base/containers/flat_map.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
 #include "media/audio/audio_io.h"
 #include "media/audio/audio_manager.h"
@@ -40,6 +40,11 @@ class MEDIA_EXPORT AudioOutputDispatcherImpl
                             const AudioParameters& params,
                             const std::string& output_device_id,
                             base::TimeDelta close_delay);
+
+  AudioOutputDispatcherImpl(const AudioOutputDispatcherImpl&) = delete;
+  AudioOutputDispatcherImpl& operator=(const AudioOutputDispatcherImpl&) =
+      delete;
+
   ~AudioOutputDispatcherImpl() override;
 
   // AudioOutputDispatcher implementation.
@@ -51,15 +56,13 @@ class MEDIA_EXPORT AudioOutputDispatcherImpl
   void StreamVolumeSet(AudioOutputProxy* stream_proxy, double volume) override;
   void CloseStream(AudioOutputProxy* stream_proxy) override;
   void FlushStream(AudioOutputProxy* stream_proxy) override;
+  void CloseAllIdleStreams() override;
 
   // AudioDeviceListener implementation.
   void OnDeviceChange() override;
 
   // Returns true if there are any open AudioOutputProxy objects.
   bool HasOutputProxies() const;
-
-  // Closes all |idle_streams_|.
-  void CloseAllIdleStreams();
 
  private:
   // Creates a new physical output stream, opens it and pushes to
@@ -79,14 +82,16 @@ class MEDIA_EXPORT AudioOutputDispatcherImpl
   const std::string device_id_;
 
   size_t idle_proxies_;
-  std::vector<AudioOutputStream*> idle_streams_;
+  std::vector<raw_ptr<AudioOutputStream, VectorExperimental>> idle_streams_;
 
   // When streams are stopped they're added to |idle_streams_|, if no stream is
   // reused before |close_delay_| elapses |close_timer_| will run
   // CloseIdleStreams().
   base::DelayTimer close_timer_;
 
-  typedef base::flat_map<AudioOutputProxy*, AudioOutputStream*> AudioStreamMap;
+  using AudioStreamMap =
+      base::flat_map<AudioOutputProxy*,
+                     raw_ptr<AudioOutputStream, CtnExperimental>>;
   AudioStreamMap proxy_to_physical_map_;
 
   using AudioLogMap =
@@ -95,7 +100,6 @@ class MEDIA_EXPORT AudioOutputDispatcherImpl
   int audio_stream_id_;
 
   base::WeakPtrFactory<AudioOutputDispatcherImpl> weak_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(AudioOutputDispatcherImpl);
 };
 
 }  // namespace media

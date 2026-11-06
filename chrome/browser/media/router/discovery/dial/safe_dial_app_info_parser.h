@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,12 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/media/router/discovery/dial/parsed_dial_app_info.h"
 #include "services/data_decoder/public/cpp/data_decoder.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace media_router {
-
-class DataDecoder;
 
 // SafeDialAppInfoParser parses the given app info XML file safely via a utility
 // process.
@@ -36,6 +32,10 @@ class SafeDialAppInfoParser {
   };
 
   SafeDialAppInfoParser();
+
+  SafeDialAppInfoParser(const SafeDialAppInfoParser&) = delete;
+  SafeDialAppInfoParser& operator=(const SafeDialAppInfoParser&) = delete;
+
   virtual ~SafeDialAppInfoParser();
 
   // Callback function invoked when done parsing DIAL app info XML.
@@ -61,8 +61,6 @@ class SafeDialAppInfoParser {
                         data_decoder::DataDecoder::ValueOrError result);
 
   base::WeakPtrFactory<SafeDialAppInfoParser> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SafeDialAppInfoParser);
 };
 
 }  // namespace media_router

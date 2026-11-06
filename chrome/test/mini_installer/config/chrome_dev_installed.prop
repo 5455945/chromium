@@ -8,9 +8,13 @@
         {"exists": true},
     "$LOCAL_APPDATA\\$CHROME_DIR_DEV\\Application\\$MINI_INSTALLER_FILE_VERSION\\chrome_elf.dll":
         {"exists": true},
-    "$LOCAL_APPDATA\\$CHROME_DIR_DEV\\Application\\$MINI_INSTALLER_FILE_VERSION\\Installer\\chrome.7z":
+    "$LOCAL_APPDATA\\$CHROME_DIR_DEV\\Application\\$MINI_INSTALLER_FILE_VERSION\\chrome_wer.dll":
         {"exists": true},
     "$LOCAL_APPDATA\\$CHROME_DIR_DEV\\Application\\$MINI_INSTALLER_FILE_VERSION\\Installer\\setup.exe":
+        {"exists": true},
+    "$LOCAL_APPDATA\\$CHROME_DIR_DEV\\Application\\$MINI_INSTALLER_FILE_VERSION\\IwaKeyDistribution\\iwa-key-distribution.pb":
+        {"exists": true},
+    "$LOCAL_APPDATA\\$CHROME_DIR_DEV\\Application\\$MINI_INSTALLER_FILE_VERSION\\IwaKeyDistribution\\manifest.json":
         {"exists": true},
     "$LOCAL_APPDATA\\$CHROME_DIR_DEV\\Application\\$MINI_INSTALLER_FILE_VERSION\\$MINI_INSTALLER_FILE_VERSION.manifest":
         {"exists": true},
@@ -44,6 +48,10 @@
       },
       "wow_key": "KEY_WOW64_32KEY"
     },
+    "HKEY_CURRENT_USER\\$CHROME_UPDATE_REGISTRY_SUBKEY_DEV\\Commands\\cmd": {
+      "exists": "forbidden",
+      "wow_key": "KEY_WOW64_32KEY"
+    },
     "HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\$CHROME_LONG_NAME_DEV": {
       "exists": "required",
       "values": {
@@ -54,9 +62,32 @@
         "Version": {
           "type": "SZ",
           "data": "$MINI_INSTALLER_FILE_VERSION"
+        },
+        "EstimatedSize": {
+          "type": "DWORD"
+        },
+        "InstallDate": {
+          "type": "SZ"
         }
       },
       "wow_key": "KEY_WOW64_32KEY"
+    },
+    "HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\RuntimeExceptionHelperModules": {
+      "exists": "required",
+      "values": {
+        "$LOCAL_APPDATA\\$CHROME_DIR_DEV\\Application\\$MINI_INSTALLER_FILE_VERSION\\chrome_wer.dll": {
+          "type": "DWORD"
+        }
+      }
+    },
+    "HKEY_CURRENT_USER\\Software\\Classes\\.pdf\\OpenWithProgids": {
+      "exists": "required",
+      "values": {
+        "$CHROME_HTML_PROG_ID_DEV$USER_SPECIFIC_REGISTRY_SUFFIX": {},
+        "$CHROME_PDF_PROG_ID_DEV$USER_SPECIFIC_REGISTRY_SUFFIX": {
+          "type": "SZ"
+        }
+      }
     },
     "HKEY_CURRENT_USER\\Software\\Classes\\CLSID\\$CHROME_TOAST_ACTIVATOR_CLSID_DEV\\LocalServer32": {
       "exists": "required",

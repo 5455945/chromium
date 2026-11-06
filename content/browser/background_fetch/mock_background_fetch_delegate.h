@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,13 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "base/files/scoped_temp_dir.h"
 #include "content/public/browser/background_fetch_delegate.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "url/gurl.h"
 
@@ -29,15 +29,16 @@ class MockBackgroundFetchDelegate : public BackgroundFetchDelegate {
   // created by the builder, which also defines the ownership semantics.
   struct TestResponse {
     TestResponse();
+
+    TestResponse(const TestResponse&) = delete;
+    TestResponse& operator=(const TestResponse&) = delete;
+
     ~TestResponse();
 
     bool succeeded = false;
     bool pending = false;
     scoped_refptr<net::HttpResponseHeaders> headers;
     std::string data;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(TestResponse);
   };
 
   // Builder for creating a TestResponse object with the given data.
@@ -46,6 +47,10 @@ class MockBackgroundFetchDelegate : public BackgroundFetchDelegate {
   class TestResponseBuilder {
    public:
     explicit TestResponseBuilder(int response_code);
+
+    TestResponseBuilder(const TestResponseBuilder&) = delete;
+    TestResponseBuilder& operator=(const TestResponseBuilder&) = delete;
+
     ~TestResponseBuilder();
 
     TestResponseBuilder& AddResponseHeader(const std::string& name,
@@ -60,11 +65,14 @@ class MockBackgroundFetchDelegate : public BackgroundFetchDelegate {
 
    private:
     std::unique_ptr<TestResponse> response_;
-
-    DISALLOW_COPY_AND_ASSIGN(TestResponseBuilder);
   };
 
   MockBackgroundFetchDelegate();
+
+  MockBackgroundFetchDelegate(const MockBackgroundFetchDelegate&) = delete;
+  MockBackgroundFetchDelegate& operator=(const MockBackgroundFetchDelegate&) =
+      delete;
+
   ~MockBackgroundFetchDelegate() override;
 
   // BackgroundFetchDelegate implementation:
@@ -77,20 +85,30 @@ class MockBackgroundFetchDelegate : public BackgroundFetchDelegate {
                    const std::string& guid,
                    const std::string& method,
                    const GURL& url,
+                   ::network::mojom::CredentialsMode credentials_mode,
+                   ::network::mojom::RequestMode request_mode,
                    const net::NetworkTrafficAnnotationTag& traffic_annotation,
                    const net::HttpRequestHeaders& headers,
-                   bool has_request_body) override;
+                   bool has_request_body,
+                   scoped_refptr<network::SharedURLLoaderFactory>
+                       url_loader_factory) override;
   void Abort(const std::string& job_unique_id) override;
   void MarkJobComplete(const std::string& job_unique_id) override;
   void UpdateUI(const std::string& job_unique_id,
-                const absl::optional<std::string>& title,
-                const absl::optional<SkBitmap>& icon) override;
+                const std::optional<std::string>& title,
+                const std::optional<SkBitmap>& icon) override;
 
   void RegisterResponse(const GURL& url,
                         std::unique_ptr<TestResponse> response);
 
   const std::set<std::string>& completed_jobs() const {
     return completed_jobs_;
+  }
+
+  scoped_refptr<network::SharedURLLoaderFactory> GetUrlLoaderFactory(
+      const std::string& job_unique_id) const {
+    auto it = url_loader_factories_.find(job_unique_id);
+    return it != url_loader_factories_.end() ? it->second : nullptr;
   }
 
  private:
@@ -125,7 +143,9 @@ class MockBackgroundFetchDelegate : public BackgroundFetchDelegate {
   // Map from job GUIDs to Clients.
   std::map<std::string, base::WeakPtr<Client>> job_id_to_client_map_;
 
-  DISALLOW_COPY_AND_ASSIGN(MockBackgroundFetchDelegate);
+  // Map from job IDs to URL loader factories.
+  std::map<std::string, scoped_refptr<network::SharedURLLoaderFactory>>
+      url_loader_factories_;
 };
 
 }  // namespace content

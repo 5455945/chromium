@@ -1,13 +1,16 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/public/common/loader/mime_sniffing_throttle.h"
 
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/strings/string_util.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/base/mime_sniffer.h"
+#include "net/http/http_response_headers.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "third_party/blink/public/common/loader/mime_sniffing_url_loader.h"
 
@@ -36,35 +39,34 @@ void MimeSniffingThrottle::WillProcessResponse(
   if (response_head->did_mime_sniff)
     return;
 
-  bool blocked_sniffing_mime = false;
-  std::string content_type_options;
-  if (response_head->headers &&
-      response_head->headers->GetNormalizedHeader("x-content-type-options",
-                                                  &content_type_options)) {
-    blocked_sniffing_mime =
-        base::LowerCaseEqualsASCII(content_type_options, "nosniff");
+  if (!net::ShouldSniffMimeType(response_url, response_head->headers.get(),
+                                response_head->mime_type)) {
+    return;
   }
 
-  if (!blocked_sniffing_mime &&
-      net::ShouldSniffMimeType(response_url, response_head->mime_type)) {
-    // Pause the response until the mime type becomes ready.
-    *defer = true;
+  // Pause the response until the mime type becomes ready.
+  *defer = true;
 
-    mojo::PendingRemote<network::mojom::URLLoader> new_remote;
-    mojo::PendingReceiver<network::mojom::URLLoaderClient> new_receiver;
-    mojo::PendingRemote<network::mojom::URLLoader> source_loader;
-    mojo::PendingReceiver<network::mojom::URLLoaderClient>
-        source_client_receiver;
-    MimeSniffingURLLoader* mime_sniffing_loader;
-    std::tie(new_remote, new_receiver, mime_sniffing_loader) =
-        MimeSniffingURLLoader::CreateLoader(
-            weak_factory_.GetWeakPtr(), response_url, response_head->Clone(),
-            task_runner_ ? task_runner_ : base::ThreadTaskRunnerHandle::Get());
-    delegate_->InterceptResponse(std::move(new_remote), std::move(new_receiver),
-                                 &source_loader, &source_client_receiver);
-    mime_sniffing_loader->Start(std::move(source_loader),
-                                std::move(source_client_receiver));
-  }
+  mojo::PendingRemote<network::mojom::URLLoader> new_remote;
+  mojo::PendingReceiver<network::mojom::URLLoaderClient> new_receiver;
+  mojo::PendingRemote<network::mojom::URLLoader> source_loader;
+  mojo::PendingReceiver<network::mojom::URLLoaderClient> source_client_receiver;
+  mojo::ScopedDataPipeConsumerHandle body;
+  auto new_response_head = response_head->Clone();
+  new_response_head->cache_storage_side_data_writer =
+      std::move(response_head->cache_storage_side_data_writer);
+  MimeSniffingURLLoader* mime_sniffing_loader;
+  std::tie(new_remote, new_receiver, mime_sniffing_loader) =
+      MimeSniffingURLLoader::CreateLoader(
+          weak_factory_.GetWeakPtr(), response_url,
+          std::move(new_response_head),
+          task_runner_ ? task_runner_
+                       : base::SingleThreadTaskRunner::GetCurrentDefault());
+  delegate_->InterceptResponse(std::move(new_remote), std::move(new_receiver),
+                               &source_loader, &source_client_receiver, &body);
+  mime_sniffing_loader->Start(std::move(source_loader),
+                              std::move(source_client_receiver),
+                              std::move(body));
 }
 
 const char* MimeSniffingThrottle::NameForLoggingWillProcessResponse() {
@@ -72,8 +74,10 @@ const char* MimeSniffingThrottle::NameForLoggingWillProcessResponse() {
 }
 
 void MimeSniffingThrottle::ResumeWithNewResponseHead(
-    network::mojom::URLResponseHeadPtr new_response_head) {
-  delegate_->UpdateDeferredResponseHead(std::move(new_response_head));
+    network::mojom::URLResponseHeadPtr new_response_head,
+    mojo::ScopedDataPipeConsumerHandle body) {
+  delegate_->UpdateDeferredResponseHead(std::move(new_response_head),
+                                        std::move(body));
   delegate_->Resume();
 }
 

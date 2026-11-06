@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,15 @@
 namespace subresource_filter {
 
 RulesetFormat ParseFlag(const std::string& text) {
-  if (text == "filter-list")
+  if (text == "filter-list") {
     return RulesetFormat::kFilterList;
-  if (text == "proto")
+  }
+  if (text == "proto") {
     return RulesetFormat::kProto;
-  if (text == "unindexed-ruleset")
+  }
+  if (text == "unindexed-ruleset") {
     return RulesetFormat::kUnindexedRuleset;
+  }
   return RulesetFormat::kUndefined;
 }
 

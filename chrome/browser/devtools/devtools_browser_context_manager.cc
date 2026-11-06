@@ -1,18 +1,67 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/devtools/devtools_browser_context_manager.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/no_destructor.h"
+#include "base/task/single_thread_task_runner.h"
+#include "build/build_config.h"
 #include "chrome/browser/profiles/profile_destroyer.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_window.h"
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/android/tab_android.h"
+#include "chrome/browser/ui/android/tab_model/tab_model.h"
+#include "chrome/browser/ui/android/tab_model/tab_model_list.h"
+#else
+#include "chrome/browser/lifetime/application_lifetime_desktop.h"
+#endif  // BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "ui/base/base_window.h"
 
-DevToolsBrowserContextManager::DevToolsBrowserContextManager() {}
+namespace {
+
+const int64_t kDestroyProfileTimeoutSeconds = 60;
+
+void DestroyOTRProfileWhenAppropriate(base::WeakPtr<Profile> weak_profile) {
+  if (Profile* profile = weak_profile.get()) {
+    ProfileDestroyer::DestroyOTRProfileWhenAppropriateWithTimeout(
+        profile, base::Seconds(kDestroyProfileTimeoutSeconds));
+  }
+}
+
+#if BUILDFLAG(IS_ANDROID)
+void CloseAndroidTabsForProfile(Profile* profile) {
+  // Closing the last incognito tab can synchronously destroy its TabModel and
+  // remove it from TabModelList. Iterate by reverse index so removing the
+  // current model does not invalidate the remaining traversal.
+  for (size_t model_index = TabModelList::models().size(); model_index > 0;) {
+    TabModel* model = TabModelList::models()[--model_index];
+    for (int tab_index = model->GetTabCount(); tab_index > 0;) {
+      TabAndroid* tab = model->GetTabAt(--tab_index);
+      if (tab && tab->profile() == profile) {
+        model->CloseTabAt(tab_index);
+      }
+    }
+  }
+}
+#endif  // BUILDFLAG(IS_ANDROID)
+
+// Returns the profile backing the default browser context, or nullptr if the
+// last used profile can't be loaded (for example because its directory can't
+// be created or is scheduled for deletion).
+Profile* GetDefaultProfile() {
+  Profile* profile = ProfileManager::GetLastUsedProfile();
+  return profile ? profile->GetOriginalProfile() : nullptr;
+}
+
+}  // namespace
+
+DevToolsBrowserContextManager::DevToolsBrowserContextManager() = default;
 
 DevToolsBrowserContextManager::~DevToolsBrowserContextManager() = default;
 
@@ -24,6 +73,10 @@ DevToolsBrowserContextManager& DevToolsBrowserContextManager::GetInstance() {
 
 Profile* DevToolsBrowserContextManager::GetProfileById(
     const std::string& context_id) {
+  if (Profile* default_profile = GetDefaultProfile();
+      default_profile && context_id == default_profile->UniqueId()) {
+    return default_profile;
+  }
   auto it = otr_profiles_.find(context_id);
   if (it == otr_profiles_.end())
     return nullptr;
@@ -31,29 +84,35 @@ Profile* DevToolsBrowserContextManager::GetProfileById(
 }
 
 content::BrowserContext* DevToolsBrowserContextManager::CreateBrowserContext() {
-  Profile* original_profile =
-      ProfileManager::GetActiveUserProfile()->GetOriginalProfile();
+  Profile* original_profile = GetDefaultProfile();
+  if (!original_profile) {
+    return nullptr;
+  }
 
   Profile* otr_profile = original_profile->GetOffTheRecordProfile(
       Profile::OTRProfileID::CreateUniqueForDevTools(),
       /*create_if_needed=*/true);
   const std::string& context_id = otr_profile->UniqueId();
+
+  // The two lines are matched in `StopObservingProfileIfAny()`.
+  profile_observation_.AddObservation(otr_profile);
   otr_profiles_[context_id] = otr_profile;
-  otr_profile->AddObserver(this);
   return otr_profile;
 }
 
-std::vector<content::BrowserContext*>
+std::vector<base::WeakPtr<content::BrowserContext>>
 DevToolsBrowserContextManager::GetBrowserContexts() {
-  std::vector<content::BrowserContext*> result;
+  std::vector<base::WeakPtr<content::BrowserContext>> result;
   for (const auto& profile_pair : otr_profiles_)
-    result.push_back(profile_pair.second);
+    result.push_back(profile_pair.second->GetWeakPtr());
   return result;
 }
 
 content::BrowserContext*
 DevToolsBrowserContextManager::GetDefaultBrowserContext() {
-  return ProfileManager::GetActiveUserProfile()->GetOriginalProfile();
+  // Do not force profile loading (or it will blow up if called on shutdown).
+  auto* last_profile = ProfileManager::GetLastUsedProfileIfLoaded();
+  return last_profile ? last_profile->GetOriginalProfile() : nullptr;
 }
 
 void DevToolsBrowserContextManager::DisposeBrowserContext(
@@ -74,69 +133,99 @@ void DevToolsBrowserContextManager::DisposeBrowserContext(
   }
 
   Profile* profile = it->second;
+#if BUILDFLAG(IS_ANDROID)
+  CloseAndroidTabsForProfile(profile);
+  StopObservingProfileIfAny(profile);
+  DestroyOTRProfileWhenAppropriate(profile->GetWeakPtr());
+  std::move(callback).Run(true, "");
+  return;
+#else
   bool has_opened_browser = false;
-  for (auto* opened_browser : *BrowserList::GetInstance()) {
-    if (opened_browser->profile() == profile) {
-      has_opened_browser = true;
-      break;
-    }
-  }
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [profile,
+       &has_opened_browser](BrowserWindowInterface* browser_window_interface) {
+        if (browser_window_interface->GetProfile() == profile) {
+          has_opened_browser = true;
+          return false;
+        }
+        return true;
+      });
 
   // If no browsers are opened - dispose right away.
   if (!has_opened_browser) {
-    otr_profiles_.erase(it);
-    profile->RemoveObserver(this);
-    ProfileDestroyer::DestroyProfileWhenAppropriate(profile);
+    StopObservingProfileIfAny(profile);
+    DestroyOTRProfileWhenAppropriate(profile->GetWeakPtr());
     std::move(callback).Run(true, "");
     return;
   }
 
-  if (pending_context_disposals_.empty())
-    BrowserList::AddObserver(this);
+  if (pending_context_disposals_.empty()) {
+    browser_collection_observation_.Observe(
+        GlobalBrowserCollection::GetInstance());
+  }
 
   pending_context_disposals_[context_id] = std::move(callback);
-  BrowserList::CloseAllBrowsersWithIncognitoProfile(
-      profile, base::DoNothing(), base::DoNothing(),
-      true /* skip_beforeunload */);
+  chrome::CloseAllBrowsersWithIncognitoProfile(profile);
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 void DevToolsBrowserContextManager::OnProfileWillBeDestroyed(Profile* profile) {
+#if BUILDFLAG(IS_ANDROID)
+  CloseAndroidTabsForProfile(profile);
+#else
   // This is likely happening during shutdown. We'll immediately
   // close all browser windows for our profile without unload handling.
-  BrowserList::BrowserVector browsers_to_close;
-  for (auto* browser : *BrowserList::GetInstance()) {
-    if (browser->profile() == profile)
-      browsers_to_close.push_back(browser);
-  }
-  for (auto* browser : browsers_to_close)
-    browser->window()->Close();
-  std::string context_id = profile->UniqueId();
-  otr_profiles_.erase(context_id);
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [profile](BrowserWindowInterface* browser_window_interface) {
+        if (browser_window_interface->GetProfile() == profile) {
+          browser_window_interface->GetWindow()->Close();
+        }
+        return true;
+      });
+#endif  // BUILDFLAG(IS_ANDROID)
+
+  StopObservingProfileIfAny(profile);
 }
 
-void DevToolsBrowserContextManager::OnBrowserRemoved(Browser* browser) {
-  std::string context_id = browser->profile()->UniqueId();
+void DevToolsBrowserContextManager::OnBrowserClosed(
+    BrowserWindowInterface* browser) {
+  std::string context_id = browser->GetProfile()->UniqueId();
   auto pending_disposal = pending_context_disposals_.find(context_id);
   if (pending_disposal == pending_context_disposals_.end())
     return;
-  for (auto* opened_browser : *BrowserList::GetInstance()) {
-    if (opened_browser->profile() == browser->profile())
-      return;
+  bool found = false;
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [browser, &found](BrowserWindowInterface* browser_window_interface) {
+        if (browser_window_interface->GetProfile() == browser->GetProfile()) {
+          found = true;
+          return false;
+        }
+        return true;
+      });
+  if (found) {
+    return;
   }
 
-  auto it = otr_profiles_.find(context_id);
-  Profile* otr_profile = it->second;
-  otr_profiles_.erase(it);
-  otr_profile->RemoveObserver(this);
+  StopObservingProfileIfAny(browser->GetProfile());
+
   // We cannot delete immediately here: the profile might still be referenced
   // during the browser tear-down process.
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE,
-      base::BindOnce(&ProfileDestroyer::DestroyProfileWhenAppropriate,
-                     base::Unretained(otr_profile)));
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&DestroyOTRProfileWhenAppropriate,
+                                browser->GetProfile()->GetWeakPtr()));
 
   std::move(pending_disposal->second).Run(true, "");
   pending_context_disposals_.erase(pending_disposal);
-  if (pending_context_disposals_.empty())
-    BrowserList::RemoveObserver(this);
+  if (pending_context_disposals_.empty()) {
+    browser_collection_observation_.Reset();
+  }
+}
+
+void DevToolsBrowserContextManager::StopObservingProfileIfAny(
+    Profile* profile) {
+  if (!profile_observation_.IsObservingSource(profile))
+    return;
+
+  profile_observation_.RemoveObservation(profile);
+  otr_profiles_.erase(profile->UniqueId());
 }

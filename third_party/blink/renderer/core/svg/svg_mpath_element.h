@@ -34,6 +34,10 @@ class SVGMPathElement final : public SVGElement, public SVGURIReference {
   explicit SVGMPathElement(Document&);
   ~SVGMPathElement() override;
 
+  ElementType GetElementType() const final {
+    return ElementType::kSVGMPathElement;
+  }
+
   SVGPathElement* PathElement();
 
   void TargetPathChanged();
@@ -48,10 +52,14 @@ class SVGMPathElement final : public SVGElement, public SVGURIReference {
 
   void SvgAttributeChanged(const SvgAttributeChangedParams&) override;
 
-  bool LayoutObjectIsNeeded(const ComputedStyle&) const override {
+  bool LayoutObjectIsNeeded(const DisplayStyle&) const override {
     return false;
   }
   void NotifyParentOfPathChange(ContainerNode*);
+
+  SVGAnimatedPropertyBase* PropertyFromAttribute(
+      const QualifiedName& attribute_name) const override;
+  void SynchronizeAllSVGAttributes() const override;
 
   Member<IdTargetObserver> target_id_observer_;
 };

@@ -1,12 +1,12 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_ARC_BLUETOOTH_ARC_BLUETOOTH_TASK_QUEUE_H_
 #define CHROME_BROWSER_ASH_ARC_BLUETOOTH_ARC_BLUETOOTH_TASK_QUEUE_H_
 
-#include "base/callback.h"
 #include "base/containers/queue.h"
+#include "base/functional/callback.h"
 
 namespace arc {
 
@@ -14,6 +14,10 @@ namespace arc {
 class ArcBluetoothTaskQueue {
  public:
   ArcBluetoothTaskQueue();
+
+  ArcBluetoothTaskQueue(const ArcBluetoothTaskQueue&) = delete;
+  ArcBluetoothTaskQueue& operator=(const ArcBluetoothTaskQueue&) = delete;
+
   ~ArcBluetoothTaskQueue();
 
   // Pushes |task| into this queue.
@@ -24,7 +28,6 @@ class ArcBluetoothTaskQueue {
 
  private:
   base::queue<base::OnceClosure> queue_;
-  DISALLOW_COPY_AND_ASSIGN(ArcBluetoothTaskQueue);
 };
 
 }  // namespace arc

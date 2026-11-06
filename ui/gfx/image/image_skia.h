@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,14 @@
 #include <memory>
 #include <vector>
 
+#include "base/component_export.h"
 #include "base/gtest_prod_util.h"
-#include "base/memory/ref_counted.h"
-#include "ui/gfx/gfx_export.h"
-#include "ui/gfx/image/image_skia_rep.h"
+#include "base/memory/scoped_refptr.h"
+
+class SkBitmap;
 
 namespace gfx {
+class ImageSkiaRep;
 class ImageSkiaSource;
 class Size;
 
@@ -38,7 +40,7 @@ class TestOnThread;
 // potentially many different densities for high-DPI displays.
 //
 // ImageSkia is cheap to copy and intentionally supports copy semantics.
-class GFX_EXPORT ImageSkia {
+class COMPONENT_EXPORT(GFX) ImageSkia {
  public:
   typedef std::vector<ImageSkiaRep> ImageSkiaReps;
 
@@ -53,6 +55,10 @@ class GFX_EXPORT ImageSkia {
   // at |scale| and uses its dimensions to calculate the size in DIP.
   ImageSkia(std::unique_ptr<ImageSkiaSource> source, float scale);
 
+  // This constructor is explicitly deleted to ensure callers don't accidentally
+  // pass an int and have it converted to float.
+  ImageSkia(std::unique_ptr<ImageSkiaSource> source, int dont_use) = delete;
+
   explicit ImageSkia(const gfx::ImageSkiaRep& image_rep);
 
   // Copies a reference to |other|'s storage.
@@ -62,16 +68,6 @@ class GFX_EXPORT ImageSkia {
   ImageSkia& operator=(const ImageSkia& other);
 
   ~ImageSkia();
-
-  // Changes the value of GetSupportedScales() to |scales|.
-  static void SetSupportedScales(const std::vector<float>& scales);
-
-  // Returns a vector with the scale factors which are supported by this
-  // platform, in ascending order.
-  static const std::vector<float>& GetSupportedScales();
-
-  // Returns the maximum scale supported by this platform.
-  static float GetMaxSupportedScale();
 
   // Creates an image from the passed in bitmap, which is designed for display
   // at the device scale factor given in `scale`. The DIP width and height will
@@ -168,6 +164,9 @@ class GFX_EXPORT ImageSkia {
   // Clears cached representations for non-supported scale factors that are
   // based on |scale|.
   void RemoveUnsupportedRepresentationsForScale(float scale);
+
+  // Returns true if the image storage is uniquely owned.
+  bool IsUniquelyOwned() const;
 
  private:
   friend class test::TestOnThread;

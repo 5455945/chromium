@@ -1,13 +1,17 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/media/webrtc/window_icon_util.h"
 
-#include "ui/gfx/icon_util.h"
+#include <windows.h>
+
+#include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/gfx/win/icon_util.h"
 
 gfx::ImageSkia GetWindowIcon(content::DesktopMediaID id) {
-  DCHECK(id.type == content::DesktopMediaID::TYPE_WINDOW);
+  CHECK(id.type == content::DesktopMediaID::TYPE_WINDOW,
+        base::NotFatalUntil::M161);
 
   HWND hwnd = reinterpret_cast<HWND>(id.id);
   HICON icon_handle = 0;

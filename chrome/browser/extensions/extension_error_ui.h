@@ -1,11 +1,13 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_EXTENSION_ERROR_UI_H_
 #define CHROME_BROWSER_EXTENSIONS_EXTENSION_ERROR_UI_H_
 
-#include "base/macros.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace content {
 class BrowserContext;
@@ -51,7 +53,7 @@ class ExtensionErrorUI {
   // synchronously.
   virtual void Close() = 0;
 
-  virtual ~ExtensionErrorUI() {}
+  virtual ~ExtensionErrorUI() = default;
 };
 
 }  // namespace extensions

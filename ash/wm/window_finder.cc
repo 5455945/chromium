@@ -1,8 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/public/cpp/window_finder.h"
+
+#include <ranges>
 
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/shell.h"
@@ -21,7 +23,11 @@ namespace {
 // Returns true if |window| is considered to be a toplevel window.
 // Please see the aura::Window::GetToplevelWindow() for the condition.
 bool IsTopLevelWindow(aura::Window* window) {
-  return !!window->delegate();
+  // It can happen that we're trying to find the next top-level window as a
+  // result of a window being destroyed (i.e. inside
+  // WindowObserver::OnWindowDestroying()). In this case, the destroying window
+  // should not be returned again as the top-level window.
+  return !!window->delegate() && !window->is_destroying();
 }
 
 // Returns true if |window| can be a target at |screen_point| by |targeter|.
@@ -38,7 +44,7 @@ bool IsWindowTargeted(aura::Window* window,
     gfx::Point point_in_root = local_point;
     aura::Window::ConvertPointToTarget(window, window->GetRootWindow(),
                                        &point_in_root);
-    ui::MouseEvent event(ui::ET_MOUSE_MOVED, local_point, point_in_root,
+    ui::MouseEvent event(ui::EventType::kMouseMoved, local_point, point_in_root,
                          base::TimeTicks::Now(), 0, 0);
     return targeter->SubtreeShouldBeExploredForEvent(window, event);
   }
@@ -54,8 +60,9 @@ aura::Window* GetTopmostWindowAtPointWithinWindow(
     aura::Window* window,
     aura::WindowTargeter* targeter,
     const std::set<aura::Window*>& ignore) {
-  if (!window->IsVisible())
+  if (!window->IsVisible()) {
     return nullptr;
+  }
 
   if (window->GetId() == kShellWindowId_PhantomWindow ||
       window->GetId() == kShellWindowId_OverlayContainer ||
@@ -64,20 +71,20 @@ aura::Window* GetTopmostWindowAtPointWithinWindow(
   }
 
   if (IsTopLevelWindow(window)) {
-    if (IsWindowTargeted(window, screen_point, targeter))
-      return (ignore.find(window) == ignore.end()) ? window : nullptr;
+    if (IsWindowTargeted(window, screen_point, targeter)) {
+      return ignore.contains(window) ? nullptr : window;
+    }
     return nullptr;
   }
 
-  for (aura::Window::Windows::const_reverse_iterator i =
-           window->children().rbegin();
-       i != window->children().rend(); ++i) {
+  for (aura::Window* child : std::views::reverse(window->children())) {
     aura::WindowTargeter* child_targeter =
-        (*i)->targeter() ? (*i)->targeter() : targeter;
+        child->targeter() ? child->targeter() : targeter;
     aura::Window* result = GetTopmostWindowAtPointWithinWindow(
-        screen_point, *i, child_targeter, ignore);
-    if (result)
+        screen_point, child, child_targeter, ignore);
+    if (result) {
       return result;
+    }
   }
   return nullptr;
 }
@@ -90,22 +97,25 @@ aura::Window* GetToplevelWindowInOverviewAtPoint(
     const gfx::Point& screen_point,
     const std::set<aura::Window*>& ignore) {
   OverviewController* overview_controller = Shell::Get()->overview_controller();
-  if (!overview_controller->InOverviewSession())
+  if (!overview_controller->InOverviewSession()) {
     return nullptr;
+  }
 
   OverviewGrid* grid =
       overview_controller->overview_session()->GetGridWithRootWindow(
           window_util::GetRootWindowAt(screen_point));
-  if (!grid)
+  if (!grid) {
     return nullptr;
+  }
 
   aura::Window* window = grid->GetTargetWindowOnLocation(
       gfx::PointF(screen_point), /*ignored_item=*/nullptr);
-  if (!window)
+  if (!window) {
     return nullptr;
+  }
 
   window = window->GetToplevelWindow();
-  return (ignore.find(window) == ignore.end()) ? window : nullptr;
+  return ignore.contains(window) ? nullptr : window;
 }
 
 }  // namespace

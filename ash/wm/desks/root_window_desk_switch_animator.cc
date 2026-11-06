@@ -1,29 +1,36 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/wm/desks/root_window_desk_switch_animator.h"
 
+#include <algorithm>
+
+#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/screen_util.h"
+#include "ash/shell.h"
 #include "ash/utility/layer_util.h"
 #include "ash/wm/desks/desk.h"
 #include "ash/wm/desks/desks_constants.h"
 #include "ash/wm/desks/desks_controller.h"
 #include "ash/wm/desks/desks_util.h"
 #include "base/auto_reset.h"
-#include "base/bind.h"
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/numerics/ranges.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/viz/common/frame_sinks/copy_output_request.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/window.h"
-#include "ui/compositor/layer.h"
-#include "ui/compositor/layer_animation_observer.h"
 #include "ui/compositor/layer_tree_owner.h"
+#include "ui/compositor/layer_with_external_texture.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
-#include "ui/gfx/transform.h"
+#include "ui/gfx/geometry/transform.h"
+#include "ui/views/animation/animation_builder.h"
 #include "ui/wm/core/window_util.h"
 
 namespace ash {
@@ -41,14 +48,19 @@ constexpr int kMaxScreenshotRetries = 2;
 // request a new screenshot.
 constexpr int kMinDistanceBeforeScreenshotDp = 40;
 
-constexpr base::TimeDelta kAnimationDuration =
-    base::TimeDelta::FromMilliseconds(300);
+// Different durations is used for different animations, see more details in
+// `DeskSwitchAnimationType`.
+constexpr base::TimeDelta kQuickAnimationDuration = base::Milliseconds(150);
+constexpr base::TimeDelta kQuickFadeInAnimationDuration =
+    base::Milliseconds(100);
+constexpr base::TimeDelta kContinuousAnimationDuration =
+    base::Milliseconds(300);
 
-// The amount, by which the detached old layers of the removed desk's windows,
-// is translated vertically during the for-remove desk switch animation.
-constexpr int kRemovedDeskWindowYTranslation = 20;
-constexpr base::TimeDelta kRemovedDeskWindowTranslationDuration =
-    base::TimeDelta::FromMilliseconds(100);
+// The ratio of root window width for quick swipe animation to translate.
+constexpr float kQuickAnimationTranslationDistanceRatio = 0.25;
+
+// The ratio of root window width used for animation layer width.
+constexpr float kQuickAnimationLayerWidthRatio = 1.25;
 
 // When ending a swipe that is deemed fast, the target desk only needs to be
 // 10% shown for us to animate to that desk, compared to 50% shown for a non
@@ -61,9 +73,9 @@ constexpr float kFastSwipeVisibilityRatio = 0.1f;
 // sized as children get added to it. This is the layer that will be animated.
 std::unique_ptr<ui::LayerTreeOwner> CreateAnimationLayerOwner(
     aura::Window* root) {
-  auto animation_layer = std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
-  animation_layer->SetName("Desk switch animation layer");
-  animation_layer->SetColor(SK_ColorBLACK);
+  auto animation_layer = std::make_unique<ui::LayerSolidColor>();
+  animation_layer->SetName("RootWindowDeskSwitchAnimator:Animation");
+  animation_layer->SetColor(SkColors::kBlack);
   return std::make_unique<ui::LayerTreeOwner>(std::move(animation_layer));
 }
 
@@ -72,21 +84,25 @@ std::unique_ptr<ui::LayerTreeOwner> CreateAnimationLayerOwner(
 void TakeScreenshot(
     aura::Window* root,
     viz::CopyOutputRequest::CopyOutputRequestCallback on_screenshot_taken) {
+  CHECK(root);
+
   auto* screenshot_layer =
       root->GetChildById(kShellWindowId_ScreenAnimationContainer)->layer();
 
   const gfx::Rect request_bounds(screenshot_layer->size());
   auto screenshot_request = std::make_unique<viz::CopyOutputRequest>(
-      viz::CopyOutputRequest::ResultFormat::RGBA_TEXTURE,
+      viz::CopyOutputRequest::ResultFormat::RGBA,
+      viz::CopyOutputRequest::ResultDestination::kSharedImage,
       std::move(on_screenshot_taken));
   screenshot_request->set_area(request_bounds);
   screenshot_request->set_result_task_runner(
-      base::SequencedTaskRunnerHandle::Get());
+      base::SequencedTaskRunner::GetCurrentDefault());
   screenshot_layer->RequestCopyOfOutput(std::move(screenshot_request));
 }
 
 std::string GetScreenshotLayerName(int index) {
-  return "Desk " + base::NumberToString(index) + " screenshot layer";
+  return "RootWindowDeskSwitchAnimator:Desk" + base::NumberToString(index) +
+         "Screenshot";
 }
 
 // The values received from WmGestureHandler via DesksController are in touchpad
@@ -100,18 +116,24 @@ float TouchpadToXTranslation(float touchpad_x, int desk_length) {
 
 RootWindowDeskSwitchAnimator::RootWindowDeskSwitchAnimator(
     aura::Window* root,
+    DeskSwitchAnimationType type,
     int starting_desk_index,
     int ending_desk_index,
     Delegate* delegate,
     bool for_remove)
     : root_window_(root),
+      type_(type),
       starting_desk_index_(starting_desk_index),
       ending_desk_index_(ending_desk_index),
       delegate_(delegate),
       animation_layer_owner_(CreateAnimationLayerOwner(root)),
       root_window_size_(
           screen_util::SnapBoundsToDisplayEdge(root->bounds(), root).size()),
-      x_translation_offset_(root_window_size_.width() + kDesksSpacing),
+      x_translation_offset_(
+          type_ == DeskSwitchAnimationType::kContinuousAnimation
+              ? root_window_size_.width() + kDesksSpacing
+              : root_window_size_.width() *
+                    kQuickAnimationTranslationDistanceRatio),
       edge_padding_width_dp_(
           std::round(root_window_size_.width() * kEdgePaddingRatio)),
       for_remove_(for_remove) {
@@ -119,7 +141,10 @@ RootWindowDeskSwitchAnimator::RootWindowDeskSwitchAnimator(
   DCHECK_NE(starting_desk_index_, ending_desk_index_);
   DCHECK(delegate_);
 
-  screenshot_layers_.resize(desks_util::kMaxNumberOfDesks);
+  // Observe root window removals.
+  Shell::Get()->AddShellObserver(this);
+
+  screenshot_layers_.resize(desks_util::GetMaxNumberOfDesks());
 }
 
 RootWindowDeskSwitchAnimator::~RootWindowDeskSwitchAnimator() {
@@ -129,6 +154,8 @@ RootWindowDeskSwitchAnimator::~RootWindowDeskSwitchAnimator() {
   // display is removed.
   if (!attached_sequences().empty())
     StopObservingImplicitAnimations();
+
+  Shell::Get()->RemoveShellObserver(this);
 }
 
 void RootWindowDeskSwitchAnimator::TakeStartingDeskScreenshot() {
@@ -144,8 +171,9 @@ void RootWindowDeskSwitchAnimator::TakeStartingDeskScreenshot() {
 
     // We don't take a screenshot of the soon-to-be-removed desk, we use an
     // empty black solid color layer.
-    auto black_layer = std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
-    black_layer->SetColor(SK_ColorBLACK);
+    auto black_layer = std::make_unique<ui::LayerSolidColor>();
+    black_layer->SetName("RootWindowDeskSwitchAnimator:RemovedDeskBlack");
+    black_layer->SetColor(SkColors::kBlack);
     CompleteAnimationPhase1WithLayer(std::move(black_layer));
     return;
   }
@@ -177,28 +205,32 @@ void RootWindowDeskSwitchAnimator::StartAnimation() {
 
   // Animate the parent "animation layer" towards the ending transform.
   ui::Layer* animation_layer = animation_layer_owner_->root();
-  ui::ScopedLayerAnimationSettings settings(animation_layer->GetAnimator());
-  settings.SetPreemptionStrategy(
+  ui::ScopedLayerAnimationSettings scoped_settings(
+      animation_layer->GetAnimator());
+  scoped_settings.SetPreemptionStrategy(
       ui::LayerAnimator::IMMEDIATELY_ANIMATE_TO_NEW_TARGET);
-  settings.AddObserver(this);
-  settings.SetTransitionDuration(kAnimationDuration);
-  settings.SetTweenType(gfx::Tween::FAST_OUT_SLOW_IN);
+  scoped_settings.AddObserver(this);
+  if (type_ == DeskSwitchAnimationType::kContinuousAnimation) {
+    scoped_settings.SetTransitionDuration(kContinuousAnimationDuration);
+    scoped_settings.SetTweenType(gfx::Tween::FAST_OUT_SLOW_IN);
+  } else {
+    scoped_settings.SetTransitionDuration(kQuickAnimationDuration);
+    scoped_settings.SetTweenType(gfx::Tween::ACCEL_20_DECEL_100);
+  }
   animation_layer->SetTransform(animation_layer_ending_transform);
 
-  if (for_remove_) {
-    DCHECK(old_windows_layer_tree_owner_);
-    auto* old_windows_layer = old_windows_layer_tree_owner_->root();
-    DCHECK(old_windows_layer);
-
-    // Translate the old layers of removed desk's windows back down by
-    // `kRemovedDeskWindowYTranslation`.
-    gfx::Transform transform = old_windows_layer->GetTargetTransform();
-    ui::ScopedLayerAnimationSettings settings(old_windows_layer->GetAnimator());
-    settings.SetPreemptionStrategy(ui::LayerAnimator::ENQUEUE_NEW_ANIMATION);
-    settings.SetTransitionDuration(kRemovedDeskWindowTranslationDuration);
-    settings.SetTweenType(gfx::Tween::EASE_IN);
-    transform.Translate(0, kRemovedDeskWindowYTranslation);
-    old_windows_layer->SetTransform(transform);
+  // During quick animation, we fade in the ending desk during sliding
+  // animation.
+  if (type_ == DeskSwitchAnimationType::kQuickAnimation &&
+      screenshot_layers_[ending_desk_index_]) {
+    CHECK_EQ(screenshot_layers_[ending_desk_index_]->opacity(), 0.f);
+    views::AnimationBuilder()
+        .SetPreemptionStrategy(
+            ui::LayerAnimator::IMMEDIATELY_ANIMATE_TO_NEW_TARGET)
+        .Once()
+        .SetDuration(kQuickFadeInAnimationDuration)
+        .SetOpacity(screenshot_layers_[ending_desk_index_], 1.f,
+                    gfx::Tween::ACCEL_20_DECEL_100);
   }
 }
 
@@ -210,6 +242,10 @@ bool RootWindowDeskSwitchAnimator::ReplaceAnimation(int new_ending_desk_index) {
   ending_desk_index_ = new_ending_desk_index;
 
   if (!!screenshot_layers_[ending_desk_index_]) {
+    // Update the ending desk opacity when replace animation happens.
+    if (type_ == DeskSwitchAnimationType::kQuickAnimation) {
+      screenshot_layers_[ending_desk_index_]->SetOpacity(0.f);
+    }
     // Notify the caller to start an animation to |ending_desk_index_|.
     return false;
   }
@@ -221,10 +257,10 @@ bool RootWindowDeskSwitchAnimator::ReplaceAnimation(int new_ending_desk_index) {
   return true;
 }
 
-absl::optional<int> RootWindowDeskSwitchAnimator::UpdateSwipeAnimation(
+std::optional<int> RootWindowDeskSwitchAnimator::UpdateSwipeAnimation(
     float scroll_delta_x) {
   if (!starting_desk_screenshot_taken_ || !ending_desk_screenshot_taken_)
-    return absl::nullopt;
+    return std::nullopt;
 
   const float translation_delta_x =
       TouchpadToXTranslation(scroll_delta_x, x_translation_offset_);
@@ -240,10 +276,10 @@ absl::optional<int> RootWindowDeskSwitchAnimator::UpdateSwipeAnimation(
   float translation_x =
       animation_layer->transform().To2dTranslation().x() + translation_delta_x;
   translation_x =
-      base::ClampToRange(translation_x,
-                         static_cast<float>(-animation_layer->bounds().width() +
-                                            visible_bounds_width),
-                         0.f);
+      std::clamp(translation_x,
+                 static_cast<float>(-animation_layer->bounds().width() +
+                                    visible_bounds_width),
+                 0.f);
   gfx::Transform transform;
   transform.Translate(translation_x, 0.f);
   base::AutoReset<bool> auto_reset(&setting_new_transform_, true);
@@ -268,9 +304,17 @@ absl::optional<int> RootWindowDeskSwitchAnimator::UpdateSwipeAnimation(
   //  We will notify the delegate to request a new screenshot once the x of b is
   //  within |kMinDistanceBeforeScreenshotDp| of the x of a, not including the
   //  edge padding (i.e. translation of (-190, 0)).
-  gfx::RectF transformed_animation_layer_bounds(animation_layer->bounds());
-  transform.TransformRect(&transformed_animation_layer_bounds);
-  transformed_animation_layer_bounds.Inset(edge_padding_width_dp_, 0);
+  gfx::RectF transformed_animation_layer_bounds =
+      transform.MapRect(gfx::RectF(animation_layer->bounds()));
+
+  // `reached_edge_` becomes true if the user has scrolled `animation_layer` to
+  // its limits.
+  reached_edge_ =
+      transformed_animation_layer_bounds.x() == 0 ||
+      transformed_animation_layer_bounds.right() == root_window_size_.width();
+
+  transformed_animation_layer_bounds.Inset(
+      gfx::InsetsF::VH(0, edge_padding_width_dp_));
 
   const bool moving_left = scroll_delta_x < 0.f;
   const bool going_out_of_bounds =
@@ -281,7 +325,7 @@ absl::optional<int> RootWindowDeskSwitchAnimator::UpdateSwipeAnimation(
                 -kMinDistanceBeforeScreenshotDp;
 
   if (!going_out_of_bounds)
-    return absl::nullopt;
+    return std::nullopt;
 
   // The upcoming desk we need to show will be an adjacent desk to the desk at
   // the visible desk index based on |moving_left|.
@@ -291,7 +335,7 @@ absl::optional<int> RootWindowDeskSwitchAnimator::UpdateSwipeAnimation(
   if (new_desk_index < 0 ||
       new_desk_index >=
           static_cast<int>(DesksController::Get()->desks().size())) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   return new_desk_index;
@@ -317,17 +361,28 @@ int RootWindowDeskSwitchAnimator::EndSwipeAnimation(bool is_fast_swipe) {
     return ending_desk_index;
   }
 
+  // In tests, StartAnimation() may trigger OnDeskSwitchAnimationFinished()
+  // right away which may delete |this|. Store the target index in a
+  // local so we do not try to access a member of a deleted object.
+  int local_ending_desk_index = -1;
+
+  // Try animating to `ending_desk_index_` regardless of how much of it is
+  // visible.
+  if (is_fast_swipe) {
+    local_ending_desk_index = ending_desk_index_;
+    // If the ending desk screenshot is underway, it will call
+    // `StartAnimation()` when finished.
+    if (ending_desk_screenshot_taken_)
+      StartAnimation();
+    return local_ending_desk_index;
+  }
+
   // If the ending desk screenshot has not finished,
   // GetIndexOfMostVisibleDeskScreenshot() will
   // still return a valid desk index that we can animate to, but we need to make
   // sure the ending desk screenshot callback does not get called.
   if (!ending_desk_screenshot_taken_)
     weak_ptr_factory_.InvalidateWeakPtrs();
-
-  // In tests, StartAnimation() may trigger OnDeskSwitchAnimationFinished()
-  // right away which may delete |this|. Store the target index in a
-  // local so we do not try to access a member of a deleted object.
-  int local_ending_desk_index = -1;
 
   // If the swipe we are ending with is deemed a fast swipe, we animate to
   // |ending_desk_index_| if more than 10% of it is currently visible.
@@ -337,8 +392,8 @@ int RootWindowDeskSwitchAnimator::EndSwipeAnimation(bool is_fast_swipe) {
     if (layer) {
       const gfx::Transform transform =
           animation_layer_owner_->root()->transform();
-      gfx::RectF screenshot_bounds(layer->bounds());
-      transform.TransformRect(&screenshot_bounds);
+      gfx::RectF screenshot_bounds =
+          transform.MapRect(gfx::RectF(layer->bounds()));
 
       const gfx::RectF root_window_bounds(root_window_->bounds());
       const gfx::RectF intersection_rect =
@@ -371,8 +426,7 @@ int RootWindowDeskSwitchAnimator::GetIndexOfMostVisibleDeskScreenshot() const {
     if (!layer)
       continue;
 
-    gfx::RectF bounds(layer->bounds());
-    transform.TransformRect(&bounds);
+    gfx::Rect bounds = transform.MapRect(layer->bounds());
     const int distance = std::abs(bounds.x());
     if (distance < min_distance) {
       min_distance = distance;
@@ -380,7 +434,7 @@ int RootWindowDeskSwitchAnimator::GetIndexOfMostVisibleDeskScreenshot() const {
     }
   }
 
-  // TODO(crbug.com/1134390): Convert back to DCHECK when the issue is fixed.
+  // TODO(crbug.com/40151430): Convert back to DCHECK when the issue is fixed.
   CHECK_GE(index, 0);
   CHECK_LT(index, static_cast<int>(DesksController::Get()->desks().size()));
   return index;
@@ -395,6 +449,18 @@ void RootWindowDeskSwitchAnimator::OnImplicitAnimationsCompleted() {
   StopObservingImplicitAnimations();
   animation_finished_ = true;
   delegate_->OnDeskSwitchAnimationFinished();
+}
+
+void RootWindowDeskSwitchAnimator::OnRootWindowWillShutdown(
+    aura::Window* root_window) {
+  if (root_window != root_window_) {
+    return;
+  }
+
+  // The root window we are working on is about to go away, so we must not use
+  // it anymore.
+  root_window_ = nullptr;
+  animator_failed_ = true;
 }
 
 ui::Layer* RootWindowDeskSwitchAnimator::GetAnimationLayerForTesting() const {
@@ -416,78 +482,88 @@ void RootWindowDeskSwitchAnimator::CompleteAnimationPhase1WithLayer(
   // Add the layers on top of everything, so that things that result from desk
   // activation (such as showing and hiding windows, exiting overview mode ...
   // etc.) are not visible to the user.
+  CHECK(root_window_);
   auto* root_layer = root_window_->layer();
   root_layer->Add(animation_layer);
 
-  if (for_remove_) {
+  if (for_remove_ && is_combine_desks_type_) {
     DCHECK(old_windows_layer_tree_owner_);
     auto* old_windows_layer = old_windows_layer_tree_owner_->root();
     DCHECK(old_windows_layer);
     root_layer->StackBelow(animation_layer, old_windows_layer);
-
-    // Translate the old layers of the removed desk's windows up by
-    // `kRemovedDeskWindowYTranslation`.
-    gfx::Transform transform = old_windows_layer->GetTargetTransform();
-    ui::ScopedLayerAnimationSettings settings(old_windows_layer->GetAnimator());
-    settings.SetPreemptionStrategy(
-        ui::LayerAnimator::IMMEDIATELY_ANIMATE_TO_NEW_TARGET);
-    settings.SetTransitionDuration(kRemovedDeskWindowTranslationDuration);
-    settings.SetTweenType(gfx::Tween::EASE_OUT);
-    transform.Translate(0, -kRemovedDeskWindowYTranslation);
-    old_windows_layer->SetTransform(transform);
   } else {
     root_layer->StackAtTop(animation_layer);
   }
 
   starting_desk_screenshot_taken_ = true;
   OnScreenshotLayerCreated();
+
+  if (on_starting_screenshot_taken_callback_for_testing_)
+    std::move(on_starting_screenshot_taken_callback_for_testing_).Run();
+
   delegate_->OnStartingDeskScreenshotTaken(ending_desk_index_);
 }
 
 void RootWindowDeskSwitchAnimator::OnStartingDeskScreenshotTaken(
     std::unique_ptr<viz::CopyOutputResult> copy_result) {
+  if (animator_failed_) {
+    delegate_->OnStartingDeskScreenshotTaken(ending_desk_index_);
+    return;
+  }
+
   if (!copy_result || copy_result->IsEmpty()) {
     // A frame may be activated before the screenshot requests are satisfied,
     // leading to us getting an empty |result|. Rerequest the screenshot.
     // (See viz::Surface::ActivateFrame()).
+    base::UmaHistogramBoolean(kDeskSwitchScreenshotResultHistogramName, false);
     if (++starting_desk_screenshot_retries_ <= kMaxScreenshotRetries) {
       TakeStartingDeskScreenshot();
     } else {
       LOG(ERROR) << "Received multiple empty screenshots of the starting desk.";
-      NOTREACHED();
-      starting_desk_screenshot_taken_ = true;
+      animator_failed_ = true;
       delegate_->OnStartingDeskScreenshotTaken(ending_desk_index_);
     }
 
     return;
   }
 
+  base::UmaHistogramBoolean(kDeskSwitchScreenshotResultHistogramName, true);
   CompleteAnimationPhase1WithLayer(CreateLayerFromCopyOutputResult(
       std::move(copy_result), root_window_size_));
 }
 
 void RootWindowDeskSwitchAnimator::OnEndingDeskScreenshotTaken(
     std::unique_ptr<viz::CopyOutputResult> copy_result) {
+  if (animator_failed_) {
+    delegate_->OnStartingDeskScreenshotTaken(ending_desk_index_);
+    return;
+  }
+
   if (!copy_result || copy_result->IsEmpty()) {
     // A frame may be activated before the screenshot requests are satisfied,
     // leading to us getting an empty |result|. Rerequest the screenshot.
     // (See viz::Surface::ActivateFrame()).
+    base::UmaHistogramBoolean(kDeskSwitchScreenshotResultHistogramName, false);
     if (++ending_desk_screenshot_retries_ <= kMaxScreenshotRetries) {
       TakeEndingDeskScreenshot();
     } else {
       LOG(ERROR) << "Received multiple empty screenshots of the ending desk.";
-      NOTREACHED();
-      ending_desk_screenshot_taken_ = true;
+      animator_failed_ = true;
       delegate_->OnEndingDeskScreenshotTaken();
     }
 
     return;
   }
 
+  base::UmaHistogramBoolean(kDeskSwitchScreenshotResultHistogramName, true);
   ui::Layer* ending_desk_screenshot_layer =
       CreateLayerFromCopyOutputResult(std::move(copy_result), root_window_size_)
           .release();
   screenshot_layers_[ending_desk_index_] = ending_desk_screenshot_layer;
+  // In quick animation, the ending desk starts with 0 opacity.
+  if (type_ == DeskSwitchAnimationType::kQuickAnimation) {
+    screenshot_layers_[ending_desk_index_]->SetOpacity(0.f);
+  }
   ending_desk_screenshot_layer->SetName(
       GetScreenshotLayerName(ending_desk_index_));
   animation_layer_owner_->root()->Add(ending_desk_screenshot_layer);
@@ -506,7 +582,6 @@ void RootWindowDeskSwitchAnimator::OnScreenshotLayerCreated() {
   // Set the layer bounds. |screenshot_layers_| always matches the order of the
   // desks, which is left to right.
   int num_screenshots = 0;
-  DCHECK_EQ(x_translation_offset_, root_window_size_.width() + kDesksSpacing);
   for (ui::Layer* layer : screenshot_layers_) {
     if (!layer)
       continue;
@@ -520,10 +595,19 @@ void RootWindowDeskSwitchAnimator::OnScreenshotLayerCreated() {
   // The animation layer is sized to contain all the screenshot layers,
   // |kDesksSpacing| between any two adjacent screenshot layers, and
   // |edge_padding_width_dp_| on each side.
-  const gfx::Rect animation_layer_bounds(
-      num_screenshots * x_translation_offset_ - kDesksSpacing +
-          2 * edge_padding_width_dp_,
-      root_window_size_.height());
+  gfx::Rect animation_layer_bounds;
+  if (type_ == DeskSwitchAnimationType::kContinuousAnimation) {
+    animation_layer_bounds =
+        gfx::Rect(num_screenshots * x_translation_offset_ - kDesksSpacing +
+                      2 * edge_padding_width_dp_,
+                  root_window_size_.height());
+  } else {
+    animation_layer_bounds =
+        gfx::Rect(root_window_size_.width() * kQuickAnimationLayerWidthRatio +
+                      2 * edge_padding_width_dp_,
+                  root_window_size_.height());
+  }
+
   auto* animation_layer = animation_layer_owner_->root();
   animation_layer->SetBounds(animation_layer_bounds);
 
@@ -531,6 +615,11 @@ void RootWindowDeskSwitchAnimator::OnScreenshotLayerCreated() {
   // one moving right. Starting desk is one the left, so we start off with no
   // offset and then slide the animation layer so that ending desk is visible
   // (target transform of -|x_translation_offset_| translation).
+  //
+  // Note: The `x_translation_offset_` is different between
+  // `kContinuousAnimation` and `kQuickAnimation`, see more details in header
+  // file.
+  //
   //
   //                         +-----------+
   //                         | Animation |
@@ -592,7 +681,7 @@ void RootWindowDeskSwitchAnimator::OnScreenshotLayerCreated() {
 
   // If there is an existing transform, continue animating from there.
   gfx::Transform current_transform = animation_layer->transform();
-  DCHECK(current_transform.IsIdentityOr2DTranslation());
+  DCHECK(current_transform.IsIdentityOr2dTranslation());
   if (!current_transform.IsIdentity()) {
     // If the new layer is located on the left of the prior created layers,
     // shift the animation layer transform so that the content shown to users
@@ -619,8 +708,6 @@ void RootWindowDeskSwitchAnimator::OnScreenshotLayerCreated() {
 }
 
 int RootWindowDeskSwitchAnimator::GetXPositionOfScreenshot(int index) {
-  // TODO(crbug.com/1223866): Investigate if we can prevent this higher in the
-  // call stack.
   if (index < 0 || index >= static_cast<int>(screenshot_layers_.size()))
     return 0;
   ui::Layer* layer = screenshot_layers_[index];

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,15 +29,17 @@ WebString TestWebFrameContentDumper::DumpWebViewAsText(WebView* web_view,
 
   WebViewImpl* web_view_impl = To<WebViewImpl>(web_view);
   DCHECK(web_view_impl->MainFrameViewWidget());
+  const viz::BeginFrameArgs args;
   // Updating the document lifecycle isn't enough, the BeginFrame() step
   // should come first which runs events such as notifying of media query
   // changes or raf-based events.
-  web_view_impl->MainFrameViewWidget()->BeginMainFrame(base::TimeTicks::Now());
+  web_view_impl->MainFrameViewWidget()->BeginMainFrame(args);
   web_view_impl->MainFrameViewWidget()->UpdateAllLifecyclePhases(
       DocumentUpdateReason::kTest);
 
   StringBuilder text;
-  FrameContentAsText(max_chars, To<WebLocalFrameImpl>(frame)->GetFrame(), text);
+  FrameContentAsText(static_cast<wtf_size_t>(max_chars),
+                     To<WebLocalFrameImpl>(frame)->GetFrame(), text);
   return text.ToString();
 }
 
@@ -48,14 +50,14 @@ WebString TestWebFrameContentDumper::DumpAsMarkup(WebLocalFrame* frame) {
 WebString TestWebFrameContentDumper::DumpLayoutTreeAsText(
     WebLocalFrame* frame,
     LayoutAsTextControls to_show) {
-  LayoutAsTextBehavior behavior = kLayoutAsTextShowAllLayers;
+  LayoutAsTextBehavior behavior = 0;
 
   if (to_show & kLayoutAsTextWithLineTrees)
     behavior |= kLayoutAsTextShowLineTrees;
 
   if (to_show & kLayoutAsTextDebug) {
-    behavior |= kLayoutAsTextShowCompositedLayers | kLayoutAsTextShowAddresses |
-                kLayoutAsTextShowIDAndClass | kLayoutAsTextShowLayerNesting;
+    behavior |= kLayoutAsTextShowAddresses | kLayoutAsTextShowIDAndClass |
+                kLayoutAsTextShowLayerNesting;
   }
 
   if (to_show & kLayoutAsTextPrinting)

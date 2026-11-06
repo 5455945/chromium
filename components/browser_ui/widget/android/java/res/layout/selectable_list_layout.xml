@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Copyright 2016 The Chromium Authors. All rights reserved.
-     Use of this source code is governed by a BSD-style license that can be
-     found in the LICENSE file. -->
+<!--
+Copyright 2016 The Chromium Authors
+Use of this source code is governed by a BSD-style license that can be
+found in the LICENSE file.
+-->
 
 <merge xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
@@ -12,7 +14,7 @@
         android:id="@+id/action_bar_bg"
         android:layout_width="match_parent"
         android:layout_height="@dimen/selectable_list_toolbar_height"
-        android:background="@color/toolbar_background_primary" />
+        android:background="@android:color/transparent" />
 
     <ViewStub
         android:id="@+id/action_bar_stub"
@@ -35,16 +37,23 @@
             android:visibility="gone"
             android:scrollbars="vertical" />
 
+        <ViewStub
+            android:id="@+id/empty_state_view_stub"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout="@layout/empty_state_view"
+            android:layout_gravity="center"
+            android:padding="@dimen/card_padding" />
 
-        <FrameLayout
-            style="@style/Card"
+        <org.chromium.components.browser_ui.widget.MaterialCardViewNoShadow
             android:id="@+id/empty_view_wrapper"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_gravity="center"
             android:layout_marginStart="@dimen/default_list_row_padding"
             android:layout_marginEnd="@dimen/default_list_row_padding"
-            android:visibility="gone">
+            android:visibility="gone"
+            style="@style/MaterialCardStyle">
 
             <org.chromium.ui.widget.TextViewWithLeading
                 android:id="@+id/empty_view"
@@ -57,7 +66,7 @@
                 android:textAppearance="@style/TextAppearance.TextMedium.Secondary"
                 app:leading="@dimen/text_size_medium_leading" />
 
-        </FrameLayout>
+        </org.chromium.components.browser_ui.widget.MaterialCardViewNoShadow>
 
         <org.chromium.ui.widget.LoadingView
             android:id="@+id/loading_view"

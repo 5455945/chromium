@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,9 +12,8 @@
 namespace content {
 
 bool SendZygoteChildPing(int fd) {
-  return base::UnixDomainSocket::SendMsg(fd, kZygoteChildPingMessage,
-                                         sizeof(kZygoteChildPingMessage),
-                                         std::vector<int>());
+  return base::UnixDomainSocket::SendMsg(
+      fd, base::as_byte_span(kZygoteChildPingMessage), std::vector<int>());
 }
 
 }  // namespace content

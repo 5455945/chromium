@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -30,10 +30,9 @@ class ScopedMockedURL {
 
 class ScopedMockedURLLoad : ScopedMockedURL {
  public:
-  ScopedMockedURLLoad(
-      const WebURL& full_url,
-      const WebString& file_path,
-      const WebString& mime_type = WebString::FromUTF8("text/html"));
+  ScopedMockedURLLoad(const WebURL& full_url,
+                      const WebString& file_path,
+                      const WebString& mime_type = WebString("text/html"));
   ~ScopedMockedURLLoad() override = default;
 };
 

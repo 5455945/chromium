@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,21 @@ package org.chromium.printing;
 
 import android.app.Activity;
 
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.NativeMethods;
+
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.base.WindowAndroid;
 
 /**
- * This class is responsible for communicating with its native counterpart through JNI to handle
- * the generation of PDF.  On the Java side, it works with a {@link PrintingController}
- * to talk to the framework.
+ * This class is responsible for communicating with its native counterpart through JNI to handle the
+ * generation of PDF. On the Java side, it works with a {@link PrintingController} to talk to the
+ * framework.
  */
 @JNINamespace("printing")
+@NullMarked
 public class PrintingContext {
     private static final String TAG = "Printing";
 
@@ -27,104 +30,55 @@ public class PrintingContext {
     /** The pointer to the native PrintingContextAndroid object. */
     private final long mNativeObject;
 
-    private PrintingContext(long ptr) {
-        mController = PrintingControllerImpl.getInstance();
+    private PrintingContext(long ptr, WindowAndroid window) {
+        mController = PrintingControllerImpl.getInstance(window);
         mNativeObject = ptr;
     }
 
     @CalledByNative
-    public static PrintingContext create(long nativeObjectPointer) {
+    public static PrintingContext create(long nativeObjectPointer, WindowAndroid window) {
         ThreadUtils.assertOnUiThread();
-        return new PrintingContext(nativeObjectPointer);
-    }
-
-    @CalledByNative
-    public int getFileDescriptor() {
-        ThreadUtils.assertOnUiThread();
-        return mController.getFileDescriptor();
-    }
-
-    @CalledByNative
-    public int getDpi() {
-        ThreadUtils.assertOnUiThread();
-        return mController.getDpi();
-    }
-
-    @CalledByNative
-    public int getWidth() {
-        ThreadUtils.assertOnUiThread();
-        return mController.getPageWidth();
-    }
-
-    @CalledByNative
-    public int getHeight() {
-        ThreadUtils.assertOnUiThread();
-        return mController.getPageHeight();
+        return new PrintingContext(nativeObjectPointer, window);
     }
 
     // Called along window.print() path to initialize a printing job.
     @CalledByNative
     public void showPrintDialog() {
         ThreadUtils.assertOnUiThread();
+        if (mController.isBusy()) {
+            // Already printing. Resolve the native callback with CANCEL immediately.
+            showSystemDialogDone();
+            return;
+        }
+        mController.setPendingPrintCallback(this::showSystemDialogDone);
         mController.startPendingPrint();
-        // Reply to native side with |CANCEL| since there is no printing settings available yet at
-        // this stage.
-        showSystemDialogDone();
     }
 
     @CalledByNative
-    public static void pdfWritingDone(int pageCount) {
+    public static void pdfWritingDone(int pageCount, WindowAndroid window) {
         ThreadUtils.assertOnUiThread();
 
-        PrintingControllerImpl.getInstance().pdfWritingDone(pageCount);
+        PrintingControllerImpl.getInstance(window).pdfWritingDone(pageCount);
     }
 
     @CalledByNative
     private static void setPendingPrint(
             WindowAndroid window, Printable printable, int renderProcessId, int renderFrameId) {
         Activity activity = window.getActivity().get();
-        if (activity == null) return;
+        if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
 
-        PrintingController printingController = PrintingControllerImpl.getInstance();
+        PrintingController printingController = PrintingControllerImpl.getInstance(window);
         printingController.setPendingPrint(
                 printable, new PrintManagerDelegateImpl(activity), renderProcessId, renderFrameId);
     }
 
-    @CalledByNative
-    public int[] getPages() {
-        ThreadUtils.assertOnUiThread();
-        return mController.getPageNumbers();
-    }
-
-    @CalledByNative
-    public void askUserForSettings(final int maxPages) {
-        ThreadUtils.assertOnUiThread();
-        // If the printing dialog has already finished, tell Chromium that operation is cancelled.
-        if (mController.hasPrintingFinished()) {
-            // NOTE: We don't call PrintingContextJni.get().askUserForSettingsReply (hence Chromium
-            // callback in AskUserForSettings callback) twice.
-            askUserForSettingsReply(false);
-        } else {
-            mController.setPrintingContext(this);
-            askUserForSettingsReply(true);
-        }
-    }
-
-    private void askUserForSettingsReply(boolean success) {
-        assert mNativeObject != 0;
-        PrintingContextJni.get().askUserForSettingsReply(
-                mNativeObject, PrintingContext.this, success);
-    }
-
     private void showSystemDialogDone() {
         assert mNativeObject != 0;
-        PrintingContextJni.get().showSystemDialogDone(mNativeObject, PrintingContext.this);
+        PrintingContextJni.get().showSystemDialogDone(mNativeObject);
     }
 
     @NativeMethods
     interface Natives {
-        void askUserForSettingsReply(
-                long nativePrintingContextAndroid, PrintingContext caller, boolean success);
-        void showSystemDialogDone(long nativePrintingContextAndroid, PrintingContext caller);
+        void showSystemDialogDone(long nativePrintingContextAndroid);
     }
 }

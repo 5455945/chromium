@@ -1,10 +1,10 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/subresource_filter/subresource_filter_browser_test_harness.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "components/page_load_metrics/browser/observers/ad_metrics/ad_intervention_browser_test_utils.h"
 #include "components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.h"
@@ -29,13 +29,11 @@ class LargeStickyAdViolationBrowserTest
   LargeStickyAdViolationBrowserTest() = default;
 
   void SetUp() override {
-    std::vector<base::Feature> enabled = {
+    std::vector<base::test::FeatureRef> enabled = {
         subresource_filter::kAdTagging,
         subresource_filter::kAdsInterventionsEnforced};
-    std::vector<base::Feature> disabled = {
-        blink::features::kFrequencyCappingForLargeStickyAdDetection};
 
-    feature_list_.InitWithFeatures(enabled, disabled);
+    feature_list_.InitWithFeatures(enabled, /*disabled_features=*/{});
     subresource_filter::SubresourceFilterBrowserTest::SetUp();
   }
 
@@ -67,7 +65,8 @@ IN_PROC_BROWSER_TEST_F(LargeStickyAdViolationBrowserTest,
   // ad script is loaded and that the subresource filter UI doesn't show up.
   EXPECT_TRUE(content::NavigateToURL(web_contents(), url));
 
-  EXPECT_TRUE(WasParsedScriptElementLoaded(web_contents()->GetMainFrame()));
+  EXPECT_TRUE(
+      WasParsedScriptElementLoaded(web_contents()->GetPrimaryMainFrame()));
   histogram_tester.ExpectBucketCount(
       "SubresourceFilter.Actions2",
       subresource_filter::SubresourceFilterAction::kUIShown, 0);
@@ -93,7 +92,8 @@ IN_PROC_BROWSER_TEST_F(LargeStickyAdViolationBrowserTest,
   // shows up.
   EXPECT_TRUE(content::NavigateToURL(web_contents(), url));
 
-  EXPECT_FALSE(WasParsedScriptElementLoaded(web_contents()->GetMainFrame()));
+  EXPECT_FALSE(
+      WasParsedScriptElementLoaded(web_contents()->GetPrimaryMainFrame()));
   histogram_tester.ExpectBucketCount(
       "SubresourceFilter.Actions2",
       subresource_filter::SubresourceFilterAction::kUIShown, 1);
@@ -108,10 +108,10 @@ class LargeStickyAdViolationBrowserTestWithoutEnforcement
   LargeStickyAdViolationBrowserTestWithoutEnforcement() = default;
 
   void SetUp() override {
-    std::vector<base::Feature> enabled = {subresource_filter::kAdTagging};
-    std::vector<base::Feature> disabled = {
-        subresource_filter::kAdsInterventionsEnforced,
-        blink::features::kFrequencyCappingForLargeStickyAdDetection};
+    std::vector<base::test::FeatureRef> enabled = {
+        subresource_filter::kAdTagging};
+    std::vector<base::test::FeatureRef> disabled = {
+        subresource_filter::kAdsInterventionsEnforced};
 
     feature_list_.InitWithFeatures(enabled, disabled);
     subresource_filter::SubresourceFilterBrowserTest::SetUp();
@@ -139,7 +139,8 @@ IN_PROC_BROWSER_TEST_F(LargeStickyAdViolationBrowserTestWithoutEnforcement,
   // running in dry run mode.
   EXPECT_TRUE(content::NavigateToURL(web_contents(), url));
 
-  EXPECT_TRUE(WasParsedScriptElementLoaded(web_contents()->GetMainFrame()));
+  EXPECT_TRUE(
+      WasParsedScriptElementLoaded(web_contents()->GetPrimaryMainFrame()));
   histogram_tester.ExpectBucketCount(
       "SubresourceFilter.Actions2",
       subresource_filter::SubresourceFilterAction::kUIShown, 0);

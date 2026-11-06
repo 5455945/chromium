@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,10 @@
 #include <utility>
 
 #include "base/memory/ptr_util.h"
+#include "base/memory_coordinator/memory_coordinator_features.h"
+#include "base/memory_coordinator/memory_limit.h"
+#include "base/memory_coordinator/test_memory_consumer_registry.h"
+#include "base/test/scoped_feature_list.h"
 #include "chromecast/browser/renderer_prelauncher.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/test/browser_task_environment.h"
@@ -39,7 +43,7 @@ class MockPrelauncher : public RendererPrelauncher {
                   const GURL& page_url)
       : RendererPrelauncher(browser_context,
                             page_url) {}
-  virtual ~MockPrelauncher() { Destroy(); }
+  ~MockPrelauncher() override { Destroy(); }
 
   MOCK_METHOD0(Prelaunch, void());
   MOCK_METHOD0(Destroy, void());
@@ -62,8 +66,34 @@ class LRURendererCacheTest : public testing::Test {
     lru_cache_->SetFactoryForTesting(&factory_);
   }
 
+  void SetMemoryLimit(base::MemoryLimit memory_limit) {
+    memory_consumer_registry_.NotifyUpdateMemoryLimitAsync(
+        memory_limit, task_environment_.QuitClosure());
+    task_environment_.RunUntilQuit();
+  }
+
+  void ReleaseMemory() {
+    memory_consumer_registry_.NotifyReleaseMemoryAsync(
+        task_environment_.QuitClosure());
+    task_environment_.RunUntilQuit();
+  }
+
+  void SimulateMemoryLimitAndRelease(base::MemoryLimit memory_limit) {
+    memory_consumer_registry_.NotifyUpdateMemoryLimitAndReleaseAsync(
+        memory_limit, task_environment_.QuitClosure());
+    task_environment_.RunUntilQuit();
+  }
+
+  void ReleaseRendererPrelauncherAndWait(const GURL& page_url) {
+    lru_cache_->ReleaseRendererPrelauncher(page_url);
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, task_environment_.QuitClosure());
+    task_environment_.RunUntilQuit();
+  }
+
   content::BrowserTaskEnvironment task_environment_;
   content::TestBrowserContext browser_context_;
+  base::TestMemoryConsumerRegistry memory_consumer_registry_;
   MockFactory factory_;
   std::unique_ptr<LRURendererCache> lru_cache_;
 };
@@ -85,8 +115,7 @@ TEST_F(LRURendererCacheTest, SimpleTakeAndRelease) {
 
   // Releasing the prelauncher will cache it and prelaunch for later use.
   EXPECT_CREATE_AND_PRELAUNCH(p1, kUrl);
-  lru_cache_->ReleaseRendererPrelauncher(kUrl);
-  task_environment_.RunUntilIdle();
+  ReleaseRendererPrelauncherAndWait(kUrl);
   // Cache: [ 1 ]
   // In-use: []
 
@@ -99,8 +128,7 @@ TEST_F(LRURendererCacheTest, SimpleTakeAndRelease) {
 
   // Return the prelauncher again, it should be cached the same as before.
   EXPECT_CREATE_AND_PRELAUNCH(p1, kUrl);
-  lru_cache_->ReleaseRendererPrelauncher(kUrl);
-  task_environment_.RunUntilIdle();
+  ReleaseRendererPrelauncherAndWait(kUrl);
   // Cache: [ 1 ]
   // In-use: []
 }
@@ -118,8 +146,7 @@ TEST_F(LRURendererCacheTest, SimpleCacheEviction) {
   taken = lru_cache_->TakeRendererPrelauncher(kUrl);
   ASSERT_FALSE(taken);
   EXPECT_CREATE_AND_PRELAUNCH(p1, kUrl);
-  lru_cache_->ReleaseRendererPrelauncher(kUrl);
-  task_environment_.RunUntilIdle();
+  ReleaseRendererPrelauncherAndWait(kUrl);
   // Cache: [ 1 ]
   // In-use: []
 
@@ -151,8 +178,7 @@ TEST_F(LRURendererCacheTest, CapacityOne) {
 
   // Releasing the prelauncher will cache it and prelaunch for later use.
   EXPECT_CREATE_AND_PRELAUNCH(p1, kUrl1);
-  lru_cache_->ReleaseRendererPrelauncher(kUrl1);
-  task_environment_.RunUntilIdle();
+  ReleaseRendererPrelauncherAndWait(kUrl1);
   // Cache: [ 1 ]
   // In-use: []
 
@@ -165,8 +191,7 @@ TEST_F(LRURendererCacheTest, CapacityOne) {
 
   // Return the prelauncher again, it should be cached the same as before.
   EXPECT_CREATE_AND_PRELAUNCH(p1, kUrl1);
-  lru_cache_->ReleaseRendererPrelauncher(kUrl1);
-  task_environment_.RunUntilIdle();
+  ReleaseRendererPrelauncherAndWait(kUrl1);
   // Cache: [ 1 ]
   // In-use: []
 
@@ -181,8 +206,7 @@ TEST_F(LRURendererCacheTest, CapacityOne) {
 
   // Return prelauncher 2, it should be cached.
   EXPECT_CREATE_AND_PRELAUNCH(p2, kUrl2);
-  lru_cache_->ReleaseRendererPrelauncher(kUrl2);
-  task_environment_.RunUntilIdle();
+  ReleaseRendererPrelauncherAndWait(kUrl2);
   // Cache: [ 2 ]
   // In-use: [ ]
   taken = lru_cache_->TakeRendererPrelauncher(kUrl2);
@@ -193,8 +217,7 @@ TEST_F(LRURendererCacheTest, CapacityOne) {
 
   // Return prelauncher 2 once more, it will be cached.
   EXPECT_CREATE_AND_PRELAUNCH(p2, kUrl2);
-  lru_cache_->ReleaseRendererPrelauncher(kUrl2);
-  task_environment_.RunUntilIdle();
+  ReleaseRendererPrelauncherAndWait(kUrl2);
   // Cache: [ 2 ]
   // In-use: [ ]
 
@@ -216,8 +239,7 @@ TEST_F(LRURendererCacheTest, CapacityOne) {
   // Returning one of the two in-use pages to the cache won't actually cache it,
   // since there's still exactly 1 renderer in-use.
   EXPECT_CALL(factory_, Create(_, _)).Times(0);
-  lru_cache_->ReleaseRendererPrelauncher(kUrl2);
-  task_environment_.RunUntilIdle();
+  ReleaseRendererPrelauncherAndWait(kUrl2);
   // Cache: [ ]
   // In-use: [ 1 ]
 }
@@ -248,17 +270,14 @@ TEST_F(LRURendererCacheTest, CapacityTwo) {
 
   // Don't cache renderer 3 since there are still 2 in use.
   EXPECT_CALL(factory_, Create(_, _)).Times(0);
-  lru_cache_->ReleaseRendererPrelauncher(kUrl3);
-  task_environment_.RunUntilIdle();
+  ReleaseRendererPrelauncherAndWait(kUrl3);
   // In-use: [ 1, 2 ]
 
   // Fill the cache with remaining 2 renderers.
   EXPECT_CREATE_AND_PRELAUNCH(p2, kUrl2);
-  lru_cache_->ReleaseRendererPrelauncher(kUrl2);
-  task_environment_.RunUntilIdle();
+  ReleaseRendererPrelauncherAndWait(kUrl2);
   EXPECT_CREATE_AND_PRELAUNCH(p1, kUrl1);
-  lru_cache_->ReleaseRendererPrelauncher(kUrl1);
-  task_environment_.RunUntilIdle();
+  ReleaseRendererPrelauncherAndWait(kUrl1);
   // Cache: [ 1, 2 ]
   // In-use: [ ]
 
@@ -271,8 +290,7 @@ TEST_F(LRURendererCacheTest, CapacityTwo) {
 
   // Return renderer 1.
   EXPECT_CREATE_AND_PRELAUNCH(p1, kUrl1);
-  lru_cache_->ReleaseRendererPrelauncher(kUrl1);
-  task_environment_.RunUntilIdle();
+  ReleaseRendererPrelauncherAndWait(kUrl1);
   // Cache: [ 1, 2 ]
   // In-use: [ ]
 
@@ -292,6 +310,75 @@ TEST_F(LRURendererCacheTest, CapacityTwo) {
   ASSERT_FALSE(taken);
   // Cache: [ ]
   // In-use: [ 2, 3 ]
+}
+
+TEST_F(LRURendererCacheTest, MemoryConsumer_Stateful) {
+  base::test::ScopedFeatureList scoped_feature_list(
+      base::kStatefulMemoryPressure);
+  const GURL kUrl1("https://www.one.com");
+  const GURL kUrl2("https://www.two.com");
+
+  lru_cache_ = std::make_unique<LRURendererCache>(&browser_context_, 2);
+  SetFactory();
+  MockPrelauncher* p1;
+  MockPrelauncher* p2;
+
+  // Fill the cache with 2 renderers.
+  lru_cache_->TakeRendererPrelauncher(kUrl1);
+  lru_cache_->TakeRendererPrelauncher(kUrl2);
+
+  EXPECT_CREATE_AND_PRELAUNCH(p2, kUrl2);
+  ReleaseRendererPrelauncherAndWait(kUrl2);
+
+  EXPECT_CREATE_AND_PRELAUNCH(p1, kUrl1);
+  ReleaseRendererPrelauncherAndWait(kUrl1);
+  // Cache: [ 1, 2 ]
+  // In-use: []
+
+  // Reduce memory limit to 50% (should allow only 1 renderer).
+  // OnUpdateMemoryLimit should NOT evict anything.
+  EXPECT_CALL(*p1, Destroy()).Times(0);
+  EXPECT_CALL(*p2, Destroy()).Times(0);
+  SetMemoryLimit(base::MemoryLimit::FromPercent(50));
+  // Cache still has 2 renderers.
+
+  // OnReleaseMemory should now perform the eviction.
+  EXPECT_EVICTION(p2);
+  ReleaseMemory();
+  // Cache: [ 1 ]
+
+  // Further reduce memory limit to 0%.
+  SetMemoryLimit(base::MemoryLimit::FromPercent(0));
+  EXPECT_EVICTION(p1);
+  ReleaseMemory();
+  // Cache: []
+}
+
+TEST_F(LRURendererCacheTest, MemoryConsumer_NonStateful) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(base::kStatefulMemoryPressure);
+  const GURL kUrl1("https://www.one.com");
+
+  lru_cache_ = std::make_unique<LRURendererCache>(&browser_context_, 1);
+  SetFactory();
+  MockPrelauncher* p1;
+
+  // Fill the cache.
+  lru_cache_->TakeRendererPrelauncher(kUrl1);
+  EXPECT_CREATE_AND_PRELAUNCH(p1, kUrl1);
+  ReleaseRendererPrelauncherAndWait(kUrl1);
+  // Cache: [ 1 ]
+
+  // Set memory limit to 50% (approx. MODERATE allocation). Non-stateful doesn't
+  // care.
+  SimulateMemoryLimitAndRelease(base::MemoryLimit::FromPercent(50));
+  // Cache still has 1 renderer.
+
+  // Set memory limit to 0% (approx. CRITICAL allocation).
+  SetMemoryLimit(base::MemoryLimit::FromPercent(0));
+  EXPECT_EVICTION(p1);
+  ReleaseMemory();
+  // Cache is cleared.
 }
 
 }  // namespace chromecast

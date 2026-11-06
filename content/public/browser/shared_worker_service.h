@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,9 @@
 #include "base/observer_list_types.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/global_routing_id.h"
+#include "content/public/common/child_process_id.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
+#include "third_party/blink/public/mojom/worker/shared_worker_info.mojom.h"
 
 class GURL;
 
@@ -21,6 +23,10 @@ class UnguessableToken;
 namespace blink {
 class StorageKey;
 }  // namespace blink
+
+namespace url {
+class Origin;
+}
 
 namespace content {
 
@@ -36,7 +42,8 @@ class CONTENT_EXPORT SharedWorkerService {
     // evaluated.
     virtual void OnWorkerCreated(
         const blink::SharedWorkerToken& token,
-        int worker_process_id,
+        ChildProcessId worker_process_id,
+        const url::Origin& security_origin,
         const base::UnguessableToken& dev_tools_token) = 0;
     virtual void OnBeforeWorkerDestroyed(
         const blink::SharedWorkerToken& token) = 0;
@@ -77,10 +84,19 @@ class CONTENT_EXPORT SharedWorkerService {
   virtual void EnumerateSharedWorkers(Observer* observer) = 0;
 
   // Terminates the given shared worker identified by its name, the URL of its
-  // main script resource, and the storage key.  Returns true on success.
-  virtual bool TerminateWorker(const GURL& url,
-                               const std::string& name,
-                               const blink::StorageKey& storage_key) = 0;
+  // main script resource, the storage key, and the same_site_cookies setting.
+  // Returns true on success.
+  virtual bool TerminateWorker(
+      const GURL& url,
+      const std::string& name,
+      const blink::StorageKey& storage_key,
+      const blink::mojom::SharedWorkerSameSiteCookies same_site_cookies) = 0;
+
+  // Terminates all shared workers matching the given storage key. Used when
+  // clearing browsing data for a site/partition without requiring individual
+  // worker URLs or names to be tracked.
+  virtual void TerminateWorkersForStorageKey(
+      const blink::StorageKey& storage_key) = 0;
 
   // Drops all shared workers and references to processes for shared workers
   // synchronously.

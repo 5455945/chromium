@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,7 @@
 
 #include <memory>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "storage/browser/file_system/async_file_util.h"
 
 namespace arc {
@@ -21,17 +20,23 @@ namespace arc {
 // interface completely. We omit some details which Files app doesn't care.
 // This is for simpicity, but results in layering violation. We should
 // complement the implementations to prepare for general usage in the future.
-// crbug.com/946329.
+// crbug.com/206362799.
 class ArcDocumentsProviderAsyncFileUtil : public storage::AsyncFileUtil {
  public:
   ArcDocumentsProviderAsyncFileUtil();
+
+  ArcDocumentsProviderAsyncFileUtil(const ArcDocumentsProviderAsyncFileUtil&) =
+      delete;
+  ArcDocumentsProviderAsyncFileUtil& operator=(
+      const ArcDocumentsProviderAsyncFileUtil&) = delete;
+
   ~ArcDocumentsProviderAsyncFileUtil() override;
 
   // storage::AsyncFileUtil overrides.
   void CreateOrOpen(
       std::unique_ptr<storage::FileSystemOperationContext> context,
       const storage::FileSystemURL& url,
-      int file_flags,
+      uint32_t file_flags,
       CreateOrOpenCallback callback) override;
   void EnsureFileExists(
       std::unique_ptr<storage::FileSystemOperationContext> context,
@@ -45,7 +50,7 @@ class ArcDocumentsProviderAsyncFileUtil : public storage::AsyncFileUtil {
       StatusCallback callback) override;
   void GetFileInfo(std::unique_ptr<storage::FileSystemOperationContext> context,
                    const storage::FileSystemURL& url,
-                   int fields,
+                   GetMetadataFieldSet fields,
                    GetFileInfoCallback callback) override;
   void ReadDirectory(
       std::unique_ptr<storage::FileSystemOperationContext> context,
@@ -64,14 +69,14 @@ class ArcDocumentsProviderAsyncFileUtil : public storage::AsyncFileUtil {
       std::unique_ptr<storage::FileSystemOperationContext> context,
       const storage::FileSystemURL& src_url,
       const storage::FileSystemURL& dest_url,
-      CopyOrMoveOption option,
+      CopyOrMoveOptionSet options,
       CopyFileProgressCallback progress_callback,
       StatusCallback callback) override;
   void MoveFileLocal(
       std::unique_ptr<storage::FileSystemOperationContext> context,
       const storage::FileSystemURL& src_url,
       const storage::FileSystemURL& dest_url,
-      CopyOrMoveOption option,
+      CopyOrMoveOptionSet options,
       StatusCallback callback) override;
   void CopyInForeignFile(
       std::unique_ptr<storage::FileSystemOperationContext> context,
@@ -93,9 +98,6 @@ class ArcDocumentsProviderAsyncFileUtil : public storage::AsyncFileUtil {
       std::unique_ptr<storage::FileSystemOperationContext> context,
       const storage::FileSystemURL& url,
       CreateSnapshotFileCallback callback) override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ArcDocumentsProviderAsyncFileUtil);
 };
 
 }  // namespace arc

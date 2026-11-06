@@ -32,12 +32,15 @@
 
 #include <limits>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/numerics/safe_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "services/network/public/cpp/request_destination.h"
 #include "services/network/public/cpp/request_mode.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/resource_request_blocked_reason.h"
@@ -53,6 +56,7 @@
 #include "third_party/blink/renderer/core/loader/threadable_loader_client.h"
 #include "third_party/blink/renderer/platform/exported/wrapped_resource_request.h"
 #include "third_party/blink/renderer/platform/exported/wrapped_resource_response.h"
+#include "third_party/blink/renderer/platform/heap/thread_state.h"
 #include "third_party/blink/renderer/platform/loader/cors/cors.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_initiator_type_names.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_utils.h"
@@ -87,7 +91,7 @@ class HTTPRequestHeaderValidator : public WebHTTPHeaderVisitor {
 void HTTPRequestHeaderValidator::VisitHeader(const WebString& name,
                                              const WebString& value) {
   is_safe_ = is_safe_ && IsValidHTTPToken(name) &&
-             !cors::IsForbiddenHeaderName(name) &&
+             !cors::IsForbiddenRequestHeader(name, value) &&
              IsValidHTTPHeaderValue(value);
 }
 
@@ -115,7 +119,7 @@ class WebAssociatedURLLoaderImpl::ClientAdapter final
                    uint64_t /*totalBytesToBeSent*/) override;
   void DidReceiveResponse(uint64_t, const ResourceResponse&) override;
   void DidDownloadData(uint64_t /*dataLength*/) override;
-  void DidReceiveData(const char*, unsigned /*dataLength*/) override;
+  void DidReceiveData(base::span<const char> /*data*/) override;
   void DidFinishLoading(uint64_t /*identifier*/) override;
   void DidFail(uint64_t /*identifier*/, const ResourceError&) override;
   void DidFailRedirectCheck(uint64_t /*identifier*/) override;
@@ -151,12 +155,15 @@ class WebAssociatedURLLoaderImpl::ClientAdapter final
  private:
   void NotifyError(TimerBase*);
 
-  WebAssociatedURLLoaderImpl* loader_;
-  WebAssociatedURLLoaderClient* client_;
+  raw_ptr<WebAssociatedURLLoaderImpl, UnprotectedInRelease | DanglingUntriaged>
+      loader_;
+  raw_ptr<WebAssociatedURLLoaderClient,
+          UnprotectedInRelease | DanglingUntriaged>
+      client_;
   WebAssociatedURLLoaderOptions options_;
   network::mojom::RequestMode request_mode_;
   network::mojom::CredentialsMode credentials_mode_;
-  absl::optional<WebURLError> error_;
+  std::optional<WebURLError> error_;
 
   HeapTaskRunnerTimer<ClientAdapter> error_timer_;
   bool enable_error_notifications_;
@@ -238,7 +245,7 @@ void WebAssociatedURLLoaderImpl::ClientAdapter::DidReceiveResponse(
   // If there are blocked headers, copy the response so we can remove them.
   WebURLResponse validated_response = WrappedResourceResponse(response);
   for (const auto& header : blocked_headers)
-    validated_response.ClearHttpHeaderField(WebString::FromASCII(header));
+    validated_response.ClearHttpHeaderField(WebString::FromAscii(header));
   client_->DidReceiveResponse(validated_response);
 }
 
@@ -251,14 +258,12 @@ void WebAssociatedURLLoaderImpl::ClientAdapter::DidDownloadData(
 }
 
 void WebAssociatedURLLoaderImpl::ClientAdapter::DidReceiveData(
-    const char* data,
-    unsigned data_length) {
-  if (!client_)
+    base::span<const char> data) {
+  if (!client_) {
     return;
+  }
 
-  CHECK_LE(data_length, static_cast<unsigned>(std::numeric_limits<int>::max()));
-
-  client_->DidReceiveData(data, data_length);
+  client_->DidReceiveData(data);
 }
 
 void WebAssociatedURLLoaderImpl::ClientAdapter::DidFinishLoading(
@@ -288,7 +293,7 @@ void WebAssociatedURLLoaderImpl::ClientAdapter::DidFail(
 
 void WebAssociatedURLLoaderImpl::ClientAdapter::DidFailRedirectCheck(
     uint64_t identifier) {
-  DidFail(identifier, ResourceError::Failure(NullURL()));
+  DidFail(identifier, ResourceError::Failure(NullUrl()));
 }
 
 void WebAssociatedURLLoaderImpl::ClientAdapter::EnableErrorNotifications() {
@@ -320,7 +325,7 @@ class WebAssociatedURLLoaderImpl::Observer final
   void Dispose() {
     parent_ = nullptr;
     // TODO(keishi): Remove IsIteratingOverObservers() check when
-    // HeapObserverSet() supports removal while iterating.
+    // HeapObserverList() supports removal while iterating.
     if (!GetExecutionContext()
              ->ContextLifecycleObserverSet()
              .IsIteratingOverObservers()) {
@@ -337,7 +342,8 @@ class WebAssociatedURLLoaderImpl::Observer final
     ExecutionContextLifecycleObserver::Trace(visitor);
   }
 
-  WebAssociatedURLLoaderImpl* parent_;
+  raw_ptr<WebAssociatedURLLoaderImpl, UnprotectedInRelease | DanglingUntriaged>
+      parent_;
 };
 
 WebAssociatedURLLoaderImpl::WebAssociatedURLLoaderImpl(
@@ -359,14 +365,21 @@ void WebAssociatedURLLoaderImpl::LoadAsynchronously(
   DCHECK(!client_adapter_);
 
   DCHECK(client);
+  client_ = client;
+
+  if (!observer_) {
+    ReleaseClient()->DidFail(
+        WebURLError(ResourceError::CancelledError(NullUrl())));
+    return;
+  }
 
   bool allow_load = true;
   WebURLRequest new_request;
   new_request.CopyFrom(request);
   if (options_.untrusted_http) {
     WebString method = new_request.HttpMethod();
-    allow_load = observer_ && IsValidHTTPToken(method) &&
-                 !FetchUtils::IsForbiddenMethod(method);
+    allow_load =
+        IsValidHTTPToken(method) && !FetchUtils::IsForbiddenMethod(method);
     if (allow_load) {
       new_request.SetHttpMethod(FetchUtils::NormalizeMethod(method));
       HTTPRequestHeaderValidator validator;
@@ -376,7 +389,7 @@ void WebAssociatedURLLoaderImpl::LoadAsynchronously(
       // consult it separately, if set.
       if (request.ReferrerString() !=
           blink::WebString(Referrer::ClientReferrerString())) {
-        DCHECK(cors::IsForbiddenHeaderName("Referer"));
+        DCHECK(cors::IsForbiddenRequestHeader("Referer", ""));
         // `Referer` is a forbidden header name, so we must disallow this to
         // load.
         allow_load = false;
@@ -388,17 +401,9 @@ void WebAssociatedURLLoaderImpl::LoadAsynchronously(
   new_request.ToMutableResourceRequest().SetCorsPreflightPolicy(
       options_.preflight_policy);
 
-  scoped_refptr<base::SingleThreadTaskRunner> task_runner;
-  // |observer_| can be null if Cancel, ContextDestroyed or
-  // ClientAdapterDone gets called between creating the loader and
-  // calling LoadAsynchronously.
-  if (observer_) {
-    task_runner = observer_->GetExecutionContext()->GetTaskRunner(
-        TaskType::kInternalLoading);
-  } else {
-    task_runner = Thread::Current()->GetTaskRunner();
-  }
-  client_ = client;
+  scoped_refptr<base::SingleThreadTaskRunner> task_runner =
+      observer_->GetExecutionContext()->GetTaskRunner(
+          TaskType::kInternalLoading);
   client_adapter_ = MakeGarbageCollected<ClientAdapter>(
       this, client, options_, request.GetMode(), request.GetCredentialsMode(),
       std::move(task_runner));
@@ -439,12 +444,10 @@ void WebAssociatedURLLoaderImpl::LoadAsynchronously(
           fetch_initiator_type_names::kAudio;
     }
 
-    if (observer_) {
-      loader_ = MakeGarbageCollected<ThreadableLoader>(
-          *observer_->GetExecutionContext(), client_adapter_,
-          resource_loader_options);
-      loader_->Start(std::move(webcore_request));
-    }
+    loader_ = MakeGarbageCollected<ThreadableLoader>(
+        *observer_->GetExecutionContext(), client_adapter_,
+        resource_loader_options);
+    loader_->Start(std::move(webcore_request));
   }
 
   if (!loader_) {
@@ -498,7 +501,8 @@ void WebAssociatedURLLoaderImpl::ContextDestroyed() {
   if (!client_)
     return;
 
-  ReleaseClient()->DidFail(WebURLError(ResourceError::CancelledError(KURL())));
+  ReleaseClient()->DidFail(
+      WebURLError(ResourceError::CancelledError(NullUrl())));
   // |this| may be dead here.
 }
 
@@ -518,9 +522,8 @@ void WebAssociatedURLLoaderImpl::DisposeObserver() {
   // ThreadState::current() is null. However, the fact we reached here
   // without cancelling the loader means that it's possible there're some
   // non-Blink non-on-heap objects still facing on-heap Blink objects. E.g.
-  // there could be a WebURLLoader instance behind the
-  // ThreadableLoader instance. So, for safety, we chose to just
-  // crash here.
+  // there could be a URLLoader instance behind the ThreadableLoader instance.
+  // So, for safety, we chose to just crash here.
   CHECK(ThreadState::Current());
 
   observer_->Dispose();

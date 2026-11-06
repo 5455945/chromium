@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,17 +8,19 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "base/strings/string_piece.h"
-#include "base/util/type_safety/id_type.h"
+#include <string_view>
+
+#include "base/types/id_type.h"
+#include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 
 namespace autofill {
 
-struct FormData;
-struct FormFieldData;
+class FormData;
+class FormFieldData;
 
 namespace internal {
-using FormSignatureType = ::util::IdTypeU64<class FormSignatureMarker>;
-using FieldSignatureType = ::util::IdTypeU32<class FieldSignatureMarker>;
+using FormSignatureType = ::base::IdTypeU64<class FormSignatureMarker>;
+using FieldSignatureType = ::base::IdTypeU32<class FieldSignatureMarker>;
 }  // namespace internal
 
 // The below strong aliases are defined as subclasses instead of typedefs in
@@ -36,26 +38,42 @@ class FieldSignature : public internal::FieldSignatureType {
 // Calculates form signature based on |form_data|.
 FormSignature CalculateFormSignature(const FormData& form_data);
 
+// Returns a generic form signature which is equivalent to alternative form
+// signature for forms with more than 2 fields. For forms with 2 fields or
+// less, it is more stable as it doesn't depend on url path, query or ref.
+FormSignature CalculateStructuralFormSignature(const FormData& form_data);
+
+// Returns a more generic form signature than CalculateFormSignature. It is used
+// in cases where the web form has an unstable form signature (a random
+// signature due to changing form or field names at each page load).
+FormSignature CalculateAlternativeFormSignature(const FormData& form_data);
+
 // Calculates field signature based on |field_name| and |field_type|.
 FieldSignature CalculateFieldSignatureByNameAndType(
-    base::StringPiece16 field_name,
-    base::StringPiece field_type);
+    std::u16string_view field_name,
+    mojom::FormControlType field_type);
 
 // Calculates field signature based on |field_data|. This function is a proxy to
 // |CalculateFieldSignatureByNameAndType|.
 FieldSignature CalculateFieldSignatureForField(const FormFieldData& field_data);
 
 // Returns 64-bit hash of the string.
-uint64_t StrToHash64Bit(base::StringPiece str);
+uint64_t StrToHash64Bit(std::string_view str);
 
 // Returns 32-bit hash of the string.
-uint32_t StrToHash32Bit(base::StringPiece str);
+uint32_t StrToHash32Bit(std::string_view str);
+
+// Returns 3-bit hash of the string.
+int32_t StrToHash3Bit(std::string_view str);
+
+// Returns 3-bit hash of a UTF-16 string.
+int32_t StrToHash3Bit(std::u16string_view str);
 
 // Reduce FieldSignature space (in UKM) to a small range for privacy reasons.
-int64_t HashFormSignature(autofill::FormSignature form_signature);
+int64_t HashFormSignature(FormSignature form_signature);
 
 // Reduce FieldSignature space (in UKM) to a small range for privacy reasons.
-int64_t HashFieldSignature(autofill::FieldSignature field_signature);
+int64_t HashFieldSignature(FieldSignature field_signature);
 
 }  // namespace autofill
 

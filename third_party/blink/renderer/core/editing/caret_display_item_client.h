@@ -30,22 +30,31 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/editing/forward.h"
 #include "third_party/blink/renderer/core/layout/geometry/physical_rect.h"
+#include "third_party/blink/renderer/core/layout/inline/caret_rect.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
 #include "third_party/blink/renderer/platform/graphics/paint/display_item.h"
+#include "third_party/blink/renderer/platform/graphics/paint/display_item_client.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
+#include "ui/gfx/selection_bound.h"
 
 namespace blink {
 
 class GraphicsContext;
 class LayoutBlock;
-class NGPhysicalBoxFragment;
+class Node;
+class PhysicalBoxFragment;
 struct PaintInvalidatorContext;
 
-class CORE_EXPORT CaretDisplayItemClient final : public DisplayItemClient {
+class CORE_EXPORT CaretDisplayItemClient final
+    : public GarbageCollected<CaretDisplayItemClient>,
+      public DisplayItemClient {
  public:
   CaretDisplayItemClient();
   CaretDisplayItemClient(const CaretDisplayItemClient&) = delete;
   CaretDisplayItemClient& operator=(const CaretDisplayItemClient&) = delete;
   ~CaretDisplayItemClient() override;
+  void Trace(Visitor* visitor) const override;
 
   // Called indirectly from LayoutBlock::willBeDestroyed().
   void LayoutBlockWillBeDestroyed(const LayoutBlock&);
@@ -54,30 +63,41 @@ class CORE_EXPORT CaretDisplayItemClient final : public DisplayItemClient {
   // caret for paint invalidation and painting.
   void UpdateStyleAndLayoutIfNeeded(const PositionWithAffinity& caret_position);
 
-  bool IsVisibleIfActive() const { return is_visible_if_active_; }
-  void SetVisibleIfActive(bool visible);
+  void SetActive(bool active);
 
   // Called during LayoutBlock paint invalidation.
   void InvalidatePaint(const LayoutBlock&, const PaintInvalidatorContext&);
+
+  // Called during pre-paint tree walk to invalidate |previous_layout_block_|.
+  void EnsureInvalidationOfPreviousLayoutBlock();
+
+  // Invalidate paint if a cc property tree update is not available.
+  void SetNeedsNonCompositedPaintInvalidation();
+
+  bool IsInCanvasSubtree() const { return is_in_canvas_subtree_; }
 
   bool ShouldPaintCaret(const LayoutBlock& block) const {
     return &block == layout_block_;
   }
 
-  bool ShouldPaintCaret(const NGPhysicalBoxFragment& box_fragment) const;
+  bool ShouldPaintCaret(const PhysicalBoxFragment& box_fragment) const;
+
+  const LayoutBlock* GetLayoutBlock() const { return layout_block_; }
 
   void PaintCaret(GraphicsContext&,
                   const PhysicalOffset& paint_offset,
                   DisplayItem::Type) const;
 
-  void RecordSelection(GraphicsContext&, const PhysicalOffset& paint_offset);
+  void RecordSelection(GraphicsContext&,
+                       const PhysicalOffset& paint_offset,
+                       gfx::SelectionBound::Type type);
 
   // DisplayItemClient.
   String DebugName() const final;
 
  private:
   friend class CaretDisplayItemClientTest;
-  friend class ParameterizedComputeCaretRectTest;
+  friend class ComputeCaretRectTest;
 
   struct CaretRectAndPainterBlock {
     STACK_ALLOCATED();
@@ -85,32 +105,45 @@ class CORE_EXPORT CaretDisplayItemClient final : public DisplayItemClient {
    public:
     PhysicalRect caret_rect;  // local to |painter_block|
     LayoutBlock* painter_block = nullptr;
-    const NGPhysicalBoxFragment* box_fragment = nullptr;
+    const PhysicalBoxFragment* box_fragment = nullptr;
+    bool transform_compensated = false;
   };
   // Creating VisiblePosition causes synchronous layout so we should use the
   // PositionWithAffinity version if possible.
   // A position in HTMLTextFromControlElement is a typical example.
   static CaretRectAndPainterBlock ComputeCaretRectAndPainterBlock(
-      const PositionWithAffinity& caret_position);
+      const PositionWithAffinity& caret_position,
+      CaretShape caret_shape);
 
   void InvalidatePaintInCurrentLayoutBlock(const PaintInvalidatorContext&);
   void InvalidatePaintInPreviousLayoutBlock(const PaintInvalidatorContext&);
 
-  // These are updated by updateStyleAndLayoutIfNeeded().
+  // These are updated by UpdateStyleAndLayoutIfNeeded().
   Color color_;
   PhysicalRect local_rect_;
-  LayoutBlock* layout_block_ = nullptr;
+  // True when the bar caret's local size was rescaled to cancel the element
+  // transform scale (see AdjustBarCaretRectForTransform), which can make
+  // |local_rect_| sub-pixel in local space.
+  bool local_rect_transform_compensated_ = false;
+  Member<LayoutBlock> layout_block_;
 
   // This is set to the previous value of layout_block_ during
   // UpdateStyleAndLayoutIfNeeded() if it hasn't been set since the last paint
   // invalidation. It is used during InvalidatePaint() to invalidate the caret
   // in the previous layout block.
-  const LayoutBlock* previous_layout_block_ = nullptr;
+  Member<const LayoutBlock> previous_layout_block_;
 
-  const NGPhysicalBoxFragment* box_fragment_ = nullptr;
+  WeakMember<const PhysicalBoxFragment> box_fragment_;
 
+  // The text node at the current block-caret position.
+  // It is used to invalidate its LayoutObject when the caret moves so the
+  // character is repainted with the second value of caret-color if it's
+  // non-auto.
+  WeakMember<Node> block_caret_anchor_;
+
+  bool is_active_ = false;
   bool needs_paint_invalidation_ = false;
-  bool is_visible_if_active_ = true;
+  bool is_in_canvas_subtree_ = false;
 };
 
 }  // namespace blink

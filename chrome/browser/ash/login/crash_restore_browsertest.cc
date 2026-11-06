@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,6 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/json/json_writer.h"
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/path_service.h"
@@ -23,19 +22,21 @@
 #include "chrome/browser/ash/login/test/logged_in_user_mixin.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/login/test/user_policy_mixin.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
-#include "chromeos/cryptohome/cryptohome_parameters.h"
-#include "chromeos/dbus/session_manager/fake_session_manager_client.h"
-#include "chromeos/dbus/session_manager/session_manager_client.h"
-#include "chromeos/dbus/userdataauth/userdataauth_client.h"
-#include "chromeos/login/auth/user_context.h"
+#include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
+#include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
+#include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
+#include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
+#include "chromeos/ash/components/login/auth/public/user_context.h"
 #include "components/account_id/account_id.h"
+#include "components/session_manager/core/session.h"
 #include "components/session_manager/core/session_manager.h"
+#include "components/signin/public/identity_manager/account_managed_status_finder.h"
+#include "components/user_manager/test_helper.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/test/browser_test.h"
@@ -43,11 +44,11 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
-namespace chromeos {
-
+namespace ash {
 namespace {
 
-// Use consumer.example.com to keep policy code out of the tests.
+// Note that consumer.example.com is registered as a "known consumer domain"
+// below; this is to keep policy code out of these tests.
 constexpr char kUserId1[] = "user1@consumer.example.com";
 constexpr char kUserId2[] = "user2@consumer.example.com";
 constexpr char kUserId3[] = "user3@consumer.example.com";
@@ -56,9 +57,16 @@ constexpr char kUserId3[] = "user3@consumer.example.com";
 
 class CrashRestoreSimpleTest : public InProcessBrowserTest {
  protected:
-  CrashRestoreSimpleTest() {}
+  CrashRestoreSimpleTest() {
+    // Recognize consumer.example.com as a known non-enterprise domain.
+    signin::AccountManagedStatusFinder::SetNonEnterpriseDomainForTesting(
+        "consumer.example.com");
+  }
 
-  ~CrashRestoreSimpleTest() override {}
+  ~CrashRestoreSimpleTest() override {
+    signin::AccountManagedStatusFinder::SetNonEnterpriseDomainForTesting(
+        nullptr);
+  }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     command_line->AppendSwitchASCII(switches::kLoginUser,
@@ -87,9 +95,12 @@ class CrashRestoreSimpleTest : public InProcessBrowserTest {
 
 IN_PROC_BROWSER_TEST_F(CrashRestoreSimpleTest, RestoreSessionForOneUser) {
   user_manager::UserManager* user_manager = user_manager::UserManager::Get();
-  user_manager::User* user = user_manager->GetActiveUser();
+  const session_manager::Session* active_session =
+      session_manager::SessionManager::Get()->GetActiveSession();
+  ASSERT_TRUE(active_session);
+  EXPECT_EQ(account_id1_, active_session->account_id());
+  const user_manager::User* user = user_manager->FindUser(account_id1_);
   ASSERT_TRUE(user);
-  EXPECT_EQ(account_id1_, user->GetAccountId());
   EXPECT_EQ(UserDataAuthClient::GetStubSanitizedUsername(cryptohome_id1_),
             user->username_hash());
   EXPECT_EQ(1UL, user_manager->GetLoggedInUsers().size());
@@ -101,51 +112,39 @@ IN_PROC_BROWSER_TEST_F(CrashRestoreSimpleTest, RestoreSessionForOneUser) {
 }
 
 // Observer that keeps track of user sessions restore event.
-class UserSessionRestoreObserver : public UserSessionStateObserver {
+class UserSessionRestoreObserver {
  public:
-  UserSessionRestoreObserver()
-      : running_loop_(false),
-        user_sessions_restored_(
-            UserSessionManager::GetInstance()->UserSessionsRestored()) {
-    if (!user_sessions_restored_)
-      UserSessionManager::GetInstance()->AddSessionStateObserver(this);
+  UserSessionRestoreObserver() {
+    if (!UserSessionManager::GetInstance()->UserSessionsRestored()) {
+      run_loop_.emplace();
+      UserSessionManager::GetInstance()
+          ->SetOnPendingUserSessionRestoreFinishedForTesting(
+              run_loop_->QuitClosure());
+    }
   }
-  ~UserSessionRestoreObserver() override {}
 
-  void PendingUserSessionsRestoreFinished() override {
-    user_sessions_restored_ = true;
-    UserSessionManager::GetInstance()->RemoveSessionStateObserver(this);
-    if (!running_loop_)
-      return;
-
-    message_loop_runner_->Quit();
-    running_loop_ = false;
-  }
+  UserSessionRestoreObserver(const UserSessionRestoreObserver&) = delete;
+  UserSessionRestoreObserver& operator=(const UserSessionRestoreObserver&) =
+      delete;
+  ~UserSessionRestoreObserver() = default;
 
   // Wait until the user sessions are restored. If that happened between the
   // construction of this object and this call or even before it was created
   // then it returns immediately.
   void Wait() {
-    if (user_sessions_restored_)
-      return;
-
-    running_loop_ = true;
-    message_loop_runner_ = new content::MessageLoopRunner();
-    message_loop_runner_->Run();
+    if (run_loop_) {
+      run_loop_->Run();
+    }
   }
 
  private:
-  bool running_loop_;
-  bool user_sessions_restored_;
-  scoped_refptr<content::MessageLoopRunner> message_loop_runner_;
-
-  DISALLOW_COPY_AND_ASSIGN(UserSessionRestoreObserver);
+  std::optional<base::RunLoop> run_loop_;
 };
 
 class CrashRestoreComplexTest : public CrashRestoreSimpleTest {
  protected:
-  CrashRestoreComplexTest() {}
-  ~CrashRestoreComplexTest() override {}
+  CrashRestoreComplexTest() = default;
+  ~CrashRestoreComplexTest() override = default;
 
   bool SetUpUserDataDirectory() override {
     RegisterUsers();
@@ -162,27 +161,27 @@ class CrashRestoreComplexTest : public CrashRestoreSimpleTest {
   // Register test users so that UserManager knows them and make kUserId3 as the
   // last active user.
   void RegisterUsers() {
-    base::DictionaryValue local_state;
+    base::DictValue local_state;
 
-    const char* kTestUserIds[] = {kUserId1, kUserId2, kUserId3};
+    static const char* const kTestUserIds[] = {kUserId1, kUserId2, kUserId3};
 
-    auto users_list = std::make_unique<base::ListValue>();
-    for (auto* user_id : kTestUserIds)
-      users_list->AppendString(user_id);
+    base::ListValue users_list;
+    for (const auto* user_id : kTestUserIds)
+      users_list.Append(user_id);
 
-    local_state.SetList("LoggedInUsers", std::move(users_list));
-    local_state.SetString("LastActiveUser", kUserId3);
+    local_state.Set("LoggedInUsers", std::move(users_list));
+    local_state.Set("LastActiveUser", kUserId3);
 
-    auto known_users_list = std::make_unique<base::ListValue>();
+    base::ListValue known_users_list;
     int gaia_id = 10000;
-    for (auto* user_id : kTestUserIds) {
-      auto user_dict = std::make_unique<base::DictionaryValue>();
-      user_dict->SetString("account_type", "google");
-      user_dict->SetString("email", user_id);
-      user_dict->SetString("gaia_id", base::NumberToString(gaia_id++));
-      known_users_list->Append(std::move(user_dict));
+    for (const auto* user_id : kTestUserIds) {
+      base::DictValue user_dict;
+      user_dict.Set("account_type", "google");
+      user_dict.Set("email", user_id);
+      user_dict.Set("gaia_id", base::NumberToString(gaia_id++));
+      known_users_list.Append(std::move(user_dict));
     }
-    local_state.SetList("KnownUsers", std::move(known_users_list));
+    local_state.Set("KnownUsers", std::move(known_users_list));
 
     std::string local_state_json;
     ASSERT_TRUE(base::JSONWriter::Write(local_state, &local_state_json));
@@ -199,20 +198,19 @@ class CrashRestoreComplexTest : public CrashRestoreSimpleTest {
     // NOTE: This does not include IdentityManager prefs like
     // kGoogleServicesAccountId, so the IdentityManager will not initialize
     // itself with a primary account.
-    base::DictionaryValue prefs;
-    prefs.SetString(prefs::kSessionExitType, "Crashed");
+    base::DictValue prefs;
+    prefs.Set(prefs::kSessionExitType, "Crashed");
     std::string prefs_json;
     ASSERT_TRUE(base::JSONWriter::Write(prefs, &prefs_json));
 
     base::FilePath user_data_dir;
     ASSERT_TRUE(base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir));
 
-    const char* kTestUserIds[] = {kUserId1, kUserId2, kUserId3};
-    for (auto* user_id : kTestUserIds) {
+    for (const auto& account_id : {account_id1_, account_id2_, account_id3_}) {
       const std::string user_id_hash =
-          ProfileHelper::GetUserIdHashByUserIdForTesting(user_id);
-      const base::FilePath user_profile_path =
-          user_data_dir.Append(ProfileHelper::GetUserProfileDir(user_id_hash));
+          user_manager::TestHelper::GetFakeUsernameHash(account_id);
+      const base::FilePath user_profile_path = user_data_dir.Append(
+          base::FilePath(user_manager::User::GetDirName(user_id_hash)));
       ASSERT_TRUE(base::CreateDirectory(user_profile_path));
 
       ASSERT_TRUE(
@@ -221,7 +219,10 @@ class CrashRestoreComplexTest : public CrashRestoreSimpleTest {
   }
 };
 
-IN_PROC_BROWSER_TEST_F(CrashRestoreComplexTest, RestoreSessionForThreeUsers) {
+// Disabled due to bot failures.
+// TODO(crbug.com/496355983): Re-enable the test.
+IN_PROC_BROWSER_TEST_F(CrashRestoreComplexTest,
+                       DISABLED_RestoreSessionForThreeUsers) {
   {
     UserSessionRestoreObserver restore_observer;
     restore_observer.Wait();
@@ -236,9 +237,12 @@ IN_PROC_BROWSER_TEST_F(CrashRestoreComplexTest, RestoreSessionForThreeUsers) {
   // User that is last in the user sessions map becomes active. This behavior
   // will become better defined once each user gets a separate user desktop.
   user_manager::UserManager* user_manager = user_manager::UserManager::Get();
-  user_manager::User* user = user_manager->GetActiveUser();
+  const session_manager::Session* active_session =
+      session_manager::SessionManager::Get()->GetActiveSession();
+  ASSERT_TRUE(active_session);
+  EXPECT_EQ(account_id3_, active_session->account_id());
+  const user_manager::User* user = user_manager->FindUser(account_id3_);
   ASSERT_TRUE(user);
-  EXPECT_EQ(account_id3_, user->GetAccountId());
   EXPECT_EQ(UserDataAuthClient::GetStubSanitizedUsername(cryptohome_id3_),
             user->username_hash());
   const user_manager::UserList& users = user_manager->GetLRULoggedInUsers();
@@ -259,9 +263,9 @@ IN_PROC_BROWSER_TEST_F(CrashRestoreComplexTest, RestoreSessionForThreeUsers) {
   EXPECT_EQ(session_manager::SessionState::ACTIVE,
             session_manager->session_state());
   EXPECT_EQ(3u, session_manager->sessions().size());
-  EXPECT_EQ(session_manager->sessions()[0].user_account_id, account_id1_);
-  EXPECT_EQ(session_manager->sessions()[1].user_account_id, account_id2_);
-  EXPECT_EQ(session_manager->sessions()[2].user_account_id, account_id3_);
+  EXPECT_EQ(session_manager->sessions()[0]->account_id(), account_id1_);
+  EXPECT_EQ(session_manager->sessions()[1]->account_id(), account_id2_);
+  EXPECT_EQ(session_manager->sessions()[2]->account_id(), account_id3_);
 }
 
 // Tests crash restore flow for child user.
@@ -282,18 +286,19 @@ class CrashRestoreChildUserTest : public MixinBasedInProcessBrowserTest {
     MixinBasedInProcessBrowserTest::SetUpInProcessBrowserTestFixture();
   }
 
-  LoggedInUserMixin logged_in_user_mixin_{
-      &mixin_host_, LoggedInUserMixin::LogInType::kChild,
-      embedded_test_server(), this, /*should_launch_browser=*/false};
+  LoggedInUserMixin logged_in_user_mixin_{&mixin_host_, /*test_base=*/this,
+                                          embedded_test_server(),
+                                          LoggedInUserMixin::LogInType::kChild};
 };
 
 IN_PROC_BROWSER_TEST_F(CrashRestoreChildUserTest, PRE_SessionRestore) {
   // Verify that child user can log in.
-  logged_in_user_mixin_.LogInUser();
+  logged_in_user_mixin_.LogInUser(
+      {ash::LoggedInUserMixin::LoginDetails::kNoBrowserLaunch});
 }
 
 IN_PROC_BROWSER_TEST_F(CrashRestoreChildUserTest, SessionRestore) {
   // Verify that there is no crash on chrome restart.
 }
 
-}  // namespace chromeos
+}  // namespace ash

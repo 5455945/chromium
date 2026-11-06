@@ -1,22 +1,28 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.tabmodel;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabAttributeKeys;
 import org.chromium.chrome.browser.tab.TabAttributes;
+import org.chromium.chrome.browser.tab.TabId;
 import org.chromium.chrome.browser.tab.TabLaunchType;
-import org.chromium.chrome.browser.tab.state.CriticalPersistedTabData;
+import org.chromium.chrome.browser.tab.TabLaunchTypeUtils;
 
 /**
  * Implementation of the TabModelOrderController based off of tab_strip_model_order_controller.cc
  * and tab_strip_model.cc
  *
- * TODO(crbug.com/1138005): Move to chrome/browser/tabmodel/internal when all usages are
+ * <p>TODO(crbug.com/40152902): Move to chrome/browser/tabmodel/internal when all usages are
  * modularized.
  */
+@NullMarked
 class TabModelOrderControllerImpl implements TabModelOrderController {
     private static final int NO_TAB = -1;
     private final TabModelSelector mTabModelSelector;
@@ -27,12 +33,41 @@ class TabModelOrderControllerImpl implements TabModelOrderController {
 
     @Override
     public int determineInsertionIndex(@TabLaunchType int type, int position, Tab newTab) {
-        if (type == TabLaunchType.FROM_BROWSER_ACTIONS) return -1;
-        if (linkClicked(type)) {
-            position = determineInsertionIndex(type, newTab);
+        if (TabLaunchTypeUtils.bypassesInsertionOrderCalculation(type)) {
+            return TabList.INVALID_TAB_INDEX;
+        }
+        if (newTab.getIsPinned() && type != TabLaunchType.FROM_RESTORE) {
+            TabModel tabModel = mTabModelSelector.getCurrentModel();
+
+            if (type == TabLaunchType.FROM_TAB_LIST_INTERFACE) {
+                @TabId int parentId = newTab.getParentId();
+                @Nullable Tab parentTab = tabModel.getTabById(parentId);
+                int index = tabModel.indexOf(parentTab);
+                if (parentTab != null
+                        && index != TabList.INVALID_TAB_INDEX
+                        && parentTab.getIsPinned()) {
+                    return index + 1;
+                }
+            }
+
+            // Use the `position` when its in valid range; otherwise defer to TabModel
+            // implementation, which will place it at the first unpinned position.
+            int firstNonPinnedTabIndex = tabModel.findFirstNonPinnedTabIndex();
+            if (position <= firstNonPinnedTabIndex) {
+                return position;
+            }
+
+            // TabModel will handle the index.
+            return TabList.INVALID_TAB_INDEX;
         }
 
-        if (willOpenInForeground(type, newTab.isIncognito())) {
+        if (type == TabLaunchType.FROM_OMNIBOX_BACKGROUND) {
+            position = mTabModelSelector.getModel(newTab.isIncognitoBranded()).getCount();
+        } else if (TabLaunchTypeUtils.shouldOpenAdjacent(type)) {
+            position = determineInsertionIndexIfMaybeAdjacent(type, newTab);
+        }
+
+        if (willOpenInForeground(type, newTab.isIncognitoBranded())) {
             // Forget any existing relationships, we don't want to make things
             // too confusing by having multiple groups active at the same time.
             forgetAllOpeners();
@@ -41,28 +76,29 @@ class TabModelOrderControllerImpl implements TabModelOrderController {
         return position;
     }
 
-    @Override
-    public int determineInsertionIndex(@TabLaunchType int type, Tab newTab) {
+    private int determineInsertionIndexIfMaybeAdjacent(@TabLaunchType int type, Tab newTab) {
         TabModel currentModel = mTabModelSelector.getCurrentModel();
 
         if (sameModelType(currentModel, newTab)) {
             Tab currentTab = TabModelUtils.getCurrentTab(currentModel);
             if (currentTab == null) {
-                assert (currentModel.getCount() == 0);
-                return 0;
+                return currentModel.getCount();
             }
             int currentId = currentTab.getId();
-            int currentIndex = TabModelUtils.getTabIndexById(currentModel, currentId);
+            int currentIndex = currentModel.indexOf(currentTab);
+
+            // If the current tab is a pinned tab, new tabs are inserted after the last pinned tab.
+            if (currentTab.getIsPinned()) {
+                return currentModel.findFirstNonPinnedTabIndex();
+            }
 
             if (willOpenInForeground(type, newTab.isIncognito())) {
                 // If the tab was opened in the foreground, insert it adjacent to its parent tab if
                 // that exists and that tab is not the current selected tab, else insert the tab
                 // adjacent to the current tab that opened that link.
-                Tab parentTab = TabModelUtils.getTabById(
-                        currentModel, CriticalPersistedTabData.from(newTab).getParentId());
+                Tab parentTab = currentModel.getTabById(newTab.getParentId());
                 if (parentTab != null && currentTab != parentTab) {
-                    int parentTabIndex =
-                            TabModelUtils.getTabIndexById(currentModel, parentTab.getId());
+                    int parentTabIndex = currentModel.indexOf(parentTab);
                     return parentTabIndex + 1;
                 }
                 return currentIndex + 1;
@@ -83,10 +119,10 @@ class TabModelOrderControllerImpl implements TabModelOrderController {
     }
 
     /**
-     * Returns the index of the last tab in the model opened by the specified
-     * opener, starting at startIndex. To clarify, the tabs are traversed in the
-     * descending order of their position in the model. This means that the tab
-     * furthest in the stack with the given opener id will be returned.
+     * Returns the index of the last tab in the model opened by the specified opener, starting at
+     * startIndex. To clarify, the tabs are traversed in the descending order of their position in
+     * the model. This means that the tab furthest in the stack with the given opener id will be
+     * returned.
      *
      * @param openerId The opener of interest.
      * @param startIndex The start point of the search.
@@ -96,45 +132,43 @@ class TabModelOrderControllerImpl implements TabModelOrderController {
         TabModel currentModel = mTabModelSelector.getCurrentModel();
         int count = currentModel.getCount();
         for (int i = count - 1; i >= startIndex; i--) {
-            Tab tab = currentModel.getTabAt(i);
-            if (CriticalPersistedTabData.from(tab).getParentId() == openerId
-                    && TabAttributes.from(tab).get(TabAttributeKeys.GROUPED_WITH_PARENT, true)) {
+            Tab tab = currentModel.getTabAtChecked(i);
+            if (tab.getParentId() == openerId
+                    && assumeNonNull(
+                            TabAttributes.from(tab)
+                                    .get(TabAttributeKeys.GROUPED_WITH_PARENT, true))) {
                 return i;
             }
         }
         return NO_TAB;
     }
 
-    /**
-     * Clear the opener attribute on all tabs in the model.
-     */
-    void forgetAllOpeners() {
+    /** Clear the opener attribute on all tabs in the model. */
+    private void forgetAllOpeners() {
         TabModel currentModel = mTabModelSelector.getCurrentModel();
-        int count = currentModel.getCount();
-        for (int i = 0; i < count; i++) {
-            TabAttributes.from(currentModel.getTabAt(i))
-                    .set(TabAttributeKeys.GROUPED_WITH_PARENT, false);
+        for (Tab tab : currentModel) {
+            TabAttributes.from(tab).set(TabAttributeKeys.GROUPED_WITH_PARENT, false);
         }
-    }
-
-    /**
-     * Determine if a launch type is the result of linked being clicked.
-     */
-    static boolean linkClicked(@TabLaunchType int type) {
-        return type == TabLaunchType.FROM_LINK || type == TabLaunchType.FROM_LONGPRESS_FOREGROUND
-                || type == TabLaunchType.FROM_LONGPRESS_BACKGROUND
-                || type == TabLaunchType.FROM_LONGPRESS_BACKGROUND_IN_GROUP;
     }
 
     @Override
-    public boolean willOpenInForeground(@TabLaunchType int type, boolean isNewTabIncognito) {
+    public boolean willOpenInForeground(@TabLaunchType int type, boolean isNewTabIncognitoBranded) {
+        return willOpenInForeground(
+                type,
+                isNewTabIncognitoBranded,
+                mTabModelSelector.isIncognitoBrandedModelSelected());
+    }
+
+    public static boolean willOpenInForeground(
+            @TabLaunchType int type,
+            boolean isNewTabIncognitoBranded,
+            boolean isCurrentModelIncognitoBranded) {
         // Restore is handling the active index by itself.
-        if (type == TabLaunchType.FROM_RESTORE || type == TabLaunchType.FROM_BROWSER_ACTIONS) {
+        if (TabLaunchTypeUtils.isRestoreLaunch(type)) {
             return false;
         }
-        return type != TabLaunchType.FROM_LONGPRESS_BACKGROUND
-                && type != TabLaunchType.FROM_LONGPRESS_BACKGROUND_IN_GROUP
-                || (!mTabModelSelector.isIncognitoSelected() && isNewTabIncognito);
+        return !TabLaunchTypeUtils.isBackgroundLaunch(type)
+                || isCurrentModelIncognitoBranded != isNewTabIncognitoBranded;
     }
 
     /**

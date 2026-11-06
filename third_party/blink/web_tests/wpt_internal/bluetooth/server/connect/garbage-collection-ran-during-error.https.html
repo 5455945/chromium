@@ -1,10 +1,12 @@
 <!DOCTYPE html>
+<meta name="timeout" content="long">
 <script src="/resources/testharness.js"></script>
 <script src="/resources/testharnessreport.js"></script>
 <script src="/resources/testdriver.js"></script>
 <script src="/resources/testdriver-vendor.js"></script>
 <script src="/bluetooth/resources/bluetooth-test.js"></script>
 <script src="/bluetooth/resources/bluetooth-fake-devices.js"></script>
+<script src="/common/gc.js"></script>
 <script>
 'use strict';
 bluetooth_test(t => {
@@ -14,7 +16,7 @@ bluetooth_test(t => {
     .then(device => {
       promise_rejects_dom(t, 'NetworkError', device.gatt.connect());
     })
-    .then(runGarbageCollection);
+    .then(garbageCollect);
 }, 'Garbage collection ran during a connect call that fails. ' +
    'Should not crash.');
 </script>

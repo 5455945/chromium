@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,19 +8,22 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
-#include "ash/public/cpp/ash_pref_names.h"
 #include "ash/public/cpp/test/shell_test_api.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/login/screen_manager.h"
 #include "chrome/browser/ash/login/test/js_checker.h"
+#include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/login/test/oobe_base_test.h"
+#include "chrome/browser/ash/login/test/oobe_screen_exit_waiter.h"
 #include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/webui/ash/login/gesture_navigation_screen_handler.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
 
@@ -71,6 +74,12 @@ class GestureNavigationScreenTest
         GestureNavigationScreenView::kScreenId);
   }
 
+  void PerformLogin() {
+    OobeScreenExitWaiter signin_screen_exit_waiter(GetFirstSigninScreen());
+    login_manager_.LoginAsNewRegularUser();
+    signin_screen_exit_waiter.Wait();
+  }
+
   // Checks that `dialog_page` is shown, while also checking that all other oobe
   // dialogs on the gesture navigation screen are hidden.
   void CheckPageIsShown(std::string dialog_page) {
@@ -104,7 +113,7 @@ class GestureNavigationScreenTest
     run_loop.Run();
   }
 
-  absl::optional<GestureNavigationScreen::Result> screen_result_;
+  std::optional<GestureNavigationScreen::Result> screen_result_;
   base::HistogramTester histogram_tester_;
 
  private:
@@ -120,6 +129,7 @@ class GestureNavigationScreenTest
   bool screen_exited_ = false;
   base::RepeatingClosure screen_exit_callback_;
   base::test::ScopedFeatureList feature_list_;
+  LoginManagerMixin login_manager_{&mixin_host_};
 };
 
 INSTANTIATE_TEST_SUITE_P(
@@ -130,6 +140,8 @@ INSTANTIATE_TEST_SUITE_P(
 
 // Ensure a working flow for the gesture navigation screen.
 IN_PROC_BROWSER_TEST_P(GestureNavigationScreenTest, FlowTest) {
+  PerformLogin();
+
   ShowGestureNavigationScreen();
   OobeScreenWaiter(GestureNavigationScreenView::kScreenId).Wait();
 
@@ -178,6 +190,7 @@ IN_PROC_BROWSER_TEST_P(GestureNavigationScreenTest, FlowTest) {
 
 // Ensure the flow is skipped when in clamshell mode.
 IN_PROC_BROWSER_TEST_P(GestureNavigationScreenTest, ScreenSkippedInClamshell) {
+  PerformLogin();
   ShellTestApi().SetTabletModeEnabledForTest(false);
 
   ShowGestureNavigationScreen();
@@ -194,6 +207,7 @@ IN_PROC_BROWSER_TEST_P(GestureNavigationScreenTest, ScreenSkippedInClamshell) {
 // Ensure the flow is skipped when spoken feedback is enabled.
 IN_PROC_BROWSER_TEST_P(GestureNavigationScreenTest,
                        ScreenSkippedWithSpokenFeedbackEnabled) {
+  PerformLogin();
   AccessibilityManager::Get()->EnableSpokenFeedback(true);
 
   ShowGestureNavigationScreen();
@@ -210,6 +224,7 @@ IN_PROC_BROWSER_TEST_P(GestureNavigationScreenTest,
 // Ensure the flow is skipped when autoclick is enabled.
 IN_PROC_BROWSER_TEST_P(GestureNavigationScreenTest,
                        ScreenSkippedWithAutoclickEnabled) {
+  PerformLogin();
   AccessibilityManager::Get()->EnableAutoclick(true);
 
   ShowGestureNavigationScreen();
@@ -226,6 +241,7 @@ IN_PROC_BROWSER_TEST_P(GestureNavigationScreenTest,
 // Ensure the flow is skipped when switch access is enabled.
 IN_PROC_BROWSER_TEST_P(GestureNavigationScreenTest,
                        ScreenSkippedWithSwitchAccessEnabled) {
+  PerformLogin();
   AccessibilityManager::Get()->SetSwitchAccessEnabled(true);
 
   ShowGestureNavigationScreen();
@@ -242,6 +258,7 @@ IN_PROC_BROWSER_TEST_P(GestureNavigationScreenTest,
 // Ensure the flow is skipped when shelf navigation buttons are enabled.
 IN_PROC_BROWSER_TEST_P(GestureNavigationScreenTest,
                        ScreenSkippedWithShelfNavButtonsInTabletModeEnabled) {
+  PerformLogin();
   ProfileManager::GetActiveUserProfile()->GetPrefs()->SetBoolean(
       prefs::kAccessibilityTabletModeShelfNavigationButtonsEnabled, true);
 
@@ -259,6 +276,7 @@ IN_PROC_BROWSER_TEST_P(GestureNavigationScreenTest,
 // Ensure the page shown time metrics are being recorded during the gesture
 // navigation screen flow
 IN_PROC_BROWSER_TEST_P(GestureNavigationScreenTest, PageShownMetricsTest) {
+  PerformLogin();
   ShowGestureNavigationScreen();
   OobeScreenWaiter(GestureNavigationScreenView::kScreenId).Wait();
 
@@ -288,6 +306,25 @@ IN_PROC_BROWSER_TEST_P(GestureNavigationScreenTest, PageShownMetricsTest) {
       "OOBE.GestureNavigationScreen.PageShownTime.Back", 1);
   histogram_tester_.ExpectTotalCount(
       "OOBE.StepCompletionTimeByExitReason.Gesture-navigation.Next", 1);
+  histogram_tester_.ExpectTotalCount(
+      "OOBE.StepCompletionTime.Gesture-navigation", 1);
+}
+
+// Ensure the flow is skipped when user click on skip button.
+IN_PROC_BROWSER_TEST_P(GestureNavigationScreenTest, UserSkipScreen) {
+  PerformLogin();
+
+  ShowGestureNavigationScreen();
+
+  test::OobeJS().TapOnPath({"gesture-navigation", "gesture-intro-skip-button"});
+
+  WaitForScreenExit();
+  EXPECT_EQ(screen_result_.value(), GestureNavigationScreen::Result::SKIP);
+
+  histogram_tester_.ExpectTotalCount(
+      "OOBE.StepCompletionTimeByExitReason.Gesture-navigation.Next", 0);
+  histogram_tester_.ExpectTotalCount(
+      "OOBE.StepCompletionTimeByExitReason.Gesture-navigation.Skip", 1);
   histogram_tester_.ExpectTotalCount(
       "OOBE.StepCompletionTime.Gesture-navigation", 1);
 }

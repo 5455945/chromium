@@ -1,14 +1,16 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("//base/trace_event/tracing.gni")
 import("//build/buildflag_header.gni")
 import("//build/config/compiler/compiler.gni")
-import("//build/config/nacl/config.gni")
+import("//build/config/features.gni")
 import("//tools/ipc_fuzzer/ipc_fuzzer.gni")
 
 declare_args() {
+  # Note that even when set to false, there still exists minimal trace events
+  # for sync calls. See https://crrev.com/952184
   enable_mojo_tracing = extended_tracing_enabled
 
   # enable_random_mojo_delays starts a task runner that periodically pauses
@@ -27,6 +29,13 @@ buildflag_header("mojo_buildflags") {
   ]
 }
 
+# Logically part of the "bindings_base" target, but split out separately so code
+# can use this without depending on all of Mojo bindings (and all of its
+# underlying implementation dependencies).
+source_set("default_construct_tag") {
+  sources = [ "default_construct_tag.h" ]
+}
+
 # Headers and sources which generated bindings can depend upon. No need for
 # other targets to depend on this directly: just use the "bindings" target.
 component("bindings_base") {
@@ -40,43 +49,57 @@ component("bindings_base") {
     "clone_traits.h",
     "connection_group.cc",
     "connection_group.h",
+    "connection_group_ref.cc",
+    "connection_group_ref.h",
     "deprecated_interface_types_forward.h",
+    "deserialization_error.cc",
+    "deserialization_error.h",
     "disconnect_reason.h",
     "enum_traits.h",
     "enum_utils.h",
     "equals_traits.h",
-    "features.cc",
-    "features.h",
     "interface_data_view.h",
     "interface_id.h",
     "lib/array_internal.cc",
     "lib/array_internal.h",
     "lib/array_serialization.h",
+    "lib/array_serialization_send_validation.h",
     "lib/associated_group.cc",
     "lib/associated_group_controller.cc",
     "lib/bindings_internal.h",
     "lib/buffer.cc",
     "lib/buffer.h",
+    "lib/default_construct_tag_internal.h",
     "lib/handle_serialization.cc",
     "lib/handle_serialization.h",
+    "lib/handle_serialization_send_validation.h",
+    "lib/has_send_validation_helper.h",
     "lib/hash_util.h",
     "lib/map_data_internal.h",
     "lib/map_serialization.h",
+    "lib/map_serialization_send_validation.h",
     "lib/may_auto_lock.h",
     "lib/message.cc",
+    "lib/message_fragment.cc",
     "lib/message_fragment.h",
     "lib/message_header_validator.cc",
     "lib/message_internal.cc",
     "lib/message_internal.h",
+    "lib/message_size_estimator.cc",
+    "lib/message_size_estimator.h",
     "lib/pending_receiver_state.cc",
     "lib/pending_receiver_state.h",
     "lib/pending_remote_state.cc",
     "lib/pending_remote_state.h",
     "lib/scoped_interface_endpoint_handle.cc",
+    "lib/send_validation.h",
+    "lib/send_validation_serialization.h",
+    "lib/send_validation_type.h",
     "lib/serialization.h",
     "lib/serialization_forward.h",
     "lib/serialization_util.h",
     "lib/string_serialization.h",
+    "lib/string_serialization_send_validation.h",
     "lib/template_util.h",
     "lib/unserialized_message_context.cc",
     "lib/unserialized_message_context.h",
@@ -89,10 +112,13 @@ component("bindings_base") {
     "lib/validation_util.h",
     "map_data_view.h",
     "map_traits.h",
+    "map_traits_absl.h",
     "map_traits_flat_map.h",
     "map_traits_stl.h",
     "message.h",
     "message_header_validator.h",
+    "message_metadata_helpers.h",
+    "optional_as_pointer.h",
     "scoped_interface_endpoint_handle.h",
     "scoped_message_error_crash_key.cc",
     "scoped_message_error_crash_key.h",
@@ -105,14 +131,18 @@ component("bindings_base") {
     "struct_traits.h",
     "type_converter.h",
     "union_traits.h",
+    "urgent_message_scope.cc",
+    "urgent_message_scope.h",
   ]
 
   defines = [ "IS_MOJO_CPP_BINDINGS_BASE_IMPL" ]
 
   public_deps = [
+    ":default_construct_tag",
     ":mojo_buildflags",
     "//base",
     "//mojo/public/cpp/system",
+    "//third_party/abseil-cpp:absl",
   ]
 
   if (enable_ipc_fuzzer) {
@@ -128,7 +158,6 @@ component("bindings_base") {
 component("bindings") {
   sources = [
     "associated_interface_ptr_info.h",
-    "associated_interface_request.h",
     "associated_receiver.h",
     "associated_receiver_set.h",
     "associated_remote.h",
@@ -138,15 +167,14 @@ component("bindings") {
     "callback_helpers.h",
     "connection_error_callback.h",
     "connector.h",
+    "direct_receiver.cc",
+    "direct_receiver.h",
     "generic_pending_associated_receiver.cc",
     "generic_pending_associated_receiver.h",
     "generic_pending_receiver.cc",
     "generic_pending_receiver.h",
     "interface_endpoint_client.h",
     "interface_endpoint_controller.h",
-    "interface_ptr.h",
-    "interface_ptr_info.h",
-    "interface_request.h",
     "lib/associated_interface_ptr_state.cc",
     "lib/associated_interface_ptr_state.h",
     "lib/associated_receiver.cc",
@@ -164,22 +192,30 @@ component("bindings") {
     "lib/interface_ptr_state.cc",
     "lib/interface_ptr_state.h",
     "lib/interface_serialization.h",
+    "lib/interface_serialization_send_validation.h",
     "lib/message_dispatcher.cc",
-    "lib/message_quota_checker.cc",
-    "lib/message_quota_checker.h",
     "lib/multiplex_router.cc",
     "lib/multiplex_router.h",
     "lib/native_enum_data.h",
     "lib/native_enum_serialization.h",
+    "lib/native_handle_type_converters.cc",
+    "lib/native_handle_type_converters.h",
     "lib/native_struct_serialization.cc",
     "lib/native_struct_serialization.h",
     "lib/pipe_control_message_handler.cc",
     "lib/pipe_control_message_proxy.cc",
+    "lib/proxy_to_responder.cc",
+    "lib/proxy_to_responder.h",
+    "lib/responder_thunk.cc",
+    "lib/responder_thunk.h",
+    "lib/send_message_helper.cc",
+    "lib/send_message_helper.h",
     "lib/sequence_local_sync_event_watcher.cc",
     "lib/sync_call_restrictions.cc",
     "lib/sync_event_watcher.cc",
     "lib/sync_handle_registry.cc",
     "lib/sync_handle_watcher.cc",
+    "lib/sync_method_traits.h",
     "lib/task_runner_helper.cc",
     "lib/task_runner_helper.h",
     "lib/thread_safe_forwarder_base.cc",
@@ -201,6 +237,7 @@ component("bindings") {
     "receiver_set.h",
     "remote.h",
     "remote_set.h",
+    "runtime_features.h",
     "self_owned_associated_receiver.h",
     "self_owned_receiver.h",
     "sequence_local_sync_event_watcher.h",
@@ -225,7 +262,7 @@ component("bindings") {
     ]
   }
 
-  if (enable_ipc_fuzzer && !is_nacl_nonsfi) {
+  if (enable_ipc_fuzzer) {
     sources += [
       "lib/message_dumper.cc",
       "message_dumper.h",
@@ -236,14 +273,16 @@ component("bindings") {
     ":bindings_base",
     ":struct_traits",
     "//base",
-    "//base/util/type_safety",
     "//ipc:message_support",
     "//ipc:param_traits",
     "//mojo/public/cpp/system",
     "//mojo/public/interfaces/bindings",
   ]
 
-  deps = [ "//ipc:native_handle_type_converters" ]
+  deps = [
+    "//mojo:buildflags",
+    "//mojo/core/embedder",
+  ]
 
   defines = [ "IS_MOJO_CPP_BINDINGS_IMPL" ]
 }
@@ -258,13 +297,45 @@ source_set("struct_traits") {
     "struct_traits.h",
     "union_traits.h",
   ]
+
+  deps = [
+    ":bindings_base",
+    "//base",
+  ]
 }
 
-if (!is_ios) {
+# This is provided as a separate target so other targets can use Mojo bindings
+# without necessarily linking to protobuf.
+source_set("protobuf_support") {
+  public = [
+    "array_traits_protobuf.h",
+    "map_traits_protobuf.h",
+  ]
+  public_deps = [
+    ":bindings",
+    "//third_party/protobuf:protobuf_lite",
+  ]
+}
+
+if (is_android) {
+  # Native half of the JNI transport used by mojom(generate_jni = true)
+  # bindings. See //mojo/public/java:jni_transport_java.
+  source_set("jni_bridge") {
+    sources = [
+      "mojo_jni_bridge.cc",
+      "mojo_jni_bridge.h",
+    ]
+    public_deps = [
+      ":bindings",
+      "//base",
+    ]
+    deps = [ "//mojo/public/java:jni_transport_jni" ]
+  }
+}
+
+if (use_blink) {
   component("wtf_support") {
     sources = [
-      "array_traits_web_vector.h",
-      "array_traits_wtf_vector.h",
       "lib/string_traits_wtf.cc",
       "lib/wtf_clone_equals_util.h",
       "lib/wtf_hash_util.h",
@@ -282,7 +353,5 @@ if (!is_ios) {
       "//third_party/blink/renderer/platform:platform_export",
       "//third_party/blink/renderer/platform/wtf",
     ]
-
-    public_configs = [ "//third_party/blink/renderer:config" ]
   }
 }

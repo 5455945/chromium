@@ -1,37 +1,48 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/gpu/test/video_frame_validator.h"
 
-#include "base/bind.h"
-#include "base/cpu.h"
+#include <string_view>
+
+#include "base/containers/span.h"
 #include "base/files/file.h"
-#include "base/hash/md5.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
-#include "base/no_destructor.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "base/system/sys_info.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "crypto/obsolete/md5.h"
+#include "gpu/command_buffer/client/test_shared_image_interface.h"
 #include "media/base/video_frame.h"
 #include "media/gpu/buildflags.h"
 #include "media/gpu/macros.h"
 #include "media/gpu/test/image_quality_metrics.h"
+#include "media/gpu/test/video_frame_helpers.h"
 #include "media/gpu/test/video_test_helpers.h"
 #include "media/gpu/video_frame_mapper.h"
 #include "media/gpu/video_frame_mapper_factory.h"
 #include "media/media_buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/gfx/gpu_memory_buffer.h"
 
-namespace media {
-namespace test {
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
+#include <sys/mman.h>
+#endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
+
+namespace media::test {
+
+crypto::obsolete::Md5 MakeMd5HasherForVideoFrameValidation() {
+  return {};
+}
 
 VideoFrameValidator::VideoFrameValidator(
-    std::unique_ptr<VideoFrameProcessor> corrupt_frame_processor)
+    std::unique_ptr<VideoFrameProcessor> corrupt_frame_processor,
+    CropHelper crop_helper)
     : corrupt_frame_processor_(std::move(corrupt_frame_processor)),
+      test_sii_(base::MakeRefCounted<gpu::TestSharedImageInterface>()),
+      crop_helper_(crop_helper),
       num_frames_validating_(0),
       frame_validator_thread_("FrameValidatorThread"),
       frame_validator_cv_(&frame_validator_lock_) {
@@ -51,10 +62,27 @@ bool VideoFrameValidator::Initialize() {
   return true;
 }
 
+void VideoFrameValidator::CleanUpOnValidatorThread() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(validator_thread_sequence_checker_);
+  video_frame_mapper_.reset();
+}
+
 void VideoFrameValidator::Destroy() {
+  if (frame_validator_thread_.task_runner()) {
+    // It's safe to use base::Unretained(this) because we own
+    // |frame_validator_thread_|, so |this| should be valid until at least the
+    // frame_validator_thread_.Stop() returns below which won't happen until
+    // CleanUpOnValidatorThread() returns.
+    frame_validator_thread_.task_runner()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&VideoFrameValidator::CleanUpOnValidatorThread,
+                       base::Unretained(this)));
+  }
   frame_validator_thread_.Stop();
   base::AutoLock auto_lock(frame_validator_lock_);
   DCHECK_EQ(0u, num_frames_validating_);
+
+  corrupt_frame_processor_.reset();
 }
 
 void VideoFrameValidator::PrintMismatchedFramesInfo() const {
@@ -125,18 +153,21 @@ void VideoFrameValidator::ProcessVideoFrameTask(
   DCHECK_CALLED_ON_VALID_SEQUENCE(validator_thread_sequence_checker_);
 
   scoped_refptr<const VideoFrame> frame = video_frame;
-  // If this is a DMABuf-backed memory frame we need to map it before accessing.
-#if BUILDFLAG(USE_CHROMEOS_MEDIA_ACCELERATION)
-  if (frame->storage_type() == VideoFrame::STORAGE_GPU_MEMORY_BUFFER) {
+  // If this is a MappableSI-backed memory frame we need to map it before
+  // accessing.
+#if BUILDFLAG(USE_LINUX_VIDEO_ACCELERATION)
+  if (frame->HasMappableSharedImage()) {
     // TODO(andrescj): This is a workaround. ClientNativePixmapFactoryDmabuf
-    // creates ClientNativePixmapOpaque for SCANOUT_VDA_WRITE buffers which does
-    // not allow us to map GpuMemoryBuffers easily for testing. Therefore, we
-    // extract the dma-buf FDs. Alternatively, we could consider creating our
-    // own ClientNativePixmapFactory for testing.
+    // creates ClientNativePixmapOpaque, which cannot be mapped via MappableSI,
+    // for SCANOUT_VDA_WRITE buffers. However, we need to map the contents of
+    // the frame for verification (see the creation and use of
+    // VideoFrameMapper below).
+    // Therefore, we extract the dma-buf FDs. Alternatively, we could consider
+    // creating our own ClientNativePixmapFactory for testing.
     frame = CreateDmabufVideoFrame(frame.get());
     if (!frame) {
       LOG(ERROR) << "Failed to create Dmabuf-backed VideoFrame from "
-                 << "GpuMemoryBuffer-based VideoFrame";
+                 << "MappableSI-based VideoFrame";
       return;
     }
   }
@@ -151,15 +182,18 @@ void VideoFrameValidator::ProcessVideoFrameTask(
       ASSERT_TRUE(video_frame_mapper_) << "Failed to create VideoFrameMapper";
     }
 
-    frame = video_frame_mapper_->Map(std::move(frame));
+    frame = video_frame_mapper_->Map(std::move(frame), PROT_READ);
     if (!frame) {
       LOG(ERROR) << "Failed to map video frame";
       return;
     }
   }
-#endif  // BUILDFLAG(USE_CHROMEOS_MEDIA_ACCELERATION)
+#endif  // BUILDFLAG(USE_LINUX_VIDEO_ACCELERATION)
 
-  ASSERT_TRUE(frame->IsMappable());
+  ASSERT_TRUE(frame->HasDirectCpuAccess());
+
+  if (ShouldCrop())
+    frame = CloneAndCropFrame(std::move(frame));
 
   auto mismatched_info = Validate(frame, frame_index);
 
@@ -167,12 +201,45 @@ void VideoFrameValidator::ProcessVideoFrameTask(
   if (mismatched_info) {
     mismatched_frames_.push_back(std::move(mismatched_info));
     // Perform additional processing on the corrupt video frame if requested.
+    // Pass |video_frame|, not |frame|, so that |frame| is destroyed in
+    // |frame_validator_thread_|.
     if (corrupt_frame_processor_)
-      corrupt_frame_processor_->ProcessVideoFrame(frame, frame_index);
+      corrupt_frame_processor_->ProcessVideoFrame(video_frame, frame_index);
   }
 
   num_frames_validating_--;
   frame_validator_cv_.Signal();
+}
+
+scoped_refptr<VideoFrame> VideoFrameValidator::CloneAndCropFrame(
+    scoped_refptr<const VideoFrame> frame) const {
+  const auto crop = crop_helper_.Run(*frame);
+  const auto& visible = frame->visible_rect();
+  auto cloned_frame =
+      CloneVideoFrame(frame.get(), frame->layout(), test_sii_.get());
+  // Ensures that the crop is within the previous visible rectangle.
+  if (!visible.Contains(crop)) {
+    LOG(ERROR) << "Crop " << crop.ToString()
+               << "must be contained by the visible area of the input frame: "
+               << visible.ToString() << ".";
+    return cloned_frame;
+  }
+  return VideoFrame::WrapVideoFrame(cloned_frame, frame->format(), crop,
+                                    crop.size());
+}
+
+gfx::Rect BottomRowCrop(int row_height, const VideoFrame& frame) {
+  const auto& visible = frame.visible_rect();
+  // Performs bounds checking on the row_height to ensure that the returned
+  // crop is contained by the current visible area.
+  if (visible.size().height() < row_height) {
+    LOG(ERROR) << "Could not get a row of height " << row_height
+               << " from a visible area of height " << visible.size().height();
+    return visible;
+  }
+
+  return gfx::Rect{visible.x(), visible.bottom() - row_height, visible.width(),
+                   row_height};
 }
 
 struct MD5VideoFrameValidator::MD5MismatchedFrameInfo
@@ -198,10 +265,11 @@ struct MD5VideoFrameValidator::MD5MismatchedFrameInfo
 std::unique_ptr<MD5VideoFrameValidator> MD5VideoFrameValidator::Create(
     const std::vector<std::string>& expected_frame_checksums,
     VideoPixelFormat validation_format,
-    std::unique_ptr<VideoFrameProcessor> corrupt_frame_processor) {
-  auto video_frame_validator = base::WrapUnique(
-      new MD5VideoFrameValidator(expected_frame_checksums, validation_format,
-                                 std::move(corrupt_frame_processor)));
+    std::unique_ptr<VideoFrameProcessor> corrupt_frame_processor,
+    CropHelper crop_helper) {
+  auto video_frame_validator = base::WrapUnique(new MD5VideoFrameValidator(
+      expected_frame_checksums, validation_format,
+      std::move(corrupt_frame_processor), std::move(crop_helper)));
   if (!video_frame_validator->Initialize()) {
     LOG(ERROR) << "Failed to initialize MD5VideoFrameValidator.";
     return nullptr;
@@ -213,8 +281,10 @@ std::unique_ptr<MD5VideoFrameValidator> MD5VideoFrameValidator::Create(
 MD5VideoFrameValidator::MD5VideoFrameValidator(
     const std::vector<std::string>& expected_frame_checksums,
     VideoPixelFormat validation_format,
-    std::unique_ptr<VideoFrameProcessor> corrupt_frame_processor)
-    : VideoFrameValidator(std::move(corrupt_frame_processor)),
+    std::unique_ptr<VideoFrameProcessor> corrupt_frame_processor,
+    CropHelper crop_helper)
+    : VideoFrameValidator(std::move(corrupt_frame_processor),
+                          std::move(crop_helper)),
       expected_frame_checksums_(expected_frame_checksums),
       validation_format_(validation_format) {}
 
@@ -224,27 +294,6 @@ std::unique_ptr<VideoFrameValidator::MismatchedFrameInfo>
 MD5VideoFrameValidator::Validate(scoped_refptr<const VideoFrame> frame,
                                  size_t frame_index) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(validator_thread_sequence_checker_);
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
-  // b/149808895: There is a bug in the synchronization on mapped buffers, which
-  // causes the frame validation failure. The bug is due to some missing i915
-  // patches in kernel v3.18. The bug will be fixed if the kernel is upreved to
-  // v4.4 or newer. Inserts usleep as a short term workaround to the
-  // synchronization bug until the kernel uprev is complete for all the v3.18
-  // devices. Since this bug only occurs in Skylake just because they are 3.18
-  // devices, we also filter by the processor.
-  const static std::string kernel_version = base::SysInfo::KernelVersion();
-  if (base::StartsWith(kernel_version, "3.18")) {
-    constexpr int kPentiumAndLaterFamily = 0x06;
-    constexpr int kSkyLakeModelId = 0x5E;
-    constexpr int kSkyLake_LModelId = 0x4E;
-    static base::NoDestructor<base::CPU> cpuid;
-    static bool is_skylake = cpuid->family() == kPentiumAndLaterFamily &&
-                             (cpuid->model() == kSkyLakeModelId ||
-                              cpuid->model() == kSkyLake_LModelId);
-    if (is_skylake)
-      usleep(10);
-  }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
   if (frame->format() != validation_format_) {
     frame = ConvertVideoFrame(frame.get(), validation_format_);
   }
@@ -265,8 +314,7 @@ MD5VideoFrameValidator::Validate(scoped_refptr<const VideoFrame> frame,
 std::string MD5VideoFrameValidator::ComputeMD5FromVideoFrame(
     const VideoFrame& video_frame) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(validator_thread_sequence_checker_);
-  base::MD5Context context;
-  base::MD5Init(&context);
+  auto hasher = MakeMd5HasherForVideoFrameValidation();
 
   // VideoFrame::HashFrameForTesting() computes MD5 hash values of the coded
   // area. However, MD5 hash values used in our test only use the visible area
@@ -274,19 +322,16 @@ std::string MD5VideoFrameValidator::ComputeMD5FromVideoFrame(
   const VideoPixelFormat format = video_frame.format();
   const gfx::Rect& visible_rect = video_frame.visible_rect();
   for (size_t i = 0; i < VideoFrame::NumPlanes(format); ++i) {
-    const int visible_row_bytes =
+    const size_t visible_row_bytes =
         VideoFrame::RowBytes(i, format, visible_rect.width());
     const int visible_rows = VideoFrame::Rows(i, format, visible_rect.height());
-    const char* data = reinterpret_cast<const char*>(video_frame.data(i));
     const size_t stride = video_frame.stride(i);
+    base::span<const uint8_t> plane = video_frame.data_span(i);
     for (int row = 0; row < visible_rows; ++row) {
-      base::MD5Update(&context, base::StringPiece(data + (stride * row),
-                                                  visible_row_bytes));
+      hasher.Update(plane.subspan(stride * row, visible_row_bytes));
     }
   }
-  base::MD5Digest digest;
-  base::MD5Final(&digest, &context);
-  return MD5DigestToBase16(digest);
+  return base::HexEncodeLower(hasher.Finish());
 }
 
 struct RawVideoFrameValidator::RawMismatchedFrameInfo
@@ -305,9 +350,11 @@ struct RawVideoFrameValidator::RawMismatchedFrameInfo
 std::unique_ptr<RawVideoFrameValidator> RawVideoFrameValidator::Create(
     const GetModelFrameCB& get_model_frame_cb,
     std::unique_ptr<VideoFrameProcessor> corrupt_frame_processor,
-    uint8_t tolerance) {
+    uint8_t tolerance,
+    CropHelper crop_helper) {
   auto video_frame_validator = base::WrapUnique(new RawVideoFrameValidator(
-      get_model_frame_cb, std::move(corrupt_frame_processor), tolerance));
+      get_model_frame_cb, std::move(corrupt_frame_processor), tolerance,
+      std::move(crop_helper)));
   if (!video_frame_validator->Initialize()) {
     LOG(ERROR) << "Failed to initialize RawVideoFrameValidator.";
     return nullptr;
@@ -319,8 +366,10 @@ std::unique_ptr<RawVideoFrameValidator> RawVideoFrameValidator::Create(
 RawVideoFrameValidator::RawVideoFrameValidator(
     const GetModelFrameCB& get_model_frame_cb,
     std::unique_ptr<VideoFrameProcessor> corrupt_frame_processor,
-    uint8_t tolerance)
-    : VideoFrameValidator(std::move(corrupt_frame_processor)),
+    uint8_t tolerance,
+    CropHelper crop_helper)
+    : VideoFrameValidator(std::move(corrupt_frame_processor),
+                          std::move(crop_helper)),
       get_model_frame_cb_(get_model_frame_cb),
       tolerance_(tolerance) {}
 
@@ -329,9 +378,13 @@ RawVideoFrameValidator::~RawVideoFrameValidator() = default;
 std::unique_ptr<VideoFrameValidator::MismatchedFrameInfo>
 RawVideoFrameValidator::Validate(scoped_refptr<const VideoFrame> frame,
                                  size_t frame_index) {
-  SEQUENCE_CHECKER(validator_thread_sequence_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(validator_thread_sequence_checker_);
   auto model_frame = get_model_frame_cb_.Run(frame_index);
   CHECK(model_frame);
+
+  if (ShouldCrop())
+    model_frame = CloneAndCropFrame(std::move(model_frame));
+
   size_t diff_cnt =
       CompareFramesWithErrorDiff(*frame, *model_frame, tolerance_);
   if (diff_cnt > 0)
@@ -356,15 +409,15 @@ std::unique_ptr<PSNRVideoFrameValidator> PSNRVideoFrameValidator::Create(
     const GetModelFrameCB& get_model_frame_cb,
     std::unique_ptr<VideoFrameProcessor> corrupt_frame_processor,
     ValidationMode validation_mode,
-    double tolerance) {
+    double tolerance,
+    CropHelper crop_helper) {
   auto video_frame_validator = base::WrapUnique(new PSNRVideoFrameValidator(
       get_model_frame_cb, std::move(corrupt_frame_processor), validation_mode,
-      tolerance));
+      tolerance, std::move(crop_helper)));
   if (!video_frame_validator->Initialize()) {
     LOG(ERROR) << "Failed to initialize PSNRVideoFrameValidator.";
     return nullptr;
   }
-
   return video_frame_validator;
 }
 
@@ -372,8 +425,10 @@ PSNRVideoFrameValidator::PSNRVideoFrameValidator(
     const GetModelFrameCB& get_model_frame_cb,
     std::unique_ptr<VideoFrameProcessor> corrupt_frame_processor,
     ValidationMode validation_mode,
-    double tolerance)
-    : VideoFrameValidator(std::move(corrupt_frame_processor)),
+    double tolerance,
+    CropHelper crop_helper)
+    : VideoFrameValidator(std::move(corrupt_frame_processor),
+                          std::move(crop_helper)),
       get_model_frame_cb_(get_model_frame_cb),
       tolerance_(tolerance),
       validation_mode_(validation_mode) {}
@@ -383,9 +438,13 @@ PSNRVideoFrameValidator::~PSNRVideoFrameValidator() = default;
 std::unique_ptr<VideoFrameValidator::MismatchedFrameInfo>
 PSNRVideoFrameValidator::Validate(scoped_refptr<const VideoFrame> frame,
                                   size_t frame_index) {
-  SEQUENCE_CHECKER(validator_thread_sequence_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(validator_thread_sequence_checker_);
   auto model_frame = get_model_frame_cb_.Run(frame_index);
   CHECK(model_frame);
+
+  if (ShouldCrop())
+    model_frame = CloneAndCropFrame(std::move(model_frame));
+
   double psnr = ComputePSNR(*frame, *model_frame);
   DVLOGF(4) << "frame_index: " << frame_index << ", psnr: " << psnr;
   psnr_[frame_index] = psnr;
@@ -405,6 +464,7 @@ bool PSNRVideoFrameValidator::Passed() const {
     average += psnr.second;
   }
   average /= psnr_.size();
+  DVLOGF(4) << "Average PSNR: " << average;
   if (average < tolerance_) {
     LOG(ERROR) << "Average PSNR is too low: " << average;
     return false;
@@ -429,15 +489,15 @@ std::unique_ptr<SSIMVideoFrameValidator> SSIMVideoFrameValidator::Create(
     const GetModelFrameCB& get_model_frame_cb,
     std::unique_ptr<VideoFrameProcessor> corrupt_frame_processor,
     ValidationMode validation_mode,
-    double tolerance) {
+    double tolerance,
+    CropHelper crop_helper) {
   auto video_frame_validator = base::WrapUnique(new SSIMVideoFrameValidator(
       get_model_frame_cb, std::move(corrupt_frame_processor), validation_mode,
-      tolerance));
+      tolerance, std::move(crop_helper)));
   if (!video_frame_validator->Initialize()) {
     LOG(ERROR) << "Failed to initialize SSIMVideoFrameValidator.";
     return nullptr;
   }
-
   return video_frame_validator;
 }
 
@@ -445,8 +505,10 @@ SSIMVideoFrameValidator::SSIMVideoFrameValidator(
     const GetModelFrameCB& get_model_frame_cb,
     std::unique_ptr<VideoFrameProcessor> corrupt_frame_processor,
     ValidationMode validation_mode,
-    double tolerance)
-    : VideoFrameValidator(std::move(corrupt_frame_processor)),
+    double tolerance,
+    CropHelper crop_helper)
+    : VideoFrameValidator(std::move(corrupt_frame_processor),
+                          std::move(crop_helper)),
       get_model_frame_cb_(get_model_frame_cb),
       tolerance_(tolerance),
       validation_mode_(validation_mode) {}
@@ -456,9 +518,13 @@ SSIMVideoFrameValidator::~SSIMVideoFrameValidator() = default;
 std::unique_ptr<VideoFrameValidator::MismatchedFrameInfo>
 SSIMVideoFrameValidator::Validate(scoped_refptr<const VideoFrame> frame,
                                   size_t frame_index) {
-  SEQUENCE_CHECKER(validator_thread_sequence_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(validator_thread_sequence_checker_);
   auto model_frame = get_model_frame_cb_.Run(frame_index);
   CHECK(model_frame);
+
+  if (ShouldCrop())
+    model_frame = CloneAndCropFrame(std::move(model_frame));
+
   double ssim = ComputeSSIM(*frame, *model_frame);
   DVLOGF(4) << "frame_index: " << frame_index << ", ssim: " << ssim;
   ssim_[frame_index] = ssim;
@@ -478,11 +544,85 @@ bool SSIMVideoFrameValidator::Passed() const {
     average += ssim.second;
   }
   average /= ssim_.size();
+  DVLOGF(4) << "Average SSIM: " << average;
   if (average < tolerance_) {
     LOG(ERROR) << "Average SSIM is too low: " << average;
     return false;
   }
   return true;
 }
-}  // namespace test
-}  // namespace media
+
+struct LogLikelihoodRatioVideoFrameValidator::
+    LogLikelihoodRatioMismatchedFrameInfo
+    : public VideoFrameValidator::MismatchedFrameInfo {
+  LogLikelihoodRatioMismatchedFrameInfo(size_t frame_index, double ratio)
+      : MismatchedFrameInfo(frame_index), ratio(ratio) {}
+  ~LogLikelihoodRatioMismatchedFrameInfo() override = default;
+  void Print() const override {
+    LOG(ERROR) << "frame_index: " << frame_index
+               << ", log likelihood ratio: " << ratio;
+  }
+
+  double ratio;
+};
+
+// static
+std::unique_ptr<LogLikelihoodRatioVideoFrameValidator>
+LogLikelihoodRatioVideoFrameValidator::Create(
+    const GetModelFrameCB& get_model_frame_cb,
+    std::unique_ptr<VideoFrameProcessor> corrupt_frame_processor,
+    ValidationMode validation_mode,
+    double tolerance,
+    CropHelper crop_helper) {
+  auto video_frame_validator =
+      base::WrapUnique(new LogLikelihoodRatioVideoFrameValidator(
+          get_model_frame_cb, std::move(corrupt_frame_processor),
+          validation_mode, tolerance, std::move(crop_helper)));
+  if (!video_frame_validator->Initialize()) {
+    LOG(ERROR) << "Failed to initialize LogLikelihoodRatioVideoFrameValidator.";
+    return nullptr;
+  }
+
+  return video_frame_validator;
+}
+
+LogLikelihoodRatioVideoFrameValidator::LogLikelihoodRatioVideoFrameValidator(
+    const GetModelFrameCB& get_model_frame_cb,
+    std::unique_ptr<VideoFrameProcessor> corrupt_frame_processor,
+    ValidationMode validation_mode,
+    double tolerance,
+    CropHelper crop_helper)
+    : VideoFrameValidator(std::move(corrupt_frame_processor),
+                          std::move(crop_helper)),
+      get_model_frame_cb_(get_model_frame_cb),
+      tolerance_(tolerance) {}
+
+LogLikelihoodRatioVideoFrameValidator::
+    ~LogLikelihoodRatioVideoFrameValidator() = default;
+
+std::unique_ptr<VideoFrameValidator::MismatchedFrameInfo>
+LogLikelihoodRatioVideoFrameValidator::Validate(
+    scoped_refptr<const VideoFrame> frame,
+    size_t frame_index) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(validator_thread_sequence_checker_);
+  auto model_frame = get_model_frame_cb_.Run(frame_index);
+
+  CHECK(model_frame);
+
+  if (ShouldCrop()) {
+    model_frame = CloneAndCropFrame(std::move(model_frame));
+  }
+
+  double ratio = ComputeLogLikelihoodRatio(model_frame, frame);
+  DVLOGF(4) << "frame_index: " << frame_index
+            << ", log likelihood ratio: " << ratio;
+  log_likelihood_ratios_[frame_index] = ratio;
+  if (ratio >= tolerance_) {
+    return std::make_unique<LogLikelihoodRatioMismatchedFrameInfo>(frame_index,
+                                                                   ratio);
+  }
+
+  return nullptr;
+}
+
+}  // namespace media::test

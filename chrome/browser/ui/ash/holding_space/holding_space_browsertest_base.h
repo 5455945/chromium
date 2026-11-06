@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,11 @@
 #define CHROME_BROWSER_UI_ASH_HOLDING_SPACE_HOLDING_SPACE_BROWSERTEST_BASE_H_
 
 #include <memory>
-#include <vector>
 
 #include "ash/public/cpp/holding_space/holding_space_item.h"
 #include "ash/public/cpp/holding_space/holding_space_progress.h"
 #include "base/test/scoped_feature_list.h"
-#include "chrome/browser/web_applications/system_web_apps/test/system_web_app_browsertest_base.h"
+#include "chrome/browser/ash/system_web_apps/test_support/system_web_app_browsertest_base.h"
 
 class Profile;
 
@@ -26,8 +25,7 @@ class HoldingSpaceTestApi;
 // Base class for holding space browser tests. Subclasses
 // SystemWebAppBrowserTestBase for the ability to test with the Media App, which
 // is the default handler for files opened from the holding space.
-class HoldingSpaceBrowserTestBase
-    : public web_app::SystemWebAppBrowserTestBase {
+class HoldingSpaceBrowserTestBase : public SystemWebAppBrowserTestBase {
  public:
   HoldingSpaceBrowserTestBase();
   ~HoldingSpaceBrowserTestBase() override;
@@ -35,6 +33,8 @@ class HoldingSpaceBrowserTestBase
   // InProcessBrowserTest:
   void SetUpInProcessBrowserTestFixture() override;
   void SetUpOnMainThread() override;
+
+  void TearDownOnMainThread() override;
 
   // Returns the root window that newly created windows should be added to.
   static aura::Window* GetRootWindowForNewWindows();
@@ -72,10 +72,7 @@ class HoldingSpaceBrowserTestBase
   // extension. If extension is omitted, the created file will have an extension
   // of `.txt`. Returns the file path of the created file.
   base::FilePath CreateFile(
-      const absl::optional<std::string>& extension = absl::nullopt);
-
-  // Requests lock screen, waiting to return until session state is locked.
-  void RequestAndAwaitLockScreen();
+      const std::optional<std::string>& extension = std::nullopt);
 
   // Returns the holding space test API.
   HoldingSpaceTestApi& test_api() { return *test_api_; }
@@ -83,6 +80,15 @@ class HoldingSpaceBrowserTestBase
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<HoldingSpaceTestApi> test_api_;
+};
+
+// HoldingSpaceUiBrowserTestBase -----------------------------------------------
+
+// Base class for holding space UI browser tests.
+class HoldingSpaceUiBrowserTestBase : public HoldingSpaceBrowserTestBase {
+ protected:
+  // HoldingSpaceBrowserTestBase:
+  void SetUpOnMainThread() override;
 };
 
 }  // namespace ash

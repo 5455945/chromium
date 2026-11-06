@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,11 @@ import static org.junit.Assert.assertEquals;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.junit.runners.BlockJUnit4ClassRunner;
 
-/**
- * junit tests for {@link LogcatExtractor}.
- */
-@RunWith(BlockJUnit4ClassRunner.class)
+import org.chromium.base.test.BaseRobolectricTestRunner;
+
+/** junit tests for {@link LogcatExtractor}. */
+@RunWith(BaseRobolectricTestRunner.class)
 public class LogcatElisionUnitTest {
     private static final int MAX_LINES = 5;
 
@@ -113,30 +112,34 @@ public class LogcatElisionUnitTest {
 
     @Test
     public void testLogCastNotElided() {
-        String original = "09-08 11:52:12.569  4406  4406 I chromium: "
-                + "Cast.Discovery.Mdns.Request.AppId.In=25";
+        String original =
+                "09-08 11:52:12.569  4406  4406 I chromium: "
+                        + "Cast.Discovery.Mdns.Request.AppId.In=25";
         assertEquals(original, LogcatElision.elide(original));
     }
 
     @Test
     public void testLogAndroidNotElided() {
-        String original = "09-08 11:54:38.053  4406  4406 D cr_AvSettingsAndroid:"
-                + "[AvSettingsAndroid.java:180] HDMI plug update: "
-                + "action=android.media.action.HDMI_AUDIO_PLUG, plug=1";
+        String original =
+                "09-08 11:54:38.053  4406  4406 D cr_AvSettingsAndroid:"
+                        + "[AvSettingsAndroid.java:180] HDMI plug update: "
+                        + "action=android.media.action.HDMI_AUDIO_PLUG, plug=1";
         assertEquals(original, LogcatElision.elide(original));
     }
 
     @Test
     public void testLogJavaNotElided() {
-        String original = "09-08 11:54:38.053  4406  4406 D cr_AvSettingsAndroid: "
-                + " [AvSettingsAndroid.java:187] Max channel count = 8";
+        String original =
+                "09-08 11:54:38.053  4406  4406 D cr_AvSettingsAndroid: "
+                        + " [AvSettingsAndroid.java:187] Max channel count = 8";
         assertEquals(original, LogcatElision.elide(original));
     }
 
     @Test
     public void testLogCcNotElided() {
-        String original = "09-08 11:59:12.335  4406  4443 I chromium: "
-                + "[4406:4443:INFO:wifi_util.cc(113)]   No peers:";
+        String original =
+                "09-08 11:59:12.335  4406  4443 I chromium: "
+                        + "[4406:4443:INFO:wifi_util.cc(113)]   No peers:";
         assertEquals(original, LogcatElision.elide(original));
     }
 }

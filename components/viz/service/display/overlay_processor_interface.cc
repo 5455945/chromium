@@ -1,37 +1,60 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/viz/service/display/overlay_processor_interface.h"
 
+#include <algorithm>
 #include <utility>
-#include <vector>
 
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
+#include "build/build_config.h"
 #include "build/chromecast_buildflags.h"
+#include "components/viz/common/buildflags.h"
 #include "components/viz/common/display/renderer_settings.h"
 #include "components/viz/common/features.h"
 #include "components/viz/service/display/display_compositor_memory_and_task_controller.h"
 #include "components/viz/service/display/overlay_processor_stub.h"
+#include "components/viz/service/display_embedder/skia_output_surface_dependency.h"
+#include "ui/gfx/display_color_spaces.h"
+#include "ui/gfx/overlay_priority_hint.h"
 
-#if defined(OS_APPLE)
+#if BUILDFLAG(IS_APPLE)
 #include "components/viz/service/display/overlay_processor_mac.h"
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
 #include "components/viz/service/display/overlay_processor_win.h"
-#elif defined(OS_ANDROID)
+#elif BUILDFLAG(IS_ANDROID)
 #include "components/viz/service/display/overlay_processor_android.h"
 #include "components/viz/service/display/overlay_processor_surface_control.h"
-#elif defined(USE_OZONE)
-#include "components/viz/service/display/overlay_processor_delegated.h"
+#elif BUILDFLAG(IS_OZONE)
 #include "components/viz/service/display/overlay_processor_ozone.h"
-#include "ui/base/ui_base_features.h"
+#include "gpu/command_buffer/service/shared_image/shared_image_manager.h"
 #include "ui/ozone/public/overlay_manager_ozone.h"
 #include "ui/ozone/public/ozone_platform.h"
 #endif
 
 namespace viz {
 namespace {
+
+#if BUILDFLAG(IS_OZONE)
+class SharedImageManagerPixmapProvider
+    : public OverlayProcessorOzone::PixmapProvider {
+ public:
+  explicit SharedImageManagerPixmapProvider(gpu::SharedImageManager* manager)
+      : manager_(manager) {
+    CHECK(manager_);
+  }
+
+  scoped_refptr<gfx::NativePixmap> GetNativePixmap(
+      const gpu::Mailbox& mailbox) override {
+    return manager_->GetNativePixmap(mailbox);
+  }
+
+  const raw_ptr<gpu::SharedImageManager> manager_;
+};
+#endif
+
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
 enum class UnderlayDamage {
@@ -81,7 +104,7 @@ OverlayProcessorInterface::CreateOverlayProcessor(
     gpu::SurfaceHandle surface_handle,
     const OutputSurface::Capabilities& capabilities,
     DisplayCompositorMemoryAndTaskController* display_controller,
-    gpu::SharedImageInterface* shared_image_interface,
+    gpu::SharedImageManager* shared_image_manager,
     const RendererSettings& renderer_settings,
     const DebugRendererSettings* debug_settings) {
   // If we are offscreen, we don't have overlay support.
@@ -89,66 +112,59 @@ OverlayProcessorInterface::CreateOverlayProcessor(
   // overlay for WebView is enabled, this check still works.
   if (surface_handle == gpu::kNullSurfaceHandle)
     return std::make_unique<OverlayProcessorStub>();
-#if defined(OS_APPLE)
-  DCHECK(capabilities.supports_surfaceless);
 
-  return std::make_unique<OverlayProcessorMac>(
-      renderer_settings.allow_overlays);
-#elif defined(OS_WIN)
-  if (!capabilities.supports_dc_layers)
+#if BUILDFLAG(IS_APPLE)
+  DCHECK(capabilities.renderer_allocates_images);
+  return std::make_unique<OverlayProcessorMac>();
+#elif BUILDFLAG(IS_WIN)
+  if (capabilities.dc_support_level == OutputSurface::DCSupportLevel::kNone) {
     return std::make_unique<OverlayProcessorStub>();
+  }
 
+  DCHECK(display_controller);
+  DCHECK(display_controller->skia_dependency());
   return std::make_unique<OverlayProcessorWin>(
-      output_surface,
+      capabilities.dc_support_level,
+      display_controller->skia_dependency()
+          ->GetGpuDriverBugWorkarounds()
+          .disable_direct_composition_letterbox_video_optimization,
+      debug_settings,
       std::make_unique<DCLayerOverlayProcessor>(
-          debug_settings, /*allowed_yuv_overlay_count=*/capabilities
-                                  .supports_two_yuv_hardware_overlays
-                              ? 2
-                              : 1));
-#elif defined(USE_OZONE)
-  if (!features::IsUsingOzonePlatform())
-    return std::make_unique<OverlayProcessorStub>();
+          capabilities.allowed_yuv_overlay_count,
+          display_controller->skia_dependency()
+              ->GetGpuDriverBugWorkarounds()
+              .disable_video_overlay_if_moving));
 
-#if !BUILDFLAG(IS_CHROMECAST)
-  // In tests and Ozone/X11, we do not expect surfaceless surface support.
-  // For chromecast, we always need OverlayProcessorOzone.
-  if (!capabilities.supports_surfaceless)
+#elif BUILDFLAG(IS_OZONE)
+#if !BUILDFLAG(IS_CASTOS)
+  // In tests and Ozone/X11, we do not expect a buffer queue for the root
+  // render pass. For CastOS, we always need OverlayProcessorOzone.
+  if (!capabilities.renderer_allocates_images) {
     return std::make_unique<OverlayProcessorStub>();
-#endif  // #if !BUILDFLAG(IS_CHROMECAST)
+  }
+#endif  // #if !BUILDFLAG(IS_CASTOS)
 
+  std::unique_ptr<OverlayProcessorOzone::PixmapProvider> pixmap_provider;
+  auto* overlay_manager = ui::OzonePlatform::GetInstance()->GetOverlayManager();
   std::unique_ptr<ui::OverlayCandidatesOzone> overlay_candidates;
-  if (!renderer_settings.overlay_strategies.empty()) {
-    auto* overlay_manager =
-        ui::OzonePlatform::GetInstance()->GetOverlayManager();
+  if (overlay_manager) {
     overlay_candidates =
         overlay_manager->CreateOverlayCandidates(surface_handle);
+    if (overlay_manager->allow_sync_and_real_buffer_page_flip_testing()) {
+      pixmap_provider = std::make_unique<SharedImageManagerPixmapProvider>(
+          shared_image_manager);
+    }
   }
-
-  gpu::SharedImageInterface* sii = nullptr;
-  if (features::ShouldUseRealBuffersForPageFlipTest() &&
-      ui::OzonePlatform::GetInstance()->GetOverlayManager() &&
-      ui::OzonePlatform::GetInstance()
-          ->GetOverlayManager()
-          ->allow_sync_and_real_buffer_page_flip_testing()) {
-    sii = shared_image_interface;
-    CHECK(shared_image_interface);
-  }
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  if (features::IsDelegatedCompositingEnabled()) {
-    return std::make_unique<OverlayProcessorDelegated>(
-        std::move(overlay_candidates),
-        std::move(renderer_settings.overlay_strategies), sii);
-  }
-#endif
 
   return std::make_unique<OverlayProcessorOzone>(
       std::move(overlay_candidates),
-      std::move(renderer_settings.overlay_strategies), sii);
-#elif defined(OS_ANDROID)
+      std::move(renderer_settings.overlay_strategies),
+      std::move(pixmap_provider));
+
+#elif BUILDFLAG(IS_ANDROID)
   DCHECK(display_controller);
 
-  if (capabilities.supports_surfaceless) {
+  if (capabilities.renderer_allocates_images) {
     // This is for Android SurfaceControl case.
     return std::make_unique<OverlayProcessorSurfaceControl>();
   } else {
@@ -172,40 +188,94 @@ bool OverlayProcessorInterface::DisableSplittingQuads() const {
   return false;
 }
 
-OverlayProcessorInterface::OutputSurfaceOverlayPlane
-OverlayProcessorInterface::ProcessOutputSurfaceAsOverlay(
-    const gfx::Size& viewport_size,
-    const gfx::Size& resource_size,
-    const gfx::BufferFormat& buffer_format,
-    const gfx::ColorSpace& color_space,
-    bool has_alpha,
-    const gpu::Mailbox& mailbox) {
-  OutputSurfaceOverlayPlane overlay_plane;
+// static
+OverlayCandidate OverlayProcessorInterface::CreatePrimaryPlane(
+    const PrimaryPlaneParams& params) {
+  OverlayCandidate overlay_plane;
+  overlay_plane.is_root_render_pass = true;
+#if BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_WIN)
+  overlay_plane.transform = gfx::Transform();
+#else
   overlay_plane.transform = gfx::OverlayTransform::OVERLAY_TRANSFORM_NONE;
-  overlay_plane.uv_rect = gfx::RectF(
-      0.f, 0.f,
-      viewport_size.width() / static_cast<float>(resource_size.width()),
-      viewport_size.height() / static_cast<float>(resource_size.height()));
-  overlay_plane.resource_size = resource_size;
-  overlay_plane.format = buffer_format;
-  overlay_plane.color_space = color_space;
-  overlay_plane.enable_blending = has_alpha;
-  overlay_plane.mailbox = mailbox;
+#endif
+  overlay_plane.is_opaque = params.is_opaque;
+  overlay_plane.opacity = 1.0f;
+  overlay_plane.priority_hint = gfx::OverlayPriorityHint::kRegular;
+  overlay_plane.rounded_corners = gfx::RRectF();
 
   // Adjust transformation and display_rect based on display rotation.
-  overlay_plane.display_rect =
-      gfx::RectF(viewport_size.width(), viewport_size.height());
+  overlay_plane.display_rect = gfx::RectF(params.viewport_size);
+  overlay_plane.resource_size_in_pixels = params.resource_size_in_pixels;
+  overlay_plane.uv_rect = gfx::RectF(
+      0.f, 0.f,
+      overlay_plane.display_rect.width() /
+          static_cast<float>(overlay_plane.resource_size_in_pixels.width()),
+      overlay_plane.display_rect.height() /
+          static_cast<float>(overlay_plane.resource_size_in_pixels.height()));
 
-#if defined(ALWAYS_ENABLE_BLENDING_FOR_PRIMARY)
+#if BUILDFLAG(ALWAYS_ENABLE_BLENDING_FOR_PRIMARY)
   // On Chromecast, always use RGBA as the scanout format for the primary plane.
-  overlay_plane.enable_blending = true;
+  overlay_plane.is_opaque = false;
 #endif
+
+  overlay_plane.format = params.si_format;
+  overlay_plane.color_space = params.color_space;
+  overlay_plane.hdr_metadata = params.hdr_metadata;
+
+#if BUILDFLAG(IS_OZONE)
+  overlay_plane.mailbox = params.overlay_testing_mailbox;
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+  if (params.supports_hdr) {
+    // TODO(crbug.com/40263227): Track the actual brightness of the
+    // content. For now, assume that all HDR content is 1,000 nits.
+    overlay_plane.desired_brightness_ratio =
+        gfx::HDRMetadata::kDefaultHdrHeadroom;
+  }
+#endif
+
   return overlay_plane;
+}
+
+// static
+gfx::HDRMetadata OverlayProcessorInterface::ComputePrimaryPlaneHDRMetadata(
+    const gfx::DisplayColorSpaces& display_color_spaces,
+    const gfx::ColorSpace& output_color_space,
+    gfx::ContentColorUsage content_color_usage) {
+  if (!output_color_space.IsHDR()) {
+    return gfx::HDRMetadata();
+  }
+
+  const float sdr_white = display_color_spaces.GetSDRMaxLuminanceNits();
+  float peak = sdr_white;
+  if (content_color_usage == gfx::ContentColorUsage::kHDR) {
+    peak *= std::max(1.f, display_color_spaces.GetHDRMaxLuminanceRelative());
+  }
+
+  return gfx::HDRMetadata(
+      skhdr::MasteringDisplayColorVolume{
+          .fDisplayPrimaries = output_color_space.GetPrimaries(),
+          .fMaximumDisplayMasteringLuminance = peak,
+          .fMinimumDisplayMasteringLuminance = 0.f,
+      },
+      skhdr::ContentLightLevelInformation{
+          .fMaxCLL = peak,
+          .fMaxFALL = sdr_white,
+      });
 }
 
 void OverlayProcessorInterface::ScheduleOverlays(
     DisplayResourceProvider* display_resource_provider) {}
 
 void OverlayProcessorInterface::OverlayPresentationComplete() {}
+
+gfx::CALayerResult OverlayProcessorInterface::GetCALayerErrorCode() const {
+  return gfx::kCALayerSuccess;
+}
+
+bool OverlayProcessorInterface::SupportsFlipRotateTransform() const {
+  return false;
+}
 
 }  // namespace viz

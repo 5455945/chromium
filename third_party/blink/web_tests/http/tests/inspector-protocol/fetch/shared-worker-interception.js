@@ -1,4 +1,4 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   const {page, session, dp} = await testRunner.startBlank(
       `Tests that shared worker requests are intercepted.`);
 
@@ -16,7 +16,7 @@
 
   globalFetcher.onceRequest().fulfill({
     responseCode: 200,
-    responseHeaders: [],
+    responseHeaders: [{name: 'Content-Type', value: 'application/javascript'}],
     body: btoa(workerBody)
   });
 
@@ -38,7 +38,7 @@
 
   globalFetcher.onceRequest().fulfill({
     responseCode: 200,
-    responseHeaders: [],
+    responseHeaders: [{name: 'Content-Type', value: 'application/javascript'}],
     body: btoa("overriden fetch body")
   });
 

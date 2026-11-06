@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,7 +20,7 @@ NotificationSchedulerClientRegistrar::~NotificationSchedulerClientRegistrar() =
 void NotificationSchedulerClientRegistrar::RegisterClient(
     SchedulerClientType type,
     std::unique_ptr<NotificationSchedulerClient> client) {
-  DCHECK(clients_.find(type) == clients_.end());
+  CHECK(clients_.find(type) == clients_.end(), base::NotFatalUntil::M161);
   clients_.emplace(type, std::move(client));
 }
 
@@ -34,7 +34,7 @@ NotificationSchedulerClient* NotificationSchedulerClientRegistrar::GetClient(
 
 void NotificationSchedulerClientRegistrar::GetRegisteredClients(
     std::vector<SchedulerClientType>* clients) const {
-  DCHECK(clients);
+  CHECK(clients, base::NotFatalUntil::M161);
   clients->clear();
   for (const auto& pair : clients_) {
     clients->emplace_back(pair.first);

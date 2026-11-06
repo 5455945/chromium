@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,10 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -33,13 +32,13 @@ namespace {
 // Returns true if successfully parsed the SSL protocol version that is
 // represented by a string. Returns false if |version_str| is invalid.
 bool SSLProtocolVersionFromString(const std::string& version_str,
-                                  network::mojom::SSLVersion* version_out) {
-  if (version_str == "tls1") {
-    *version_out = network::mojom::SSLVersion::kTLS1;
-    return true;
-  }
-  if (version_str == "tls1.1") {
-    *version_out = network::mojom::SSLVersion::kTLS11;
+                                  network::mojom::SSLVersion* version_out,
+                                  bool is_min_version) {
+  // TLS 1.0 and 1.1 are no longer supported. For compatibility, when set as a
+  // minimum version, we clamp to TLS 1.2. When set as a maximum version, they
+  // are treated as invalid.
+  if (is_min_version && (version_str == "tls1" || version_str == "tls1.1")) {
+    *version_out = network::mojom::SSLVersion::kTLS12;
     return true;
   }
   if (version_str == "tls1.2") {
@@ -59,6 +58,17 @@ const char kTCPSocketTypeInvalidError[] =
     "Cannot call both connect and listen on the same socket.";
 const char kSocketListenError[] = "Could not listen on the specified port.";
 
+template <>
+bool BrowserContextKeyedAPIFactory<ApiResourceManager<ResumableTCPSocket>>::
+    ServiceIsCreatedWithBrowserContext() const {
+  if (ExtensionsBrowserClient::Get() &&
+      ExtensionsBrowserClient::Get()
+          ->IsLazySocketAndUsbKeyedServiceInstantiationEnabled()) {
+    return false;
+  }
+  return true;
+}
+
 static base::LazyInstance<BrowserContextKeyedAPIFactory<
     ApiResourceManager<ResumableTCPSocket>>>::DestructorAtExit g_factory =
     LAZY_INSTANCE_INITIALIZER;
@@ -68,6 +78,17 @@ template <>
 BrowserContextKeyedAPIFactory<ApiResourceManager<ResumableTCPSocket> >*
 ApiResourceManager<ResumableTCPSocket>::GetFactoryInstance() {
   return g_factory.Pointer();
+}
+
+template <>
+bool BrowserContextKeyedAPIFactory<ApiResourceManager<
+    ResumableTCPServerSocket>>::ServiceIsCreatedWithBrowserContext() const {
+  if (ExtensionsBrowserClient::Get() &&
+      ExtensionsBrowserClient::Get()
+          ->IsLazySocketAndUsbKeyedServiceInstantiationEnabled()) {
+    return false;
+  }
+  return true;
 }
 
 static base::LazyInstance<BrowserContextKeyedAPIFactory<
@@ -92,7 +113,7 @@ TCPSocket::TCPSocket(
     mojo::PendingRemote<network::mojom::TCPConnectedSocket> socket,
     mojo::ScopedDataPipeConsumerHandle receive_stream,
     mojo::ScopedDataPipeProducerHandle send_stream,
-    const absl::optional<net::IPEndPoint>& remote_addr,
+    const std::optional<net::IPEndPoint>& remote_addr,
     const std::string& owner_extension_id)
     : Socket(owner_extension_id),
       browser_context_(nullptr),
@@ -135,7 +156,7 @@ void TCPSocket::Connect(const net::AddressList& address,
     storage_partition_ = browser_context_->GetDefaultStoragePartition();
   }
   storage_partition_->GetNetworkContext()->CreateTCPConnectedSocket(
-      absl::nullopt, address, /*options=*/nullptr,
+      std::nullopt, address, /*options=*/nullptr,
       net::MutableNetworkTrafficAnnotationTag(
           Socket::GetNetworkTrafficAnnotationTag()),
       client_socket_.BindNewPipeAndPassReceiver(),
@@ -147,8 +168,8 @@ void TCPSocket::Disconnect(bool socket_destroying) {
   // aborted.
   weak_factory_.InvalidateWeakPtrs();
   is_connected_ = false;
-  local_addr_ = absl::nullopt;
-  peer_addr_ = absl::nullopt;
+  local_addr_ = std::nullopt;
+  peer_addr_ = std::nullopt;
   mojo_data_pump_ = nullptr;
   client_socket_.reset();
   server_socket_.reset();
@@ -210,7 +231,7 @@ void TCPSocket::SetKeepAlive(bool enable,
                              int delay,
                              SetKeepAliveCallback callback) {
   if (!client_socket_) {
-    std::move(callback).Run(net::ERR_FAILED);
+    std::move(callback).Run(false);
     return;
   }
   client_socket_->SetKeepAlive(enable, delay, std::move(callback));
@@ -218,7 +239,7 @@ void TCPSocket::SetKeepAlive(bool enable,
 
 void TCPSocket::SetNoDelay(bool no_delay, SetNoDelayCallback callback) {
   if (!client_socket_) {
-    std::move(callback).Run(net::ERR_FAILED);
+    std::move(callback).Run(false);
     return;
   }
   client_socket_->SetNoDelay(no_delay, std::move(callback));
@@ -257,8 +278,11 @@ void TCPSocket::Listen(const std::string& address,
   if (!storage_partition_) {
     storage_partition_ = browser_context_->GetDefaultStoragePartition();
   }
+
+  auto options = network::mojom::TCPServerSocketOptions::New();
+  options->backlog = backlog;
   storage_partition_->GetNetworkContext()->CreateTCPServerSocket(
-      ip_end_point, backlog,
+      ip_end_point, std::move(options),
       net::MutableNetworkTrafficAnnotationTag(
           Socket::GetNetworkTrafficAnnotationTag()),
       server_socket_.BindNewPipeAndPassReceiver(),
@@ -267,7 +291,7 @@ void TCPSocket::Listen(const std::string& address,
 
 void TCPSocket::Accept(AcceptCompletionCallback callback) {
   if (socket_mode_ != SERVER || !server_socket_) {
-    std::move(callback).Run(net::ERR_FAILED, mojo::NullRemote(), absl::nullopt,
+    std::move(callback).Run(net::ERR_FAILED, mojo::NullRemote(), std::nullopt,
                             mojo::ScopedDataPipeConsumerHandle(),
                             mojo::ScopedDataPipeProducerHandle());
     return;
@@ -275,7 +299,7 @@ void TCPSocket::Accept(AcceptCompletionCallback callback) {
 
   // Limits to only 1 blocked accept call.
   if (accept_callback_) {
-    std::move(callback).Run(net::ERR_FAILED, mojo::NullRemote(), absl::nullopt,
+    std::move(callback).Run(net::ERR_FAILED, mojo::NullRemote(), std::nullopt,
                             mojo::ScopedDataPipeConsumerHandle(),
                             mojo::ScopedDataPipeProducerHandle());
     return;
@@ -322,8 +346,8 @@ int TCPSocket::WriteImpl(net::IOBuffer* io_buffer,
 
 void TCPSocket::OnConnectComplete(
     int result,
-    const absl::optional<net::IPEndPoint>& local_addr,
-    const absl::optional<net::IPEndPoint>& peer_addr,
+    const std::optional<net::IPEndPoint>& local_addr,
+    const std::optional<net::IPEndPoint>& peer_addr,
     mojo::ScopedDataPipeConsumerHandle receive_stream,
     mojo::ScopedDataPipeProducerHandle send_stream) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -342,7 +366,7 @@ void TCPSocket::OnConnectComplete(
 
 void TCPSocket::OnListenComplete(
     int result,
-    const absl::optional<net::IPEndPoint>& local_addr) {
+    const std::optional<net::IPEndPoint>& local_addr) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(listen_callback_);
 
@@ -357,13 +381,13 @@ void TCPSocket::OnListenComplete(
 
 content::StoragePartition* TCPSocket::GetStoragePartitionHelper() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  return storage_partition_ ? storage_partition_
+  return storage_partition_ ? storage_partition_.get()
                             : browser_context_->GetDefaultStoragePartition();
 }
 
 void TCPSocket::OnAccept(
     int result,
-    const absl::optional<net::IPEndPoint>& remote_addr,
+    const std::optional<net::IPEndPoint>& remote_addr,
     mojo::PendingRemote<network::mojom::TCPConnectedSocket> connected_socket,
     mojo::ScopedDataPipeConsumerHandle receive_stream,
     mojo::ScopedDataPipeProducerHandle send_stream) {
@@ -408,7 +432,7 @@ void TCPSocket::OnUpgradeToTLSComplete(
     int result,
     mojo::ScopedDataPipeConsumerHandle receive_stream,
     mojo::ScopedDataPipeProducerHandle send_stream,
-    const absl::optional<net::SSLInfo>& ssl_info) {
+    const std::optional<net::SSLInfo>& ssl_info) {
   std::move(callback).Run(result, std::move(tls_socket), local_addr, peer_addr,
                           std::move(receive_stream), std::move(send_stream));
 }
@@ -453,18 +477,18 @@ void TCPSocket::UpgradeToTLS(api::socket::SecureOptions* options,
 
   mojo_socket_options->version_max = network::mojom::SSLVersion::kTLS13;
 
-  if (options && options->tls_version.get()) {
+  if (options && options->tls_version) {
     network::mojom::SSLVersion version_min, version_max;
     bool has_version_min = false;
     bool has_version_max = false;
-    api::socket::TLSVersionConstraints* versions = options->tls_version.get();
-    if (versions->min.get()) {
-      has_version_min =
-          SSLProtocolVersionFromString(*versions->min, &version_min);
+    api::socket::TLSVersionConstraints& versions = *options->tls_version;
+    if (versions.min) {
+      has_version_min = SSLProtocolVersionFromString(
+          *versions.min, &version_min, /*is_min_version=*/true);
     }
-    if (versions->max.get()) {
-      has_version_max =
-          SSLProtocolVersionFromString(*versions->max, &version_max);
+    if (versions.max) {
+      has_version_max = SSLProtocolVersionFromString(
+          *versions.max, &version_max, /*is_min_version=*/false);
     }
     if (has_version_min)
       mojo_socket_options->version_min = version_min;
@@ -495,7 +519,7 @@ ResumableTCPSocket::ResumableTCPSocket(
     mojo::PendingRemote<network::mojom::TCPConnectedSocket> socket,
     mojo::ScopedDataPipeConsumerHandle receive_stream,
     mojo::ScopedDataPipeProducerHandle send_stream,
-    const absl::optional<net::IPEndPoint>& remote_addr,
+    const std::optional<net::IPEndPoint>& remote_addr,
     const std::string& owner_extension_id)
     : TCPSocket(std::move(socket),
                 std::move(receive_stream),

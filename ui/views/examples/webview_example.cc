@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,8 +13,7 @@
 #include "ui/views/examples/grit/views_examples_resources.h"
 #include "ui/views/layout/fill_layout.h"
 
-namespace views {
-namespace examples {
+namespace views::examples {
 
 WebViewExample::WebViewExample(content::BrowserContext* browser_context)
     : ExampleBase(l10n_util::GetStringUTF8(IDS_WEBVIEW_SELECT_LABEL).c_str()),
@@ -26,19 +25,10 @@ WebViewExample::~WebViewExample() = default;
 void WebViewExample::CreateExampleView(View* container) {
   webview_ =
       container->AddChildView(std::make_unique<WebView>(browser_context_));
-  webview_->GetWebContents()->SetDelegate(this);
+  webview_->SetAcceleratorHandling(WebContentsAcceleratorHandling::kEnabled);
   container->SetLayoutManager(std::make_unique<FillLayout>());
-
   webview_->LoadInitialURL(GURL("http://www.google.com/"));
   webview_->GetWebContents()->Focus();
 }
 
-bool WebViewExample::HandleKeyboardEvent(
-    content::WebContents* source,
-    const content::NativeWebKeyboardEvent& event) {
-  return unhandled_keyboard_event_handler_.HandleKeyboardEvent(
-      event, webview_->GetFocusManager());
-}
-
-}  // namespace examples
-}  // namespace views
+}  // namespace views::examples

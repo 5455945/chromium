@@ -1,14 +1,12 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/testing/earl_grey/base_eg_test_helper_impl.h"
 
-#include "ios/testing/earl_grey/earl_grey_test.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "base/debug/stack_trace.h"
+#import "base/logging.h"
+#import "ios/testing/earl_grey/earl_grey_test.h"
 
 @implementation BaseEGTestHelperImpl {
   // Used to raise EarlGrey exception with specific file name and line number.
@@ -30,8 +28,9 @@
 }
 
 - (void)failWithError:(NSError*)error expression:(NSString*)expression {
-  if (!error)
+  if (!error) {
     return;
+  }
 
   NSString* name = [NSString stringWithFormat:@"%@ helper error", [self class]];
   NSString* reason =
@@ -45,8 +44,11 @@
 - (void)fail:(BOOL)fail
      expression:(NSString*)expression
     description:(NSString*)description {
-  if (!fail)
+  if (!fail) {
     return;
+  }
+
+  DLOG(WARNING) << "\n" << base::debug::StackTrace(/*count=*/15).ToString();
 
   NSString* reason =
       [NSString stringWithFormat:@"%@ is false: %@", expression, description];

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,8 +26,9 @@ class PushPropertiesCountingLayerImpl : public LayerImpl {
       const PushPropertiesCountingLayerImpl&) = delete;
 
   // LayerImpl implementation.
-  void PushPropertiesTo(LayerImpl* layer) override;
-  std::unique_ptr<LayerImpl> CreateLayerImpl(LayerTreeImpl* tree_impl) override;
+  void MovePropertiesToActiveLayer(LayerImpl* active_layer) override;
+  std::unique_ptr<LayerImpl> CreateLayerImpl(
+      LayerTreeImpl* tree_impl) const override;
 
   size_t push_properties_count() const { return push_properties_count_; }
   void reset_push_properties_count() { push_properties_count_ = 0; }

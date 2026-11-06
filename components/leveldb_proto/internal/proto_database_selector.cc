@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 #include "base/check_op.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/leveldb_proto/internal/migration_delegate.h"
 #include "components/leveldb_proto/internal/shared_proto_database.h"
 #include "components/leveldb_proto/internal/shared_proto_database_provider.h"
@@ -80,7 +81,6 @@ void ProtoDatabaseSelector::InitUniqueOrShared(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   init_status_ = InitStatus::IN_PROGRESS;
   unique_database_dir_ = db_dir;
-  client_name_ = client_name;
 
   if (unique_database_dir_.empty()) {
     DCHECK(!use_shared_db) << "Opening in memory shared db is not supported";
@@ -473,7 +473,6 @@ void ProtoDatabaseSelector::AddTransaction(base::OnceClosure task) {
       break;
     case InitStatus::NOT_STARTED:
       NOTREACHED();
-      FALLTHROUGH;
     case InitStatus::DONE:
       std::move(task).Run();
       break;
@@ -567,6 +566,18 @@ void ProtoDatabaseSelector::LoadKeysAndEntriesInRange(
   db_->LoadKeysAndEntriesInRange(start, end, std::move(callback));
 }
 
+void ProtoDatabaseSelector::LoadKeysAndEntriesWhile(
+    const std::string& start,
+    const KeyIteratorController& controller,
+    typename Callbacks::LoadKeysAndEntriesCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!db_) {
+    std::move(callback).Run(false, nullptr);
+    return;
+  }
+  db_->LoadKeysAndEntriesWhile(start, controller, std::move(callback));
+}
+
 void ProtoDatabaseSelector::LoadKeys(Callbacks::LoadKeysCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!db_) {
@@ -590,8 +601,8 @@ void ProtoDatabaseSelector::Destroy(Callbacks::DestroyCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!db_) {
     if (!unique_database_dir_.empty()) {
-      ProtoLevelDBWrapper::Destroy(unique_database_dir_, client_name_,
-                                   task_runner_, std::move(callback));
+      ProtoLevelDBWrapper::Destroy(unique_database_dir_, task_runner_,
+                                   std::move(callback));
       return;
     }
 

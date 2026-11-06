@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,7 +23,7 @@ namespace forward_grapheme_boundary_state_machine_test {
 
 // kWatch kVS16, kEye kVS16 are valid standardized variants.
 const UChar32 kWatch = 0x231A;
-const UChar32 kEye = WTF::unicode::kEyeCharacter;
+using uchar::kEye;
 const UChar32 kVS16 = 0xFE0F;
 
 // kHanBMP KVS17, kHanSIP kVS17 are valie IVD sequences.
@@ -468,10 +468,10 @@ TEST_F(ForwardGraphemeBoundaryStatemachineTest,
 TEST_F(ForwardGraphemeBoundaryStatemachineTest, MuchLongerCase) {
   ForwardGraphemeBoundaryStateMachine machine;
 
-  const UChar32 kMan = WTF::unicode::kManCharacter;
-  const UChar32 kZwj = WTF::unicode::kZeroWidthJoinerCharacter;
-  const UChar32 kHeart = WTF::unicode::kHeavyBlackHeartCharacter;
-  const UChar32 kKiss = WTF::unicode::kKissMarkCharacter;
+  using uchar::kMan;
+  const UChar32 kZwj = uchar::kZeroWidthJoiner;
+  const UChar32 kHeart = uchar::kHeavyBlackHeart;
+  const UChar32 kKiss = uchar::kKissMark;
 
   // U+1F468 U+200D U+2764 U+FE0F U+200D U+1F48B U+200D U+1F468 is a valid ZWJ
   // emoji sequence.

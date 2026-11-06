@@ -1,14 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/signin/signin_profile_attributes_updater.h"
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/profiles/profile_attributes_entry.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/signin/signin_util.h"
@@ -24,7 +24,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
 const char kEmail[] = "example@email.com";
 
 void CheckProfilePrefsReset(PrefService* pref_service,
@@ -51,7 +51,7 @@ void SetProfilePrefs(PrefService* pref_service) {
 
   CheckProfilePrefsSet(pref_service, false);
 }
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 }  // namespace
 
 class SigninProfileAttributesUpdaterTest : public testing::Test {
@@ -75,7 +75,7 @@ class SigninProfileAttributesUpdaterTest : public testing::Test {
     ASSERT_TRUE(profile_manager_.SetUp());
     std::string name = "profile_name";
     profile_ = profile_manager_.CreateTestingProfile(
-        name, /*prefs=*/nullptr, base::UTF8ToUTF16(name), 0, std::string(),
+        name, /*prefs=*/nullptr, base::UTF8ToUTF16(name), 0,
         TestingProfile::TestingFactories());
 
     RecreateSigninProfileAttributesUpdater();
@@ -83,13 +83,13 @@ class SigninProfileAttributesUpdaterTest : public testing::Test {
 
   content::BrowserTaskEnvironment task_environment_;
   TestingProfileManager profile_manager_;
-  TestingProfile* profile_;
+  raw_ptr<TestingProfile> profile_;
   signin::IdentityTestEnvironment identity_test_env_;
   std::unique_ptr<SigninProfileAttributesUpdater>
       signin_profile_attributes_updater_;
 };
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
 // Tests that the browser state info is updated on signin and signout.
 // ChromeOS does not support signout.
 TEST_F(SigninProfileAttributesUpdaterTest, SigninSignout) {
@@ -112,9 +112,7 @@ TEST_F(SigninProfileAttributesUpdaterTest, SigninSignout) {
   EXPECT_EQ(entry->GetSigninState(), SigninState::kNotSignedIn);
   EXPECT_FALSE(entry->IsSigninRequired());
 }
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
 TEST_F(SigninProfileAttributesUpdaterTest, SigninSignoutResetsProfilePrefs) {
   PrefService* pref_service = profile_->GetPrefs();
   ProfileAttributesEntry* entry =
@@ -124,7 +122,7 @@ TEST_F(SigninProfileAttributesUpdaterTest, SigninSignoutResetsProfilePrefs) {
 
   // Set profile prefs.
   CheckProfilePrefsReset(pref_service, true);
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
   SetProfilePrefs(pref_service);
 
   // Set UPA should reset profile prefs.
@@ -136,7 +134,7 @@ TEST_F(SigninProfileAttributesUpdaterTest, SigninSignoutResetsProfilePrefs) {
   // Signout should reset profile prefs.
   identity_test_env_.ClearPrimaryAccount();
   CheckProfilePrefsReset(pref_service, false);
-#endif  // !defined(OS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID)
 
   SetProfilePrefs(pref_service);
   // Set primary account should reset profile prefs.
@@ -149,7 +147,7 @@ TEST_F(SigninProfileAttributesUpdaterTest, SigninSignoutResetsProfilePrefs) {
   CheckProfilePrefsReset(pref_service, false);
 }
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 TEST_F(SigninProfileAttributesUpdaterTest,
        EnablingSyncWithUPAAccountShouldNotResetProfilePrefs) {
   PrefService* pref_service = profile_->GetPrefs();
@@ -164,7 +162,7 @@ TEST_F(SigninProfileAttributesUpdaterTest,
   SetProfilePrefs(pref_service);
   // Set primary account to be the same as the UPA.
   // Given it is the same account, profile prefs should keep the same state.
-  identity_test_env_.SetPrimaryAccount(account_info.email,
+  identity_test_env_.SetPrimaryAccount(account_info.GetEmail(),
                                        signin::ConsentLevel::kSync);
   EXPECT_TRUE(entry->IsAuthenticated());
   CheckProfilePrefsSet(pref_service, false);
@@ -189,7 +187,7 @@ TEST_F(SigninProfileAttributesUpdaterTest,
   EXPECT_TRUE(entry->IsAuthenticated());
   CheckProfilePrefsReset(pref_service, false);
 }
-#endif  // !defined(OS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 class SigninProfileAttributesUpdaterWithForceSigninTest
     : public SigninProfileAttributesUpdaterTest {
@@ -220,4 +218,4 @@ TEST_F(SigninProfileAttributesUpdaterWithForceSigninTest, IsSigninRequired) {
   EXPECT_EQ(entry->GetSigninState(), SigninState::kNotSignedIn);
   EXPECT_TRUE(entry->IsSigninRequired());
 }
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_CHROMEOS)

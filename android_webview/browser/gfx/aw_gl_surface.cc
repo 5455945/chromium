@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,9 +13,17 @@
 
 namespace android_webview {
 
-AwGLSurface::AwGLSurface(bool is_angle) : is_angle_(is_angle) {}
+AwGLSurface::AwGLSurface(gl::GLDisplayEGL* display, bool is_angle)
+    : gl::GLSurfaceEGL(display), is_angle_(is_angle) {}
+
+AwGLSurface::AwGLSurface(gl::GLDisplayEGL* display,
+                         scoped_refptr<gl::GLSurface> surface)
+    : gl::GLSurfaceEGL(display),
+      is_angle_(false),
+      wrapped_surface_(std::move(surface)) {}
 
 AwGLSurface::~AwGLSurface() {
+  InvalidateWeakPtrs();
   Destroy();
 }
 
@@ -27,28 +35,30 @@ bool AwGLSurface::Initialize(gl::GLSurfaceFormat format) {
 
   EGLint attribs[] = {EGL_WIDTH,      size_.width(), EGL_HEIGHT,
                       size_.height(), EGL_NONE,      EGL_NONE};
-  surface_ = eglCreatePbufferFromClientBuffer(
-      GetDisplay(), EGL_EXTERNAL_SURFACE_ANGLE, nullptr, GetConfig(), attribs);
+  surface_ = eglCreatePbufferFromClientBuffer(GetGLDisplay()->GetDisplay(),
+                                              EGL_EXTERNAL_SURFACE_ANGLE,
+                                              nullptr, GetConfig(), attribs);
   DCHECK_NE(surface_, EGL_NO_SURFACE);
   return surface_ != EGL_NO_SURFACE;
 }
 
 void AwGLSurface::Destroy() {
   if (surface_) {
-    eglDestroySurface(GetDisplay(), surface_);
+    eglDestroySurface(GetGLDisplay()->GetDisplay(), surface_);
     surface_ = nullptr;
   }
 }
 
 bool AwGLSurface::IsOffscreen() {
-  return false;
+  return true;
 }
 
 unsigned int AwGLSurface::GetBackingFramebufferObject() {
   return ScopedAppGLStateRestore::Current()->framebuffer_binding_ext();
 }
 
-gfx::SwapResult AwGLSurface::SwapBuffers(PresentationCallback callback) {
+gfx::SwapResult AwGLSurface::SwapBuffers(PresentationCallback callback,
+                                         gfx::FrameData data) {
   DCHECK(!pending_presentation_callback_);
   pending_presentation_callback_ = std::move(callback);
   return gfx::SwapResult::SWAP_ACK;
@@ -59,13 +69,17 @@ gfx::Size AwGLSurface::GetSize() {
 }
 
 void* AwGLSurface::GetHandle() {
+  if (wrapped_surface_)
+    return wrapped_surface_->GetHandle();
   return surface_;
 }
 
-void* AwGLSurface::GetDisplay() {
+gl::GLDisplay* AwGLSurface::GetGLDisplay() {
+  if (wrapped_surface_)
+    return wrapped_surface_->GetGLDisplay();
   if (!is_angle_)
     return nullptr;
-  return gl::GLSurfaceEGL::GetDisplay();
+  return gl::GLSurfaceEGL::GetGLDisplay();
 }
 
 gl::GLSurfaceFormat AwGLSurface::GetFormat() {
@@ -83,11 +97,19 @@ bool AwGLSurface::Resize(const gfx::Size& size,
   return Initialize(gl::GLSurfaceFormat());
 }
 
+bool AwGLSurface::OnMakeCurrent(gl::GLContext* context) {
+  if (!gl::GLSurfaceEGL::OnMakeCurrent(context))
+    return false;
+  return !wrapped_surface_ || wrapped_surface_->OnMakeCurrent(context);
+}
+
 void AwGLSurface::SetSize(const gfx::Size& size) {
   size_ = size;
 }
 
 EGLConfig AwGLSurface::GetConfig() {
+  if (wrapped_surface_)
+    return wrapped_surface_->GetConfig();
   if (!is_angle_)
     return nullptr;
   return gl::GLSurfaceEGL::GetConfig();

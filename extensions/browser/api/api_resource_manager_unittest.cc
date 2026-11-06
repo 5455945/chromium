@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,13 @@
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/api/api_resource.h"
 #include "extensions/browser/api_unittest.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using content::BrowserThread;
 
@@ -45,15 +48,15 @@ TEST_F(ApiResourceManagerUnitTest, TwoAppsCannotShareResources) {
   CHECK(resource_two_id);
 
   // Confirm each extension can get its own resource.
-  ASSERT_TRUE(manager->Get(extension_one_id, resource_one_id) != NULL);
-  ASSERT_TRUE(manager->Get(extension_two_id, resource_two_id) != NULL);
+  ASSERT_TRUE(manager->Get(extension_one_id, resource_one_id) != nullptr);
+  ASSERT_TRUE(manager->Get(extension_two_id, resource_two_id) != nullptr);
 
   // Confirm neither extension can get the other's resource.
-  ASSERT_TRUE(manager->Get(extension_one_id, resource_two_id) == NULL);
-  ASSERT_TRUE(manager->Get(extension_two_id, resource_one_id) == NULL);
+  ASSERT_TRUE(manager->Get(extension_one_id, resource_two_id) == nullptr);
+  ASSERT_TRUE(manager->Get(extension_two_id, resource_one_id) == nullptr);
 
   // And make sure we're not susceptible to any Jedi mind tricks.
-  ASSERT_TRUE(manager->Get(std::string(), resource_one_id) == NULL);
+  ASSERT_TRUE(manager->Get(std::string(), resource_one_id) == nullptr);
 }
 
 }  // namespace extensions

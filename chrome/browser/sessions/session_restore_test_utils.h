@@ -1,36 +1,35 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SESSIONS_SESSION_RESTORE_TEST_UTILS_H_
 #define CHROME_BROWSER_SESSIONS_SESSION_RESTORE_TEST_UTILS_H_
 
-#include "base/macros.h"
-#include "chrome/browser/resource_coordinator/session_restore_policy.h"
+#include "base/callback_list.h"
+#include "base/functional/callback_forward.h"
+
+class Profile;
 
 namespace testing {
 
-// SessionRestorePolicy that always allow tabs to load.
-class AlwayLoadSessionRestorePolicy
-    : public resource_coordinator::SessionRestorePolicy {
+// This class waits for a specified number of sessions to be restored.
+class SessionsRestoredWaiter {
  public:
-  AlwayLoadSessionRestorePolicy() = default;
-  ~AlwayLoadSessionRestorePolicy() override = default;
-
-  // Always allow tabs to load so we can test the behavior of SessionRestore
-  // independently from the policy logic.
-  bool ShouldLoad(content::WebContents* contents) const override;
-};
-
-class ScopedAlwaysLoadSessionRestoreTestPolicy {
- public:
-  ScopedAlwaysLoadSessionRestoreTestPolicy();
-  ~ScopedAlwaysLoadSessionRestoreTestPolicy();
+  explicit SessionsRestoredWaiter(base::OnceClosure quit_closure,
+                                  int num_session_restores_expected);
+  SessionsRestoredWaiter(const SessionsRestoredWaiter&) = delete;
+  SessionsRestoredWaiter& operator=(const SessionsRestoredWaiter&) = delete;
+  ~SessionsRestoredWaiter();
 
  private:
-  AlwayLoadSessionRestorePolicy policy_;
+  // Callback for session restore notifications.
+  void OnSessionRestoreDone(Profile* profile, int num_tabs_restored);
 
-  DISALLOW_COPY_AND_ASSIGN(ScopedAlwaysLoadSessionRestoreTestPolicy);
+  // For automatically unsubscribing from callback-based notifications.
+  base::CallbackListSubscription callback_subscription_;
+  base::OnceClosure quit_closure_;
+  int num_session_restores_expected_;
+  int num_sessions_restored_ = 0;
 };
 
 }  // namespace testing

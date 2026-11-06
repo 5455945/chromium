@@ -20,7 +20,9 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_FONT_METRICS_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_FONT_METRICS_H_
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <optional>
+
+#include "base/types/strong_alias.h"
 #include "third_party/blink/renderer/platform/fonts/font_baseline.h"
 #include "third_party/blink/renderer/platform/fonts/font_height.h"
 #include "third_party/blink/renderer/platform/fonts/font_metrics_override.h"
@@ -32,33 +34,22 @@ class SkFont;
 
 namespace blink {
 
-const unsigned kGDefaultUnitsPerEm = 1000;
 class FontPlatformData;
 
-class FontMetrics {
+class PLATFORM_EXPORT FontMetrics {
   DISALLOW_NEW();
 
  public:
-  FontMetrics()
-      : units_per_em_(kGDefaultUnitsPerEm),
-        float_ascent_(0),
-        float_descent_(0),
-        line_gap_(0),
-        line_spacing_(0),
-        x_height_(0),
-        zero_width_(0),
-        int_ascent_(0),
-        int_descent_(0),
-        has_x_height_(false),
-        has_zero_width_(false) {}
+  using ApplyBaselineTable =
+      base::StrongAlias<class ApplyBaselineTableTag, bool>;
 
-  unsigned UnitsPerEm() const { return units_per_em_; }
-  void SetUnitsPerEm(unsigned units_per_em) { units_per_em_ = units_per_em; }
-
-  float FloatAscent(FontBaseline baseline_type = kAlphabeticBaseline) const {
-    if (baseline_type == kAlphabeticBaseline)
+  float FloatAscent(FontBaseline baseline_type = FontBaseline::kAlphabetic,
+                    ApplyBaselineTable apply_baseline_table =
+                        ApplyBaselineTable(false)) const {
+    if (baseline_type == FontBaseline::kAlphabetic) {
       return float_ascent_;
-    return FloatAscentInternal(baseline_type);
+    }
+    return FloatAscentInternal(baseline_type, apply_baseline_table);
   }
 
   void SetAscent(float ascent) {
@@ -66,10 +57,14 @@ class FontMetrics {
     int_ascent_ = static_cast<int>(lroundf(ascent));
   }
 
-  float FloatDescent(FontBaseline baseline_type = kAlphabeticBaseline) const {
-    if (baseline_type == kAlphabeticBaseline)
+  float FloatDescent(FontBaseline baseline_type = FontBaseline::kAlphabetic,
+                     ApplyBaselineTable apply_baseline_table =
+                         ApplyBaselineTable(false)) const {
+    if (baseline_type == FontBaseline::kAlphabetic) {
       return float_descent_;
-    return FloatHeight() - FloatAscentInternal(baseline_type);
+    }
+    return FloatHeight() -
+           FloatAscentInternal(baseline_type, apply_baseline_table);
   }
 
   void SetDescent(float descent) {
@@ -79,13 +74,28 @@ class FontMetrics {
 
   float FloatHeight() const { return float_ascent_ + float_descent_; }
 
-  float FloatLineGap() const { return line_gap_; }
-  void SetLineGap(float line_gap) { line_gap_ = line_gap; }
+  float ConvertBaseline(float value,
+                        FontBaseline to,
+                        FontBaseline from = FontBaseline::kAlphabetic) const {
+    return from == to ? value : FloatAscent(to) - FloatAscent(from) + value;
+  }
+  float Alphabetic(FontBaseline baseline_type) const {
+    return ConvertBaseline(0, baseline_type);
+  }
 
-  float FloatLineSpacing() const { return line_spacing_; }
+  float CapHeight() const { return cap_height_; }
+  float CapHeight(FontBaseline baseline_type) const {
+    return ConvertBaseline(CapHeight(), baseline_type);
+  }
+  void SetCapHeight(float cap_height) { cap_height_ = cap_height; }
+
+  int LineSpacing() const { return static_cast<int>(lroundf(line_spacing_)); }
   void SetLineSpacing(float line_spacing) { line_spacing_ = line_spacing; }
 
   float XHeight() const { return x_height_; }
+  float XHeight(FontBaseline baseline_type) const {
+    return ConvertBaseline(XHeight(), baseline_type);
+  }
   void SetXHeight(float x_height) {
     x_height_ = x_height;
     has_x_height_ = true;
@@ -95,34 +105,49 @@ class FontMetrics {
   void SetHasXHeight(bool has_x_height) { has_x_height_ = has_x_height; }
 
   // Integer variants of certain metrics, used for HTML rendering.
-  int Ascent(FontBaseline baseline_type = kAlphabeticBaseline) const {
-    if (baseline_type == kAlphabeticBaseline)
+  int Ascent(FontBaseline baseline_type = FontBaseline::kAlphabetic,
+             ApplyBaselineTable apply_baseline_table =
+                 ApplyBaselineTable(false)) const {
+    if (baseline_type == FontBaseline::kAlphabetic) {
       return int_ascent_;
-    return IntAscentInternal(baseline_type);
+    }
+    return IntAscentInternal(baseline_type, apply_baseline_table);
   }
 
-  int Descent(FontBaseline baseline_type = kAlphabeticBaseline) const {
-    if (baseline_type == kAlphabeticBaseline)
+  int Descent(FontBaseline baseline_type = FontBaseline::kAlphabetic,
+              ApplyBaselineTable apply_baseline_table =
+                  ApplyBaselineTable(false)) const {
+    if (baseline_type == FontBaseline::kAlphabetic) {
       return int_descent_;
-    return Height() - IntAscentInternal(baseline_type);
+    }
+    return Height() - IntAscentInternal(baseline_type, apply_baseline_table);
   }
 
   int Height() const { return int_ascent_ + int_descent_; }
-
-  int LineGap() const { return static_cast<int>(lroundf(line_gap_)); }
-  int LineSpacing() const { return static_cast<int>(lroundf(line_spacing_)); }
 
   // LayoutUnit variants of certain metrics.
   // LayoutNG should use LayoutUnit for the block progression metrics.
   // TODO(kojii): Consider keeping converted values.
   LayoutUnit FixedAscent(
-      FontBaseline baseline_type = kAlphabeticBaseline) const {
+      FontBaseline baseline_type = FontBaseline::kAlphabetic) const {
     return LayoutUnit::FromFloatRound(FloatAscent(baseline_type));
   }
 
   LayoutUnit FixedDescent(
-      FontBaseline baseline_type = kAlphabeticBaseline) const {
+      FontBaseline baseline_type = FontBaseline::kAlphabetic) const {
     return LayoutUnit::FromFloatRound(FloatDescent(baseline_type));
+  }
+
+  LayoutUnit FixedAlphabetic(FontBaseline baseline_type) const {
+    return LayoutUnit::FromFloatRound(Alphabetic(baseline_type));
+  }
+
+  LayoutUnit FixedCapHeight(FontBaseline baseline_type) const {
+    return LayoutUnit::FromFloatRound(CapHeight(baseline_type));
+  }
+
+  LayoutUnit FixedXHeight(FontBaseline baseline_type) const {
+    return LayoutUnit::FromFloatRound(XHeight(baseline_type));
   }
 
   LayoutUnit FixedLineSpacing() const {
@@ -134,16 +159,11 @@ class FontMetrics {
   }
 
   FontHeight GetFontHeight(
-      FontBaseline baseline_type = kAlphabeticBaseline) const {
+      FontBaseline baseline_type = FontBaseline::kAlphabetic) const {
     // TODO(kojii): In future, we'd like to use LayoutUnit metrics to support
     // sub-CSS-pixel layout.
     return FontHeight(LayoutUnit(Ascent(baseline_type)),
                       LayoutUnit(Descent(baseline_type)));
-  }
-
-  bool HasIdenticalAscentDescentAndLineGap(const FontMetrics& other) const {
-    return Ascent() == other.Ascent() && Descent() == other.Descent() &&
-           LineGap() == other.LineGap();
   }
 
   float ZeroWidth() const { return zero_width_; }
@@ -153,22 +173,41 @@ class FontMetrics {
   }
 
   bool HasZeroWidth() const { return has_zero_width_; }
-  void SetHasZeroWidth(bool has_zero_width) {
-    has_zero_width_ = has_zero_width;
-  }
 
-  absl::optional<float> UnderlineThickness() const {
+  std::optional<float> UnderlineThickness() const {
     return underline_thickness_;
   }
   void SetUnderlineThickness(float underline_thickness) {
     underline_thickness_ = underline_thickness;
   }
 
-  absl::optional<float> UnderlinePosition() const {
-    return underline_position_;
-  }
+  std::optional<float> UnderlinePosition() const { return underline_position_; }
   void SetUnderlinePosition(float underline_position) {
     underline_position_ = underline_position;
+  }
+
+  void SetIdeographicBaseline(std::optional<float> value) {
+    ideographic_baseline_position_ = value;
+  }
+
+  std::optional<float> IdeographicBaseline() const {
+    return ideographic_baseline_position_;
+  }
+
+  void SetAlphabeticBaseline(std::optional<float> value) {
+    alphabetic_baseline_position_ = value;
+  }
+
+  std::optional<float> AlphabeticBaseline() const {
+    return alphabetic_baseline_position_;
+  }
+
+  void SetHangingBaseline(std::optional<float> value) {
+    hanging_baseline_position_ = value;
+  }
+
+  std::optional<float> HangingBaseline() const {
+    return hanging_baseline_position_;
   }
 
   // Unfortunately we still need to keep metrics adjustments for certain Mac
@@ -178,47 +217,51 @@ class FontMetrics {
   static void AscentDescentWithHacks(
       float& ascent,
       float& descent,
-      unsigned& visual_overflow_inflation_for_ascent,
-      unsigned& visual_overflow_inflation_for_descent,
       const FontPlatformData&,
       const SkFont&,
       bool subpixel_ascent_descent = false,
-      absl::optional<float> ascent_override = absl::nullopt,
-      absl::optional<float> descent_override = absl::nullopt);
+      std::optional<float> ascent_override = std::nullopt,
+      std::optional<float> descent_override = std::nullopt);
 
  private:
   friend class SimpleFontData;
 
   void Reset() {
-    units_per_em_ = kGDefaultUnitsPerEm;
+    cap_height_ = 0;
     float_ascent_ = 0;
     float_descent_ = 0;
     int_ascent_ = 0;
     int_descent_ = 0;
-    line_gap_ = 0;
     line_spacing_ = 0;
     x_height_ = 0;
     has_x_height_ = false;
     underline_thickness_.reset();
     underline_position_.reset();
+    ideographic_baseline_position_.reset();
+    alphabetic_baseline_position_.reset();
+    hanging_baseline_position_.reset();
   }
 
-  PLATFORM_EXPORT float FloatAscentInternal(FontBaseline baseline_type) const;
-  PLATFORM_EXPORT int IntAscentInternal(FontBaseline baseline_type) const;
+  float FloatAscentInternal(FontBaseline baseline_type,
+                            ApplyBaselineTable apply_baseline_table) const;
+  int IntAscentInternal(FontBaseline baseline_type,
+                        ApplyBaselineTable apply_baseline_table) const;
 
-  unsigned units_per_em_;
-  float float_ascent_;
-  float float_descent_;
-  float line_gap_;
-  float line_spacing_;
-  float x_height_;
-  float zero_width_;
-  absl::optional<float> underline_thickness_ = absl::nullopt;
-  absl::optional<float> underline_position_ = absl::nullopt;
-  int int_ascent_;
-  int int_descent_;
-  bool has_x_height_;
-  bool has_zero_width_;
+  float cap_height_ = 0;
+  float float_ascent_ = 0;
+  float float_descent_ = 0;
+  float line_spacing_ = 0;
+  float x_height_ = 0;
+  float zero_width_ = 0;
+  std::optional<float> underline_thickness_;
+  std::optional<float> underline_position_;
+  std::optional<float> ideographic_baseline_position_;
+  std::optional<float> alphabetic_baseline_position_;
+  std::optional<float> hanging_baseline_position_;
+  int int_ascent_ = 0;
+  int int_descent_ = 0;
+  bool has_x_height_ = false;
+  bool has_zero_width_ = false;
 };
 
 }  // namespace blink

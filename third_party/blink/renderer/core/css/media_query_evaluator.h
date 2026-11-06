@@ -29,20 +29,30 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_MEDIA_QUERY_EVALUATOR_H_
 
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/core/css/kleene_value.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
 
+class CSSValue;
+class Document;
 class LocalFrame;
 class MediaQuery;
-class MediaQueryExp;
-class MediaQueryResult;
+class ConditionalExpNode;
+class MediaQueryFeatureExpNode;
+enum class MediaQueryOperator;
 class MediaQuerySet;
 class MediaQuerySetResult;
 class MediaValues;
+struct MediaQueryResultFlags;
+class StyleRuleCustomMedia;
 
-using MediaQueryResultList = Vector<MediaQueryResult>;
+using CustomMediaRulesMap =
+    HeapHashMap<AtomicString, Member<StyleRuleCustomMedia>>;
 
 // Class that evaluates css media queries as defined in
 // CSS3 Module "Media Queries" (http://www.w3.org/TR/css3-mediaqueries/)
@@ -70,49 +80,74 @@ class CORE_EXPORT MediaQueryEvaluator final
   // Creates evaluator which evaluates full media queries.
   explicit MediaQueryEvaluator(LocalFrame*);
 
-  // Creates evaluator which evaluates in a thread-safe manner a subset of media
-  // values.
-  explicit MediaQueryEvaluator(const MediaValues&);
+  // Create an evaluator for container queries and preload scanning.
+  explicit MediaQueryEvaluator(const MediaValues*);
 
   MediaQueryEvaluator(const MediaQueryEvaluator&) = delete;
   MediaQueryEvaluator& operator=(const MediaQueryEvaluator&) = delete;
 
   ~MediaQueryEvaluator();
 
+  const MediaValues& GetMediaValues() const { return *media_values_; }
+
+  const Document* GetDocument() const;
+
   bool MediaTypeMatch(const String& media_type_to_match) const;
 
   // Evaluates a list of media queries.
+  bool Eval(const MediaQuerySet&) const;
+  // Custom media cycles must be filtered out before calling Eval;
+  // `CustomMediaRulesMap` should not contain cycles.
   bool Eval(const MediaQuerySet&,
-            MediaQueryResultList* viewport_dependent = nullptr,
-            MediaQueryResultList* device_dependent = nullptr) const;
+            MediaQueryResultFlags*,
+            const CustomMediaRulesMap* = nullptr) const;
 
   // Evaluates media query.
-  bool Eval(const MediaQuery&,
-            MediaQueryResultList* viewport_dependent = nullptr,
-            MediaQueryResultList* device_dependent = nullptr) const;
+  KleeneValue Eval(const MediaQuery&) const;
+  KleeneValue Eval(const MediaQuery&, MediaQueryResultFlags*) const;
+  // Custom media cycles must be filtered out before calling Eval;
+  // `CustomMediaRulesMap` should not contain cycles.
+  KleeneValue Eval(const MediaQuery&,
+                   MediaQueryResultFlags*,
+                   const CustomMediaRulesMap*) const;
 
-  // Evaluates media query subexpression, ie "and (media-feature: value)" part.
-  bool Eval(const MediaQueryExp&) const;
+  // https://drafts.csswg.org/mediaqueries-4/#evaluating
+  KleeneValue Eval(const ConditionalExpNode&) const;
+  // Custom media cycles must be filtered out before calling Eval;
+  // `CustomMediaRulesMap` should not contain cycles.
+  KleeneValue Eval(const ConditionalExpNode&,
+                   MediaQueryResultFlags*,
+                   const CustomMediaRulesMap* = nullptr) const;
 
-  // Returns true if any of the expressions in the results lists changed its
-  // evaluation.
-  bool DidResultsChange(const MediaQueryResultList& results) const;
+  static KleeneValue EvalStyleRange(const CSSValue& reference_value,
+                                    const CSSValue& query_value,
+                                    MediaQueryOperator op,
+                                    bool reverse_op);
 
   // Returns true if any of the media queries in the results lists changed its
   // evaluation.
-  bool DidResultsChange(const Vector<MediaQuerySetResult>& results) const;
+  bool DidResultsChange(const HeapVector<MediaQuerySetResult>& results) const;
+  bool DidResultsChange(
+      const HeapHashMap<Member<const MediaQuerySet>, bool>& results) const;
 
   void Trace(Visitor*) const;
 
  private:
+  KleeneValue EvalFeature(const MediaQueryFeatureExpNode&,
+                          MediaQueryResultFlags*,
+                          const CustomMediaRulesMap*) const;
+  KleeneValue EvalStyleFeature(const MediaQueryFeatureExpNode&,
+                               MediaQueryResultFlags*) const;
+  // Evaluates a custom media query.
+  // https://drafts.csswg.org/mediaqueries-5/#custom-mq
+  KleeneValue EvalCustomMedia(const StyleRuleCustomMedia*,
+                              MediaQueryResultFlags*,
+                              const CustomMediaRulesMap*) const;
+
   const String MediaType() const;
 
   String media_type_;
-  Member<MediaValues> media_values_;
-
-  // Even if UKM reporting is enabled, do not report any media query evaluation
-  // results if this is set to true.
-  mutable bool skip_ukm_reporting_{false};
+  Member<const MediaValues> media_values_;
 };
 
 }  // namespace blink

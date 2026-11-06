@@ -1,10 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chromecast/graphics/cast_focus_client_aura.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/logging.h"
 #include "ui/aura/window.h"
 
@@ -59,8 +60,7 @@ void CastFocusClientAura::OnWindowDestroying(aura::Window* window) {
   DCHECK(top_level);
   DLOG(INFO) << "Removing window, " << LOG_WINDOW_INFO(top_level, window);
 
-  auto iter =
-      std::find(focusable_windows_.begin(), focusable_windows_.end(), window);
+  auto iter = std::ranges::find(focusable_windows_, window);
   if (iter != focusable_windows_.end()) {
     focusable_windows_.erase(iter);
     window->RemoveObserver(this);
@@ -126,7 +126,7 @@ void CastFocusClientAura::FocusWindow(aura::Window* window) {
     aura::Window* top_level = GetZOrderWindow(window);
     DCHECK(top_level);
     DLOG(INFO) << "Requesting focus for " << LOG_WINDOW_INFO(top_level, window);
-    if (!base::Contains(focusable_windows_, window)) {
+    if (!std::ranges::contains(focusable_windows_, window)) {
       // We're not yet tracking this focusable window, so start tracking it as a
       // potential focus target.
       window->AddObserver(this);

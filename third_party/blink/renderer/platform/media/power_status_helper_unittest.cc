@@ -1,8 +1,8 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "third_party/blink/public/platform/media/power_status_helper.h"
+#include "third_party/blink/renderer/platform/media/power_status_helper.h"
 
 #include <memory>
 #include <tuple>
@@ -14,38 +14,33 @@
 #include "base/test/mock_callback.h"
 #include "base/test/task_environment.h"
 #include "media/base/pipeline_metadata.h"
-#include "services/device/public/mojom/battery_status.mojom.h"
+#include "mojo/public/cpp/bindings/receiver.h"
+#include "services/device/public/mojom/battery_status.mojom-blink.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
-namespace media {
+namespace blink {
 
-using ::testing::_;
-using ::testing::AnyNumber;
 using ::testing::Bool;
 using ::testing::Combine;
-using ::testing::Eq;
-using ::testing::Gt;
-using ::testing::Lt;
-using ::testing::ResultOf;
-using ::testing::Return;
 using ::testing::Values;
 
 class PowerStatusHelperTest : public testing::Test {
  public:
-  class MockBatteryMonitor : public device::mojom::BatteryMonitor {
+  class MockBatteryMonitor : public device::mojom::blink::BatteryMonitor {
    public:
     MOCK_METHOD0(DidGetBatteryMonitor, void());
     MOCK_METHOD0(DidQueryNextStatus, void());
     MOCK_METHOD0(DidDisconnect, void());
 
-    ~MockBatteryMonitor() {
+    ~MockBatteryMonitor() override {
       // Mojo gets mad if we don't finish up outstanding callbacks.
       if (callback_)
-        ProvidePowerUpdate(0, 0);
+        ProvidePowerUpdate(false, 0);
     }
 
-    // device::mojom::BatteryMonitor
+    // device::mojom::blink::BatteryMonitor
     void QueryNextStatus(QueryNextStatusCallback callback) override {
       DidQueryNextStatus();
       callback_ = std::move(callback);
@@ -53,43 +48,45 @@ class PowerStatusHelperTest : public testing::Test {
 
     // Would be nice to use a MockCallback for this, but a move-only return type
     // doesn't seem to work.
-    mojo::PendingRemote<device::mojom::BatteryMonitor> GetBatteryMonitor() {
+    mojo::PendingRemote<device::mojom::blink::BatteryMonitor>
+    GetBatteryMonitor() {
       DidGetBatteryMonitor();
       switch (remote_type_) {
         case RemoteType::kConnected:
         case RemoteType::kDisconnected: {
           auto pending = receiver_.BindNewPipeAndPassRemote();
-          receiver_.set_disconnect_handler(base::BindOnce(
-              &MockBatteryMonitor::DidDisconnect, base::Unretained(this)));
+          receiver_.set_disconnect_handler(
+              BindOnce(&MockBatteryMonitor::DidDisconnect, Unretained(this)));
           if (remote_type_ == RemoteType::kDisconnected)
             receiver_.reset();
           base::RunLoop().RunUntilIdle();
           return pending;
         }
         case RemoteType::kEmpty:
-          return mojo::PendingRemote<device::mojom::BatteryMonitor>();
+          return mojo::PendingRemote<device::mojom::blink::BatteryMonitor>();
       }
     }
 
     // Would be nice if this were base::MockCallback, but move-only types don't
     // seem to work.
     PowerStatusHelper::CreateBatteryMonitorCB cb() {
-      return base::BindRepeating(&MockBatteryMonitor::GetBatteryMonitor,
-                                 base::Unretained(this));
+      return BindRepeating(&MockBatteryMonitor::GetBatteryMonitor,
+                           Unretained(this));
     }
 
     // Provide a battery update via |callback_|.
     void ProvidePowerUpdate(bool is_charging, float current_level) {
       EXPECT_TRUE(callback_);
-      device::mojom::BatteryStatusPtr status =
-          device::mojom::BatteryStatus::New(is_charging, 0, /* charging time */
-                                            0, /* discharging time */
-                                            current_level);
+      device::mojom::blink::BatteryStatusPtr status =
+          device::mojom::blink::BatteryStatus::New(is_charging,
+                                                   /*charging_time=*/0,
+                                                   /*discharging_time=*/0,
+                                                   current_level);
       std::move(callback_).Run(std::move(status));
       base::RunLoop().RunUntilIdle();
     }
 
-    mojo::Receiver<device::mojom::BatteryMonitor> receiver_{this};
+    mojo::Receiver<device::mojom::blink::BatteryMonitor> receiver_{this};
 
     // If false, then GetBatteryMonitor will not return a monitor.
     enum class RemoteType {
@@ -117,7 +114,7 @@ class PowerStatusHelperTest : public testing::Test {
     media::PipelineMetadata metadata;
     metadata.has_video = true;
     metadata.video_decoder_config = media::VideoDecoderConfig(
-        media::kCodecH264, media::H264PROFILE_MAIN,
+        media::VideoCodec::kH264, media::H264PROFILE_MAIN,
         media::VideoDecoderConfig::AlphaMode::kIsOpaque,
         media::VideoColorSpace(), media::VideoTransformation(),
         gfx::Size(0, 0),        /* coded_size */
@@ -139,24 +136,6 @@ class PowerStatusHelperTest : public testing::Test {
            PowerStatusHelper::kFrameRate60 |
            (alternate ? PowerStatusHelper::kFullScreenYes
                       : PowerStatusHelper::kFullScreenNo);
-  }
-
-  void FastForward(base::TimeDelta delta) {
-    task_environment_.FastForwardBy(delta);
-  }
-
-  // Verify that we've added |battery_delta| and |time_delta| to |bucket| in
-  // both histograms.
-  void VerifyHistogramDelta(int bucket,
-                            int battery_delta,
-                            base::TimeDelta time_delta) {
-    // Since histograms are cumulative, include the new counts.
-    total_battery_delta += battery_delta;
-    total_time_delta += time_delta.InMilliseconds();
-    histogram_tester_.ExpectBucketCount(helper_->BatteryDeltaHistogram(),
-                                        bucket, total_battery_delta);
-    histogram_tester_.ExpectBucketCount(helper_->ElapsedTimeHistogram(), bucket,
-                                        total_time_delta);
   }
 
  protected:
@@ -200,32 +179,13 @@ TEST_F(PowerStatusHelperTest, BasicReportingWithFractionalAmounts) {
   // over to the next call.
   EXPECT_CALL(monitor_, DidGetBatteryMonitor()).Times(1);
   EXPECT_CALL(monitor_, DidQueryNextStatus()).Times(1);
-  const int bucket = MakeRecordable();
+  MakeRecordable();
 
   const float baseline_level = 0.9;
-  // Will round to 10%.
-  const float second_level = baseline_level - 0.106;
-  // Will round to 11% (plus a little).
-  const float third_level = second_level - 0.106;
 
   // This should be the baseline.
   EXPECT_CALL(monitor_, DidQueryNextStatus()).Times(1);
   monitor_.ProvidePowerUpdate(false, baseline_level);
-
-  // This should trigger recording.
-  base::TimeDelta time_delta = base::TimeDelta::FromSeconds(1);
-  FastForward(time_delta);
-
-  EXPECT_CALL(monitor_, DidQueryNextStatus()).Times(1);
-  monitor_.ProvidePowerUpdate(false, second_level);
-  VerifyHistogramDelta(bucket, 10, time_delta);
-
-  // This should also record, and pick up the fractional percentage drop that
-  // wasn't included in the previous one.
-  FastForward(time_delta);
-  EXPECT_CALL(monitor_, DidQueryNextStatus()).Times(1);
-  monitor_.ProvidePowerUpdate(false, third_level);
-  VerifyHistogramDelta(bucket, 11, time_delta);
 }
 
 TEST_F(PowerStatusHelperTest, ChargingResetsBaseline) {
@@ -233,7 +193,7 @@ TEST_F(PowerStatusHelperTest, ChargingResetsBaseline) {
   // Make sure that the baseline resets.
   EXPECT_CALL(monitor_, DidGetBatteryMonitor()).Times(1);
   EXPECT_CALL(monitor_, DidQueryNextStatus()).Times(1);
-  const int bucket = MakeRecordable();
+  MakeRecordable();
 
   const float fake_baseline_level = 0.95;
   const float baseline_level = 0.9;
@@ -250,13 +210,6 @@ TEST_F(PowerStatusHelperTest, ChargingResetsBaseline) {
   // This should be the correct baseline.
   EXPECT_CALL(monitor_, DidQueryNextStatus()).Times(1);
   monitor_.ProvidePowerUpdate(false, baseline_level);
-
-  // This should trigger recording.
-  base::TimeDelta time_delta = base::TimeDelta::FromSeconds(1);
-  FastForward(time_delta);
-  EXPECT_CALL(monitor_, DidQueryNextStatus()).Times(1);
-  monitor_.ProvidePowerUpdate(false, second_level);
-  VerifyHistogramDelta(bucket, 10, time_delta);
 }
 
 TEST_F(PowerStatusHelperTest, ExperimentStateStopsRecording) {
@@ -284,7 +237,6 @@ TEST_F(PowerStatusHelperTest, ChangingBucketsWorks) {
 
   const float fake_baseline_level = 0.95;
   const float baseline_level = 0.9;
-  const float second_level = baseline_level - 0.10;
 
   // Send the fake baseline.
   EXPECT_CALL(monitor_, DidQueryNextStatus()).Times(1);
@@ -297,13 +249,6 @@ TEST_F(PowerStatusHelperTest, ChangingBucketsWorks) {
   // This should be the correct baseline.
   EXPECT_CALL(monitor_, DidQueryNextStatus()).Times(1);
   monitor_.ProvidePowerUpdate(false, baseline_level);
-
-  // This should trigger recording.
-  base::TimeDelta time_delta = base::TimeDelta::FromSeconds(1);
-  FastForward(time_delta);
-  EXPECT_CALL(monitor_, DidQueryNextStatus()).Times(1);
-  monitor_.ProvidePowerUpdate(false, second_level);
-  VerifyHistogramDelta(second_bucket, 10, time_delta);
 }
 
 TEST_F(PowerStatusHelperTest, UnbucketedVideoStopsRecording) {
@@ -344,13 +289,13 @@ using PlaybackParamsTuple = std::tuple<bool,                    /* is_playing */
 class PowerStatusHelperBucketTest
     : public testing::TestWithParam<PlaybackParamsTuple> {
  public:
-  absl::optional<int> BucketFor(bool is_playing,
-                                bool has_video,
-                                media::VideoCodec codec,
-                                media::VideoCodecProfile profile,
-                                gfx::Size coded_size,
-                                bool is_fullscreen,
-                                absl::optional<int> average_fps) {
+  std::optional<int> BucketFor(bool is_playing,
+                               bool has_video,
+                               media::VideoCodec codec,
+                               media::VideoCodecProfile profile,
+                               gfx::Size coded_size,
+                               bool is_fullscreen,
+                               std::optional<int> average_fps) {
     return PowerStatusHelper::BucketFor(is_playing, has_video, codec, profile,
                                         coded_size, is_fullscreen, average_fps);
   }
@@ -372,17 +317,17 @@ TEST_P(PowerStatusHelperBucketTest, TestBucket) {
   media::VideoCodec codec;
   media::VideoCodecProfile profile;
   if (codec_bits == PowerStatusHelper::Bits::kCodecBitsH264) {
-    codec = media::kCodecH264;
+    codec = media::VideoCodec::kH264;
     profile = media::H264PROFILE_MAIN;
   } else if (codec_bits == PowerStatusHelper::Bits::kCodecBitsVP9Profile0) {
-    codec = media::kCodecVP9;
+    codec = media::VideoCodec::kVP9;
     profile = media::VP9PROFILE_PROFILE0;
   } else if (codec_bits == PowerStatusHelper::Bits::kCodecBitsVP9Profile2) {
-    codec = media::kCodecVP9;
+    codec = media::VideoCodec::kVP9;
     profile = media::VP9PROFILE_PROFILE2;
   } else {
     // Some unsupported codec.
-    codec = media::kCodecVP8;
+    codec = media::VideoCodec::kVP8;
     profile = media::VIDEO_CODEC_PROFILE_UNKNOWN;
     expect_bucket = false;
   }
@@ -401,7 +346,7 @@ TEST_P(PowerStatusHelperBucketTest, TestBucket) {
   }
 
   auto fps = std::get<4>(GetParam());
-  absl::optional<int> average_fps;
+  std::optional<int> average_fps;
   if (fps == PowerStatusHelper::Bits::kFrameRate30) {
     average_fps = 30;
   } else if (fps == PowerStatusHelper::Bits::kFrameRate60) {
@@ -444,4 +389,4 @@ INSTANTIATE_TEST_SUITE_P(
             Values(PowerStatusHelper::Bits::kFullScreenNo,
                    PowerStatusHelper::Bits::kFullScreenYes)));
 
-}  // namespace media
+}  // namespace blink

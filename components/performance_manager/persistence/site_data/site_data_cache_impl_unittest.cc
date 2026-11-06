@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,13 @@
 
 #include <set>
 
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/scoped_feature_list.h"
 #include "components/performance_manager/persistence/site_data/site_data_cache_factory.h"
 #include "components/performance_manager/persistence/site_data/site_data_cache_inspector.h"
 #include "components/performance_manager/persistence/site_data/site_data_impl.h"
-#include "components/performance_manager/persistence/site_data/unittest_utils.h"
+#include "components/performance_manager/test_support/persistence/unittest_utils.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_browser_context.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -23,18 +23,22 @@ namespace performance_manager {
 
 namespace {
 
-constexpr base::TimeDelta kDelay = base::TimeDelta::FromMinutes(1);
+constexpr base::TimeDelta kDelay = base::Minutes(1);
 
 class MockSiteCache : public testing::NoopSiteDataStore {
  public:
   MockSiteCache() = default;
-  ~MockSiteCache() = default;
 
-  MOCK_METHOD1(RemoveSiteDataFromStore, void(const std::vector<url::Origin>&));
-  MOCK_METHOD0(ClearStore, void());
+  MockSiteCache(const MockSiteCache&) = delete;
+  MockSiteCache& operator=(const MockSiteCache&) = delete;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockSiteCache);
+  ~MockSiteCache() override = default;
+
+  MOCK_METHOD(void,
+              RemoveSiteDataFromStore,
+              (const std::vector<url::Origin>&),
+              (override));
+  MOCK_METHOD(void, ClearStore, (), (override));
 };
 
 }  // namespace
@@ -44,9 +48,9 @@ class SiteDataCacheImplTest : public ::testing::Test {
   SiteDataCacheImplTest()
       : data_cache_factory_(std::make_unique<SiteDataCacheFactory>()) {
     data_cache_ = std::make_unique<SiteDataCacheImpl>(
-        browser_context_.UniqueId(), browser_context_.GetPath());
+        browser_context_.UniqueToken(), browser_context_.GetPath());
     mock_db_ = new ::testing::StrictMock<MockSiteCache>();
-    data_cache_->SetDataStoreForTesting(base::WrapUnique(mock_db_));
+    data_cache_->SetDataStoreForTesting(base::WrapUnique(mock_db_.get()));
     WaitForAsyncOperationsToComplete();
   }
 
@@ -73,7 +77,8 @@ class SiteDataCacheImplTest : public ::testing::Test {
     EXPECT_TRUE(writer_);
 
     ASSERT_FALSE(data_);
-    data_ = data_cache_->origin_data_map_for_testing().find(origin_)->second;
+    data_ =
+        data_cache_->origin_data_map_for_testing().find(origin_)->second.get();
     EXPECT_TRUE(data_);
 
     EXPECT_EQ(performance_manager::SiteFeatureUsage::kSiteFeatureUsageUnknown,
@@ -94,7 +99,8 @@ class SiteDataCacheImplTest : public ::testing::Test {
     EXPECT_TRUE(writer2_);
 
     ASSERT_FALSE(data2_);
-    data2_ = data_cache_->origin_data_map_for_testing().find(origin2_)->second;
+    data2_ =
+        data_cache_->origin_data_map_for_testing().find(origin2_)->second.get();
     EXPECT_TRUE(data2_);
 
     EXPECT_EQ(performance_manager::SiteFeatureUsage::kSiteFeatureUsageUnknown,
@@ -112,18 +118,19 @@ class SiteDataCacheImplTest : public ::testing::Test {
   content::TestBrowserContext browser_context_;
 
   // Owned by |data_cache_|.
-  ::testing::StrictMock<MockSiteCache>* mock_db_ = nullptr;
+  raw_ptr<::testing::StrictMock<MockSiteCache>, DanglingUntriaged> mock_db_ =
+      nullptr;
   std::unique_ptr<SiteDataCacheFactory> data_cache_factory_;
   std::unique_ptr<SiteDataCacheImpl> data_cache_;
 
   std::unique_ptr<SiteDataReader> reader_;
   std::unique_ptr<SiteDataWriter> writer_;
-  internal::SiteDataImpl* data_ = nullptr;
+  raw_ptr<internal::SiteDataImpl> data_ = nullptr;
   url::Origin origin_ = url::Origin::Create(GURL("http://www.foo.com"));
 
   std::unique_ptr<SiteDataReader> reader2_;
   std::unique_ptr<SiteDataWriter> writer2_;
-  internal::SiteDataImpl* data2_ = nullptr;
+  raw_ptr<internal::SiteDataImpl> data2_ = nullptr;
   url::Origin origin2_ = url::Origin::Create(GURL("http://www.bar.com"));
 };
 
@@ -182,7 +189,7 @@ TEST_F(SiteDataCacheImplTest, ClearSiteDataForOrigins) {
   ::testing::Mock::VerifyAndClear(mock_db_);
 
   // The information for the first site should have been cleared.
-  EXPECT_GE((base::TimeTicks::Now() - base::TimeTicks::UnixEpoch()).InSeconds(),
+  EXPECT_GE((base::Time::Now() - base::Time::UnixEpoch()).InSeconds(),
             data_->last_loaded_time_for_testing().InSeconds());
   EXPECT_EQ(performance_manager::SiteFeatureUsage::kSiteFeatureUsageUnknown,
             reader_->UpdatesTitleInBackground());
@@ -205,11 +212,11 @@ TEST_F(SiteDataCacheImplTest, ClearAllSiteData) {
   ::testing::Mock::VerifyAndClear(mock_db_);
 
   // The information for both sites should have been cleared.
-  EXPECT_GE((base::TimeTicks::Now() - base::TimeTicks::UnixEpoch()).InSeconds(),
+  EXPECT_GE((base::Time::Now() - base::Time::UnixEpoch()).InSeconds(),
             data_->last_loaded_time_for_testing().InSeconds());
   EXPECT_EQ(performance_manager::SiteFeatureUsage::kSiteFeatureUsageUnknown,
             reader_->UpdatesTitleInBackground());
-  EXPECT_GE((base::TimeTicks::Now() - base::TimeTicks::UnixEpoch()).InSeconds(),
+  EXPECT_GE((base::Time::Now() - base::Time::UnixEpoch()).InSeconds(),
             data2_->last_loaded_time_for_testing().InSeconds());
   EXPECT_EQ(performance_manager::SiteFeatureUsage::kSiteFeatureUsageUnknown,
             reader2_->UpdatesFaviconInBackground());
@@ -220,9 +227,10 @@ TEST_F(SiteDataCacheImplTest, ClearAllSiteData) {
 
 TEST_F(SiteDataCacheImplTest, InspectorWorks) {
   // Make sure the inspector interface was registered at construction.
+  auto* factory = SiteDataCacheFactory::GetInstance();
+  ASSERT_TRUE(factory);
   SiteDataCacheInspector* inspector =
-      SiteDataCacheFactory::GetInstance()->GetInspectorForBrowserContext(
-          browser_context_.UniqueId());
+      factory->GetInspectorForBrowserContext(browser_context_.UniqueToken());
   EXPECT_NE(nullptr, inspector);
   EXPECT_EQ(data_cache_.get(), inspector);
 
@@ -255,9 +263,23 @@ TEST_F(SiteDataCacheImplTest, InspectorWorks) {
   // Make sure the interface is unregistered from the browser context on
   // destruction.
   data_cache_.reset();
-  EXPECT_EQ(nullptr,
-            SiteDataCacheFactory::GetInstance()->GetInspectorForBrowserContext(
-                browser_context_.UniqueId()));
+  EXPECT_EQ(nullptr, factory->GetInspectorForBrowserContext(
+                         browser_context_.UniqueToken()));
+}
+
+// TODO(crbug.com/40056631): Turn this into a death test to verify that
+//     the data cache asserts that no readers outlive the cache.
+TEST_F(SiteDataCacheImplTest, NoUAFWhenReaderHeldAfterTeardown) {
+  {
+    // Hold on to this reader while destroying the data cache.
+    // This is a violation of the data cache contract. For the purpose
+    // of quick-fixing https://crbug.com/1231933, allow and survive this
+    // for now.
+    auto reader = data_cache_->GetReaderForOrigin(origin_);
+
+    // This should not UAF under ASAN.
+    data_cache_.reset();
+  }
 }
 
 }  // namespace performance_manager
